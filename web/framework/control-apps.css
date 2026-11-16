@@ -1,0 +1,29 @@
+.control-app-grid {
+  display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); align-content:start; gap:6px;
+}
+.control-app-grid > .control-app-tile {
+  position:relative; display:grid; place-content:center; justify-items:center; align-content:center;
+  justify-content:stretch; gap:5px; padding:5px 4px; aspect-ratio:1; min-width:0; min-height:0;
+  background:var(--control-app-surface); color:var(--control-app-ink); text-align:center; font-size:11px; line-height:1.18;
+  border:1px solid var(--control-app-line); border-radius:10px; box-shadow:none;
+}
+.control-app-grid > .control-app-tile:not(:disabled):hover { background:var(--control-app-hover); }
+.control-app-grid > .control-app-tile:focus-visible { outline:2px solid var(--control-app-accent); outline-offset:-2px; }
+.control-app-grid > .control-app-tile > :is(.ic,.layout-icon):first-child {
+  width:clamp(26px,42%,34px); aspect-ratio:1; min-width:26px; height:auto;
+  background:var(--control-app-tint); color:var(--control-app-accent); border-radius:8px;
+}
+.control-app-grid > .control-app-tile > :is(.control-phone-label,.layout-piece-label) {
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2;
+  overflow:hidden; width:100%; font-size:inherit; line-height:inherit; overflow-wrap:anywhere;
+}
+.control-app-grid > .control-app-tile > :is(.control-phone-entry-arrow,.control-phone-switch,.m-state) { display:none; }
+.control-app-grid > .control-app-tile:not(.layout-piece):is([aria-checked=true],[aria-pressed=true],.waiting)::before {
+  content:""; position:absolute; right:6px; top:6px; width:6px; height:6px; border-radius:50%;
+  background:var(--control-app-accent);
+}
+.control-app-grid > .control-app-tile.waiting::before { background:transparent; border:1px solid var(--control-app-accent); box-sizing:border-box; }
+.control-app-grid > .control-app-tile[aria-pressed=true]:not([data-action]) { background:var(--control-app-tint); }
+.control-app-grid > .control-app-tile.control-app-danger > .ic:first-child { background:transparent; }
+.control-app-grid > .control-app-tile:disabled { opacity:.6; cursor:default; }
+

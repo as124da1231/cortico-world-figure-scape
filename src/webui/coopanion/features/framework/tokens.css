@@ -1,0 +1,4 @@
+@import "../../../../../web/ui-tokens.css";
+
+@container (min-width: 960px) { .pet-studio > * { --studio-gutter: 24px; } }
+@container (max-width: 639px) { .pet-studio > * { --studio-gutter: 12px; --studio-control: var(--studio-touch); } }

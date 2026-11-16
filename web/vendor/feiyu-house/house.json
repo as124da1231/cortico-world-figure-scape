@@ -1,0 +1,191 @@
+{
+  "version": 1,
+  "enabled": true,
+  "canvas": {
+    "w": 1983,
+    "h": 793
+  },
+  "floor": 0.91,
+  "assets": {
+    "interior": "/api/house/assets/interior.png",
+    "exterior": "/api/house/assets/exterior.png"
+  },
+  "hits": [
+    {
+      "id": "door",
+      "label": "大门",
+      "hint": "出去逛逛",
+      "box": [
+        0.035,
+        0.27,
+        0.075,
+        0.47
+      ],
+      "walk": 0.075,
+      "act": "bow",
+      "say": "出去转转。",
+      "cool": 1
+    },
+    {
+      "id": "fridge",
+      "label": "冰箱",
+      "hint": "存取白饭",
+      "box": [
+        0.265,
+        0.4,
+        0.065,
+        0.31
+      ],
+      "walk": 0.245,
+      "poseFloor": 0.72,
+      "face": 1,
+      "act": "look",
+      "say": "留着，饿了再吃。",
+      "cool": 0.6
+    },
+    {
+      "id": "bowl",
+      "label": "饭碗",
+      "hint": "坐好吃饭",
+      "box": [
+        0.177,
+        0.55,
+        0.039,
+        0.065
+      ],
+      "walk": 0.167,
+      "poseFloor": 0.72,
+      "act": "eat",
+      "say": "饭，热好了。",
+      "cool": 2
+    },
+    {
+      "id": "sofa",
+      "label": "沙发",
+      "hint": "坐下休息",
+      "box": [
+        0.38,
+        0.52,
+        0.23,
+        0.19
+      ],
+      "walk": 0.415,
+      "poseFloor": 0.715,
+      "act": "sit",
+      "say": "坐一小会儿。",
+      "cool": 1.5
+    },
+    {
+      "id": "window",
+      "label": "窗户",
+      "hint": "看看外面",
+      "box": [
+        0.413,
+        0.16,
+        0.196,
+        0.3
+      ],
+      "walk": 0.6,
+      "act": "look",
+      "say": "外面挺安静。",
+      "cool": 2
+    },
+    {
+      "id": "bed",
+      "label": "小床",
+      "hint": "躺好睡觉",
+      "box": [
+        0.745,
+        0.51,
+        0.195,
+        0.23
+      ],
+      "walk": 0.79,
+      "poseFloor": 0.59,
+      "act": "sleep",
+      "say": "十分钟……就十分钟。",
+      "cool": 2
+    },
+    {
+      "id": "lamp",
+      "label": "夜灯",
+      "hint": "开关灯光",
+      "box": [
+        0.675,
+        0.48,
+        0.046,
+        0.135
+      ],
+      "walk": 0.66,
+      "poseFloor": 0.79,
+      "face": 1,
+      "act": "happy",
+      "say": "这样刚好。",
+      "cool": 0.5
+    },
+    {
+      "id": "chair",
+      "label": "椅子",
+      "hint": "坐好等饭",
+      "box": [
+        0.15,
+        0.65,
+        0.041,
+        0.125
+      ],
+      "walk": 0.167,
+      "poseFloor": 0.72,
+      "act": "sit",
+      "say": "先坐好。",
+      "cool": 1
+    },
+    {
+      "id": "record",
+      "label": "唱片机",
+      "hint": "放一段音乐",
+      "box": [
+        0.331,
+        0.38,
+        0.037,
+        0.16
+      ],
+      "walk": 0.35,
+      "act": "dance",
+      "say": "这首我会。",
+      "cool": 2
+    },
+    {
+      "id": "board",
+      "label": "记事板",
+      "hint": "写下待办",
+      "box": [
+        0.118,
+        0.325,
+        0.047,
+        0.19
+      ],
+      "walk": 0.172466,
+      "poseFloor": 0.674653,
+      "face": -1,
+      "act": "stand",
+      "say": "今天要记住什么？",
+      "cool": 0.5
+    },
+    {
+      "id": "center",
+      "label": "屋中央",
+      "hint": "走到这里",
+      "box": [
+        0.47,
+        0.86,
+        0.09,
+        0.09
+      ],
+      "walk": 0.515,
+      "poseFloor": 0.91,
+      "act": "stand",
+      "say": "我在这里。",
+      "cool": 0
+    }
+  ]
+}

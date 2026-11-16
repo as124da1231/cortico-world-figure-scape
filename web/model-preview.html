@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN" class="live2d-preview">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Figure Scape · 模型预览</title>
+<link rel="stylesheet" href="/web/ui-tokens.css">
+<link rel="stylesheet" href="/web/model-preview.css">
+</head>
+<body>
+<div id="viewport" tabindex="0" role="group"><div id="camera"><div id="model"></div></div></div>
+<footer id="preview-footer">
+<div id="controls">
+  <label><span id="quality-label"></span>
+    <select id="quality"><option value="1024">1024</option><option value="2048">2048</option><option value="unlimited" id="unlimited"></option></select>
+  </label>
+  <div id="zoom-controls">
+    <button id="smaller" type="button">−</button>
+    <button id="larger" type="button">+</button>
+    <button id="reset" type="button"></button>
+  </div>
+</div>
+<p id="status" role="status" tabindex="0"></p>
+</footer>
+<script type="module" src="/web/model-preview.js"></script>
+</body>
+</html>

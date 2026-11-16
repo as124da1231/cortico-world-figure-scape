@@ -1,0 +1,1889 @@
+/**
+ * Live2D 渲染后端（Cubism SDK for Web）+ kit 身体。
+ *
+ * 分工：
+ *   - 数据：models/<id>/profile.js —— role 表、表情配方、取景、部件基线（不含逻辑）
+ *   - 本文件：数据 → Cubism 参数 → 绘制。**不认识任何具体 Param 名**
+ *   - kit：运动学（位移、翻转、挤压、跌落、粒子、表情状态机）
+ *
+ * 帧顺序（照官方 LAppModel，顺序错了会出两个已知 bug）：
+ *   loadParameters → 写 role（base→表情→程序动画）→ 动作 → 部件不透明度
+ *   → saveParameters → physics → update → draw
+ *   ↑ save 必须在 physics 之前：physics 是「读参数→算输出」，输出被存进基准
+ *     下一帧又当输入，会自激（头发/胸口越抖越大）。
+ *
+ * 沙箱适配：
+ *   1. moc3 / model3 / physics / motion / profile 全是 JS 模块（不能 fetch）
+ *   2. 着色器内联，覆盖 CubismShader_WebGL.loadShader
+ *   3. 贴图走 loadImage（响应带 ACAO: null）
+ *   4. canvas 经 foreignObject 放进 kit 的 SVG 组，跟随整组变换
+ */
+import {
+  CubismFramework,
+  CubismMatrix44,
+  CubismModelSettingJson,
+  CubismShaderManager_WebGL,
+  CubismUserModel,
+} from '../sdk/framework.js';
+import { SHADERS } from '../sdk/shaders.js';
+import { bubbleMouthPose, roleValue } from './role-values.js';
+import { createAdaptiveRenderer, resizeMaskBuffers } from './render-config.js';
+import { createVoiceMouthEnvelope } from './voice-playback.js';
+import { graphicsLimits, displayPixels, resolutionPlan, texturePlan } from './render-quality.js';
+import { createNativeDraftLayer } from './native-draft-layer.js';
+import { touchSuggestion } from '../../../web/framework/touch-geometry.js';
+import { createNativeActions, applyNativeValues, captureMotionLocks, nativeBindingDuration } from './native-actions.js';
+import {createWardrobe,wardrobeConfig} from './wardrobe.js';
+import {PROTECTED_PARAMETER} from './performance-plan.js';
+import {createPetEmotionEffects} from './emotion-effects/index.js';
+import * as emotionConfig from './emotion-style.js';
+import {bodyCropForScheme,normalizeBodyCrop} from './crop-config.js';
+import {createCropMask,cropPose,interpolateCrop} from './body-crop.js';
+import {normalizeGazeConfig} from './gaze-config.js';
+
+const SVGNS = 'http://www.w3.org/2000/svg';
+const XHTML = 'http://www.w3.org/1999/xhtml';
+
+/** 角色在 256 logo 方格里的画布。 */
+const BOX = 256;
+const INITIAL_CANVAS_PX = 512;
+const HIGH_PREVIEW_PX = 2048;
+const KIT_LOOK_RATE = 9;
+const KIT_CURSOR_LOOK_RANGE = [5, 4];
+/** 简易模式：只走 role + 通用配方 + SoulLink，不播任何原生 exp3 / motion / Idle。 */
+const SIMPLE = true;
+
+let booted = false;
+function boot() {
+  if (booted) return;
+  if (!CubismFramework.isStarted()) CubismFramework.startUp();
+  if (!CubismFramework.isInitialized()) CubismFramework.initialize();
+  booted = true;
+}
+
+const b64ToBuffer = (b64) => {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+};
+
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+/**
+ * 没写 anchors 时，按可见范围推一组锚点（单位：256 logo 方格）。
+ * 头在框顶、气泡在头顶、泪在脸上部、z 在右上、心在左下——不同模型头身比例不同，
+ * 所以这是兜底，不是标准答案；工作台里可以逐个改。
+ */
+function deriveAnchors([x0, y0, x1, y1], silhouette) {
+  const w = silhouette?.headWidth || x1 - x0;
+  const h = y1 - y0;
+  const cx = (x0 + x1) / 2;
+  const headX = silhouette?.headX ?? cx;
+  const headY = silhouette?.headY ?? y0;
+  return {
+    gaze: [headX, headY + h * 0.2],
+    tear: [headX + w * 0.16, headY + h * 0.24],
+    tears: [[headX - w * 0.12, headY + h * 0.26], [headX + w * 0.16, headY + h * 0.24]],
+    z: [headX + w * 0.4, headY + h * 0.06],
+    hearts: [headX - w * 0.28, headX + w * 0.28, headY + Math.min(w, h) * 0.36],
+    bubble: [headX, headY - 4],
+  };
+}
+
+export async function createLive2DBody(base, opts, entry, kit) {
+  const { host } = opts;
+  const doc = host.root.ownerDocument;
+  boot();
+
+  // ---------- 数据 ----------
+  let profile;
+  try {
+    profile = (await import(new URL(`models/${entry.id}/profile.js`, base))).default;
+  } catch {
+    throw new Error(`模型 ${entry.id} 缺 profile.js（role 表 / 表情配方 / 取景）`);
+  }
+  // Resource data stays immutable; direct bodies receive live settings separately.
+  profile={...profile,...(opts.configuration?{fit:opts.configuration.fit,gaze:opts.configuration.gaze}:{})};
+  if(opts.configuration?.visual)profile.visual=opts.configuration.visual;
+  if(opts.configuration?.touch)profile.touch=opts.configuration.touch;
+  if(opts.configuration?.bindings!==undefined)profile.native={...profile.native,version:2,bindings:opts.configuration.bindings};
+  const previewPixels = opts.preview && [256, 512, 1024, HIGH_PREVIEW_PX].includes(opts.previewSize) ? opts.previewSize : null;
+  const unlimitedPreview = opts.preview && opts.previewSize === 'unlimited';
+  const capturePixels = opts.preview ? opts.previewCaptureSize : undefined;
+  const renderPolicy = unlimitedPreview ? {mode:'original',textureLimit:0,canvasLimit:0,strict:false}
+    : previewPixels ? {mode:'economy',textureLimit:previewPixels,canvasLimit:previewPixels,strict:false}
+    : profile.render ?? {mode:'original',textureLimit:0,canvasLimit:0,strict:true};
+
+  // ---------- 画布（放 kit 的 SVG 组里） ----------
+  const canvas = doc.createElementNS(XHTML, 'canvas');
+  canvas.width = capturePixels || previewPixels || (unlimitedPreview ? HIGH_PREVIEW_PX
+    : Math.min(INITIAL_CANVAS_PX,renderPolicy.canvasLimit||INITIAL_CANVAS_PX));
+  canvas.height = canvas.width;
+  canvas.style.width = '100%';
+  canvas.style.height = '100%';
+  canvas.style.pointerEvents = 'none';
+
+  const fo = doc.createElementNS(SVGNS, 'foreignObject');
+  fo.setAttribute('x', '0');
+  fo.setAttribute('y', '0');
+  fo.setAttribute('width', String(BOX));
+  fo.setAttribute('height', String(BOX));
+  const scene = profile.bongo ? doc.createElementNS(XHTML, 'div') : null;
+  if (scene) {
+    scene.style.cssText = 'position:relative;width:100%;height:100%;overflow:hidden';
+    canvas.style.position = 'absolute';
+    scene.appendChild(canvas);
+  }
+  fo.appendChild(scene ?? canvas);
+  const bodyMask = createCropMask(doc, fo);
+
+  const gl = canvas.getContext('webgl', {
+    alpha: true, premultipliedAlpha: true, antialias: true,
+  });
+  if (!gl) throw new Error('这个环境无法启用 WebGL');
+  const limits = graphicsLimits(gl);
+  if (opts.preview) canvas.width = canvas.height = Math.min(canvas.width, limits.canvas);
+
+  // ---------- 模型（官方双轨回退：优先 fetch 原生 moc3，失败回退到 base64 模块） ----------
+  const resolveAsset = (rel) => {
+    if (typeof opts?.asset === 'function') {
+      const u = opts.asset(rel);
+      return u instanceof URL ? u : new URL(String(u), base);
+    }
+    return new URL(rel, base);
+  };
+
+  const mocName = entry.moc || 'model.moc3';
+  const fallbackName = entry.mocFallback || (mocName.endsWith('.js') ? mocName : 'moc3.js');
+  let mocBuf;
+  if (!mocName.endsWith('.js')) {
+    try {
+      const res = await fetch(resolveAsset(`models/${entry.id}/${mocName}`));
+      if (res.ok) {
+        mocBuf = await res.arrayBuffer();
+      }
+    } catch {
+      // 旧版宿主（0.2.13 及更早）CSP 拒绝 fetch，回退读取 base64 模块
+    }
+  }
+  if (!mocBuf) {
+    const mocMod = await import(resolveAsset(`models/${entry.id}/${fallbackName}`).href);
+    mocBuf = b64ToBuffer(mocMod.default);
+  }
+
+  const m3 = (await import(new URL(`models/${entry.id}/${entry.model}`, base))).default;
+  const m3Bytes = new TextEncoder().encode(JSON.stringify(m3));
+  const setting = new CubismModelSettingJson(m3Bytes.buffer, m3Bytes.length);
+
+  const model = new (class extends CubismUserModel {})();
+  model.loadModel(mocBuf, true);
+  if (!model._model) throw new Error('moc3 解析失败');
+  const bongo = profile.bongo ? await import('./bongo.js') : null;
+  const bongoArt = bongo?.createBongoArtwork(scene, canvas, profile.bongo,
+    (path) => resolveAsset(`models/${entry.id}/${path}`), model._model, model._modelMatrix);
+
+  // ---------- 取景：按规则装进 clip 空间 ----------
+  // 必须在 applyFit 之前初始化（applyFit 由工作台实时调用）
+  let fitState = {
+    mode: 'contain',
+    anchor: 'bottom',
+    padding: [0.04, 0.02],
+    offset: [0, 0],
+    zoom: 1,
+    autoFit: true,
+    ...(profile.fit ?? {}),
+  };
+  applyFit();
+  bongoArt?.start();
+
+  const nativePhysicsOutputs = new Set();
+  if (entry.physics) {
+    const phys = (await import(new URL(`models/${entry.id}/${entry.physics}`, base))).default;
+    for (const setting of phys.PhysicsSettings ?? []) for (const output of setting.Output ?? []) {
+      if (output.Destination?.Id) nativePhysicsOutputs.add(output.Destination.Id);
+    }
+    const bytes = new TextEncoder().encode(JSON.stringify(phys));
+    model.loadPhysics(bytes.buffer, bytes.length);
+  }
+  if (entry.pose) {
+    const pose = (await import(new URL(`models/${entry.id}/${entry.pose}`, base))).default;
+    const bytes = new TextEncoder().encode(JSON.stringify(pose));
+    model.loadPose(bytes.buffer, bytes.length);
+  }
+
+  // Complex models exceed the SDK's single-buffer limit (36 clipping groups).
+  // Overflow aliases masks onto one region, corrupting faces/eyes/clothing.
+  const renderConfig = createAdaptiveRenderer(model, gl, canvas.width, canvas.height, {strict:renderPolicy.strict,maskSize:capturePixels || previewPixels || unlimitedPreview ? canvas.width : Math.min(512,renderPolicy.canvasLimit||512)});
+  const { renderer, maskBuffers } = renderConfig;
+  const renderNotice = doc.createElement('div');
+  renderNotice.setAttribute('role','status'); renderNotice.hidden = true;
+  renderNotice.style.cssText = 'position:absolute;bottom:0;left:0;right:0;padding:4px;text-align:center;font:11px/1.5 sans-serif;color:#805500;background:#fff4d9ee;pointer-events:none';
+  host.root.appendChild(renderNotice);
+  const renderWarnings = new Set(); let renderFailure = '', disposed = false;
+  const contextLostMessage = '图形上下文已丢失，请减小显示尺寸或降低画质后重新加载。';
+  const showRenderNotice = (message, fatal = false) => {
+    if (disposed || renderFailure) return;
+    if (fatal) {
+      if (gl.isContextLost()) message = contextLostMessage;
+      renderFailure = message;
+    }
+    if (!renderWarnings.has(message)) console.warn('[l2d]',message);
+    renderWarnings.add(message); renderNotice.hidden = false;
+    renderNotice.textContent = (fatal ? '渲染受限：' : '') + message;
+    renderNotice.title = [...renderWarnings].join('\n');
+  };
+  if (renderConfig.warning) showRenderNotice(renderConfig.warning);
+  canvas.addEventListener('webglcontextlost',event=>{event.preventDefault();showRenderNotice(contextLostMessage,true);});
+
+  // 着色器内联
+  const shader = CubismShaderManager_WebGL.getInstance().getShader(gl);
+  if (shader) {
+    shader.loadShader = (url) => Promise.resolve(SHADERS[String(url).split('/').pop()] ?? '');
+  }
+  const loading = renderer.loadShaders?.(new URL('shaders/', base).href);
+  if (loading && typeof loading.then === 'function') await loading;
+
+  // 贴图：后台加载，不阻塞 ready（8192² 在慢显卡上要几秒，kit 只等 20 秒）。
+  // 打包与播放使用同一精度约定；原图只受设备限制，不暗中降采样。
+  const isPOT = (n) => n > 0 && (n & (n - 1)) === 0;
+  const shrinkForUpload = (img) => {
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    const plan = texturePlan(w,h,renderPolicy,limits);
+    if (!plan.scaled) return { src: img, w, h };
+    const nw = plan.width, nh = plan.height;
+    const c = doc.createElement('canvas');
+    c.width = nw;
+    c.height = nh;
+    const cx = c.getContext('2d');
+    cx.imageSmoothingEnabled = true;
+    cx.imageSmoothingQuality = 'high';
+    cx.drawImage(img, 0, 0, nw, nh);
+    return { src: c, w: nw, h: nh };
+  };
+
+  let texturesReady = false;
+  const uploadedTextures = [];
+  // Legacy packs may load in the background. Direct candidates await this gate
+  // before the host is allowed to replace the currently visible body.
+  let finishTextures;
+  const texturesLoaded = new Promise(resolve => { finishTextures = resolve; });
+  const textureDeadline = setTimeout(() => {
+    showRenderNotice('贴图加载超时，请重试。',true); finishTextures();
+  },30000);
+  (async () => {
+    for (let i = 0; i < entry.textures.length; i++) {
+      const img = await opts.loadImage(new URL(`models/${entry.id}/${entry.textures[i]}`, base));
+      if (disposed || renderFailure) return;
+      const { src, w, h } = shrinkForUpload(img);
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 1);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+      if (gl.getError() !== gl.NO_ERROR) { gl.deleteTexture(tex); throw Error(`贴图 ${w}×${h} 上传失败，无法保持所选精度。`); }
+      uploadedTextures.push({file:entry.textures[i],width:w,height:h});
+      // 缩小时使用 mipmap，放大时仍采样原始上传级别。
+      // 非 2 的幂（WebGL1）不能建 mipmap，退回 LINEAR。
+      const pot = isPOT(w) && isPOT(h);
+      if (pot) gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, pot ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      const aniso = gl.getExtension('EXT_texture_filter_anisotropic') || gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic');
+      if (aniso && pot) {
+        const max = gl.getParameter(aniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT) || 1;
+        gl.texParameterf(gl.TEXTURE_2D, aniso.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(4, max));
+      }
+      if (gl.getError() !== gl.NO_ERROR) { gl.deleteTexture(tex); throw Error(`贴图 ${w}×${h} 的采样缓冲分配失败。`); }
+      renderer.bindTexture(i, tex);
+    }
+    model.setInitialized(true);
+    texturesReady = true;
+  })().catch(e => showRenderNotice('贴图加载失败：'+e.message,true)).finally(() => {
+    clearTimeout(textureDeadline); finishTextures();
+  });
+
+  // ---------- 动作 ----------
+  // 每条动作都必须 setEffectIds：CubismMotion 每帧读 _eyeBlinkParameterIds /
+  // _lipSyncParameterIds，不设是 null → updateMotion 每帧抛 TypeError → 动作静默失效。
+  const eyeBlinkIds = [];
+  const lipSyncIds = [];
+  for (let i = 0; i < setting.getEyeBlinkParameterCount(); i++) eyeBlinkIds.push(setting.getEyeBlinkParameterId(i));
+  for (let i = 0; i < setting.getLipSyncParameterCount(); i++) lipSyncIds.push(setting.getLipSyncParameterId(i));
+
+  const clips = new Map();
+  for (const m of entry.motions ?? []) {
+    try {
+      const mod = await import(new URL(`models/${entry.id}/${m.file}`, base));
+      const buf = b64ToBuffer(mod.default);
+      const clip = model.loadMotion(buf, buf.byteLength, m.id);
+      if (clip) {
+        clip.setEffectIds(eyeBlinkIds, lipSyncIds);
+        // 素材里可能是循环动作（VTS 当热键开关）；手势在 startClip 里强制一次性
+        clip.setLoop(!!m.loop);
+        if (m.fadeIn) clip.setFadeInTime(m.fadeIn);
+        clips.set(m.id, clip);
+      }
+    } catch (e) {
+      console.warn('motion 载入失败', m.id, e);
+    }
+  }
+
+  // ---------- 原生表情（exp3）----------
+  // 模型自带的表情文件比通用配方更贴脸；由 profile.expressions 把词映射到文件。
+  const expressions = new Map();
+  for (const e of entry.expressions ?? []) {
+    try {
+      const mod = await import(new URL(`models/${entry.id}/${e.file}`, base));
+      const bytes = new TextEncoder().encode(JSON.stringify(mod.default));
+      const clip = model.loadExpression(bytes.buffer, bytes.length, e.id);
+      if (clip) expressions.set(e.id, clip);
+    } catch (err) {
+      console.warn('表情载入失败', e.id, err);
+    }
+  }
+  let currentExpr = null;
+  let expressionOverride = null;
+
+  function stepExpression(face, dt, muted = false) {
+    if (SIMPLE) return;
+    const legacy = profile.expressions?.[face ?? 'neutral'] ?? null;
+    // A saved native recipe owns expression playback. Do not apply an older
+    // single-expression mapping a second time underneath its additive values.
+    const want = muted ? null : expressionOverride ?? (legacy && native?.hasExpression(face ?? 'neutral') ? null : legacy);
+    if (want !== currentExpr) {
+      try { model._expressionManager.stopAllMotions(); } catch { /* 忽略 */ }
+      currentExpr = null;
+      const clip = want ? expressions.get(want) : null;
+      if (clip) {
+        try {
+          model._expressionManager.startMotion(clip, false);
+          currentExpr = want;
+        } catch { /* 忽略 */ }
+      }
+    }
+    if (currentExpr) {
+      try { model._expressionManager.updateMotion(model._model, dt); } catch { /* 忽略 */ }
+    }
+  }
+
+  let currentId = null;
+  let idlePlaying = false;
+  let idleTurn = 0;
+  let lastGesture = null;
+  let motionWarned = false;
+  const idleIds = (entry.idle ?? []).map((m) => m.id).filter((id) => clips.has(id));
+
+  const startClip = (id, priority, loop = false) => {
+    const clip = clips.get(id);
+    if (!clip) return false;
+    try {
+      clip.setLoop(loop);
+      model._motionManager.startMotionPriority(clip, false, priority);
+      currentId = id;
+      return true;
+    } catch (e) {
+      console.warn('motion 播放失败', id, e);
+      return false;
+    }
+  };
+
+  function startIdle() {
+    if (!idleIds.length) return false;
+    const id = idleIds[idleTurn++ % idleIds.length];
+    model._motionManager.stopAllMotions();
+    const ok = startClip(id, 1, true);
+    idlePlaying = ok;
+    return ok;
+  }
+
+  // ---------- role 表：语义 → 真实参数 ----------
+  const ids = CubismFramework.getIdManager();
+  const paramIndex = new Map();
+  for (let i = 0; i < model._model.getParameterCount(); i++) {
+    paramIndex.set(model._model.getParameterId(i).getString(), i);
+  }
+
+  const bongoInput = bongo?.createBongoInput(profile.bongo, model._model, paramIndex, host);
+  const bongoBreath = bongo ? paramIndex.get('ParamBreath') : undefined;
+
+  /** 每个 role 只保留模型里真实存在的目标参数。 */
+  const roles = new Map();
+  const mouthMode = ['mapped','off'].includes(profile.mouth?.mode) ? profile.mouth.mode : 'auto';
+  for (const [name, r] of Object.entries(profile.roles ?? {})) {
+    const items = [];
+    for (const target of r.targets ?? []) {
+      if (bongoBreath !== undefined && name === 'breath' && target === 'ParamBreath') continue;
+      const index = paramIndex.get(target);
+      if (index === undefined) continue;
+      items.push({
+        handle: ids.getId(target),
+        index,
+        min: model._model.getParameterMinimumValue(index),
+        max: model._model.getParameterMaximumValue(index),
+        def: model._model.getParameterDefaultValue(index),
+        endpoints: r.ranges?.[target],
+      });
+    }
+    if (!items.length) continue;
+    roles.set(name, { space: r.space ?? [-1, 1], def: r.default ?? 0, items });
+  }
+  if (!roles.has('mouthOpen')) {
+    const items = [];
+    for (let i = 0; i < setting.getLipSyncParameterCount(); i++) {
+      const handle = setting.getLipSyncParameterId(i);
+      const index = paramIndex.get(handle?.getString?.());
+      if (index === undefined) continue;
+      items.push({
+        handle, index,
+        min: model._model.getParameterMinimumValue(index),
+        max: model._model.getParameterMaximumValue(index),
+        def: model._model.getParameterDefaultValue(index),
+      });
+    }
+    if (items.length) roles.set('mouthOpen', { space: [0, 1], def: 0, items });
+  }
+  const automaticMouth = roles.get('mouthOpen');
+  function mappedMouth(targets) {
+    const items = targets.flatMap(target => {
+      const index = paramIndex.get(target);
+      if (index === undefined) return [];
+      return [{
+        handle: ids.getId(target), index,
+        min: model._model.getParameterMinimumValue(index),
+        max: model._model.getParameterMaximumValue(index),
+        def: model._model.getParameterDefaultValue(index),
+      }];
+    });
+    return items.length ? { space: [0, 1], def: 0, items } : undefined;
+  }
+  function useMouthRole(role) {
+    if (role) roles.set('mouthOpen', role);
+    else roles.delete('mouthOpen');
+  }
+  if (mouthMode !== 'auto') useMouthRole(mouthMode === 'mapped' ? mappedMouth(profile.mouth.targets ?? []) : undefined);
+  const savedMouth = roles.get('mouthOpen');
+  let performancePlayback, desktopSpeechLevel = null;
+  const voiceMouth = createVoiceMouthEnvelope();
+
+  const driven = new Set();
+  for (const role of roles.values()) for (const it of role.items) driven.add(it.handle.getString());
+
+  // 工作台/外部驱动：直接写 role（优先级最高，调试与校准时用）
+  const roleOverrides = {};
+
+  // ---------- 表演层（SoulLink）----------
+  // 情绪词 → VAD → FACS → role，负责过渡、待机微动、呼吸和视线漂移。
+  // 加载失败就退回下面的离散表情配方，包不会因此不可用。
+  let performance = null;
+  let performanceFactory = null;
+  try {
+    const { createPerformance } = await import('./soullink.js');
+    performanceFactory = createPerformance;
+    performance = createPerformance(profile, console.warn);
+    if (performance) {
+      console.info('[l2d] SoulLink 表演层已启用');
+      // 有原生 Idle 组就让模型自己待机，引擎只负责情绪和表情
+      if (!SIMPLE && idleIds.length && profile.performance?.tuning?.nativeIdle !== false) {
+        performance.setIdleEnabled(false);
+        console.info('[l2d] 使用模型原生 Idle 动作');
+      }
+    }
+  } catch (e) {
+    console.warn('[l2d] SoulLink 表演层没加载，使用离散表情', e);
+  }
+
+  /**
+   * 语义值 → 模型值：以 default 为锚的两段线性。
+   * 这样模型范围不对称、默认值不在中点也不会错。
+   */
+  function writeRole(name, semantic, weight = 1) {
+    const role = roles.get(name);
+    if (!role) return;
+    for (const it of role.items) {
+      model._model.setParameterValueById(it.handle, roleValue(semantic, role.space, role.def, it, it.endpoints), weight);
+    }
+  }
+
+  // ---------- 部件不透明度 ----------
+  // Cubism SDK 把 PartOpacity 曲线按「参数」查索引（getParameterIndex），
+  // 而 PartArmA/B 是部件 → 恒 -1，曲线整条失效 → 两套手臂同时显示（四只手）。
+  // 所以按动作自带的目标值每帧直接写部件不透明度。
+  const partIndex = new Map();
+  for (let i = 0; i < model._model.getPartCount(); i++) {
+    partIndex.set(model._model.getPartId(i).getString(), i);
+  }
+  let native = [1,2].includes(profile.native?.version) ? createNativeActions(profile.native) : null;
+  if(opts.configuration?.bindings!==undefined)native.validateBindings(opts.configuration.bindings);
+  const wardrobe=createWardrobe(model._model,paramIndex,partIndex,{parts:{...profile.parts?.base,...profile.clean?.parts},params:profile.clean?.params});
+  wardrobe.configure(profile.wardrobe);wardrobe.scheme(opts.scheme);
+  const interactive = !opts.preview || opts.editorPreview;
+  const draftLayer = interactive && native ? createNativeDraftLayer(native, profile.native.resources) : null;
+  let previewState = null;
+  const nativeParams = new Set(), nativeParts = new Map();
+  for (const resource of profile.native?.resources ?? []) {
+    for (const p of resource.kind === 'expression' ? (resource.data.Parameters ?? []).map(p => ({Id:p.Id,Target:'Parameter'})) : resource.data.Curves ?? []) {
+      if (p.Target === 'Parameter' && paramIndex.has(p.Id)) nativeParams.add(paramIndex.get(p.Id));
+      if (p.Target === 'PartOpacity' && partIndex.has(p.Id)) { const i = partIndex.get(p.Id); nativeParts.set(i, model._model.getPartOpacityByIndex(i)); }
+    }
+  }
+  function resetNativeBase() {
+    for (const i of nativeParams) model._model.setParameterValueByIndex(i, model._model.getParameterDefaultValue(i));
+    for (const [i, value] of nativeParts) model._model.setPartOpacityByIndex(i, value);
+  }
+  const partTargets = new Map((entry.motions ?? []).map((m) => [m.id, m.partOpacity ?? null]));
+  const baseParts = profile.parts?.base ?? { PartArmA: 1, PartArmB: 0 };
+
+  const cleanParts = profile.clean?.parts ?? {};
+  const cleanParams = profile.clean?.params ?? {};
+  const cleanParamIdx = new Map();
+  for (const name of Object.keys(cleanParams)) {
+    for (let i = 0; i < model._model.getParameterCount(); i++) {
+      if (model._model.getParameterId(i).getString() === name) { cleanParamIdx.set(name, i); break; }
+    }
+  }
+  function applyCleanParams() {
+    for (const [name, i] of cleanParamIdx) {
+      model._model.setParameterValueByIndex(i, cleanParams[name]);
+    }
+  }
+
+  function applyPartOpacity(id) {
+    const want = { ...((id && partTargets.get(id)) || baseParts), ...cleanParts };
+    for (const name of Object.keys(want)) {
+      const i = partIndex.get(name);
+      if (i !== undefined) model._model.setPartOpacityByIndex(i, want[name]);
+    }
+  }
+
+  /** 动作播完后，把动作碰过、role 不负责的参数慢慢拉回默认（避免姿势定格）。 */
+  function easeRestToDefault(dt) {
+    const rate = clamp(dt * 4, 0, 1);
+    for (let i = 0; i < model._model.getParameterCount(); i++) {
+      if (driven.has(model._model.getParameterId(i).getString())) continue;
+      const cur = model._model.getParameterValueByIndex(i);
+      const def = model._model.getParameterDefaultValue(i);
+      if (cur !== def) model._model.setParameterValueByIndex(i, cur + (def - cur) * rate);
+    }
+  }
+
+  function stepMotion(frame, dt) {
+    if (SIMPLE) return;
+    const g = frame.gesture;
+    const want = g?.kind && clips.has(g.kind) ? g.kind : null;
+
+    // 同一个手势不重复重播：kit 把 gesture 保持几帧，播完就去待机
+    if (want && want !== lastGesture) {
+      model._motionManager.stopAllMotions();
+      idlePlaying = false;
+      startClip(want, 3, false);
+      lastGesture = want;
+    } else if (!want) {
+      lastGesture = null;
+    }
+
+    if (currentId && model._motionManager.isFinished()) {
+      currentId = null;
+      idlePlaying = false;
+      model._motionManager.stopAllMotions();
+    }
+
+    if (!currentId) {
+      // 有原生 Idle 组就让模型自己待机（比程序微动更自然），没有再回默认姿势
+      if (idleIds.length && startIdle()) return;
+      easeRestToDefault(dt);
+      return;
+    }
+
+    try {
+      model._motionManager.updateMotion(model._model, dt);
+    } catch (e) {
+      if (!motionWarned) {
+        motionWarned = true;
+        console.warn('动作更新失败（后续不再提示）', e);
+      }
+    }
+  }
+
+  const gaze = normalizeGazeConfig(profile.gaze);
+  const gazeCapable = !bongoInput && (roles.has('eyeBallX') || roles.has('eyeBallY'));
+  let customGaze = gazeCapable && (!gaze.enabled || gaze.speed !== 1);
+  let pointerInside = false, listening = false, still = false;
+  let sampledAt = 0, sampledMode = 'idle', sampledModeTime = 0;
+  const lastLook = [0, 0], kitCursorLook = [0, 0], adjustedCursorLook = [0, 0];
+
+  function eyeLookForFrame(look, face, frame, dt) {
+    const elapsed = Number.isFinite(frame.t) ? frame.t - sampledAt : dt;
+    if (elapsed > 0) {
+      // The Kit publishes one eased look vector. Recover its target from the
+      // elapsed simulation time, then replace only the cursor's contribution.
+      const transition = frame.mode !== sampledMode && frame.modeT === 0;
+      const mode = transition ? sampledMode : frame.mode;
+      const modeTime = transition ? sampledModeTime + elapsed : frame.modeT;
+      const tracksCursor = (mode === 'idle' || mode === 'sit') ? !listening
+        : (mode === 'wake' && modeTime > 1.2) || ((mode === 'walk' || mode === 'run') && still);
+      const cursorActive = pointerInside && tracksCursor && !face.lookLock && !face.lookAt
+        && frame.mode !== 'sleep' && frame.mode !== 'drag';
+      const kitBlend = -Math.expm1(-KIT_LOOK_RATE * elapsed);
+      const eyeBlend = cursorActive ? -Math.expm1(-KIT_LOOK_RATE * gaze.speed * elapsed) : kitBlend;
+      for (let axis = 0; axis < 2; axis++) {
+        const next = look[axis] ?? 0;
+        const limit = KIT_CURSOR_LOOK_RANGE[axis];
+        const target = cursorActive ? clamp(lastLook[axis] + (next - lastLook[axis]) / kitBlend, -limit, limit) : 0;
+        kitCursorLook[axis] += (target - kitCursorLook[axis]) * kitBlend;
+        adjustedCursorLook[axis] += ((gaze.enabled ? target : 0) - adjustedCursorLook[axis]) * eyeBlend;
+        lastLook[axis] = next;
+      }
+      sampledAt = Number.isFinite(frame.t) ? frame.t : sampledAt + elapsed;
+      sampledMode = frame.mode;
+      sampledModeTime = frame.modeT ?? 0;
+    }
+    return kitCursorLook.map((value, axis) => (look[axis] ?? 0) - value + adjustedCursorLook[axis]);
+  }
+
+  // ---------- 每帧：base → 表演层 / 表情 → 程序动画 ----------
+  function applyFrame(face, frame, dt, neutralPose = false, speechLevel = null, layer = null) {
+    const t = frame.t ?? 0;
+
+    // 1) 全部 role 回到默认（写默认 == 模型默认姿势，所以是幂等的）
+    for (const [name, role] of roles) writeRole(name, role.def);
+
+    // 2) 表演层：连续情绪（VAD → FACS → role）。没有表演层才走离散配方。
+    //    量取景的那几帧强制中性姿势：待机动作会把包围盒撑大，脚就量不准。
+    const engine = performance && !neutralPose ? performance.update(t, dt, frame.face, speechLevel, layer) : null;
+    const recipe = neutralPose
+      ? {}
+      : (engine
+        ? null
+        : (profile.expression?.[frame.face ?? 'neutral'] ?? profile.expression?.neutral ?? {}));
+    if (recipe) for (const [k, v] of Object.entries(recipe)) if (k !== 'fade') writeRole(k, v);
+
+    // 3) 眼睛：形状 + 眨眼 + 困意（乘在表情之上，闭眼笑也能眨）
+    let shape = 1;
+    const eye = neutralPose ? null : face.eyes?.[0];
+    if (eye) {
+      if (eye.shape === 'down' || eye.shape === 'up') shape = 0;
+      else if (eye.shape === 'lid') shape = clamp((eye.ry ?? 12) / 16, 0, 1);
+    }
+    const close = neutralPose ? 1 : 1 - clamp(frame.blink ?? 0, 0, 1);
+    const squint = neutralPose ? 1 : 1 - clamp(frame.eyeClose ?? 0, 0, 1);
+    const drowse = neutralPose ? 1 : 1 - 0.75 * clamp(frame.drowse ?? 0, 0, 1);
+    const baseOpen = engine
+      ? clamp(engine.eyeOpen ?? 1, 0, 1)
+      : (recipe?.eyeOpen ?? roles.get('eyeOpen')?.def ?? 1);
+    const open = baseOpen * shape * close * squint * drowse;
+    writeRole('eyeOpen', open);
+    // 测试台在存图前读这个，确认「这一帧」到底算出了什么（不是换表情那一帧）
+    globalThis.__l2dLast = {
+      face: neutralPose ? 'neutral*' : frame.face, open: +open.toFixed(2), shape: eye?.shape ?? null, ry: eye?.ry ?? null,
+      blink: +(frame.blink ?? 0).toFixed(2), ec: +(frame.eyeClose ?? 0).toFixed(2),
+      perf: !!engine, mood: globalThis.__l2dPerf?.dominant ?? null,
+    };
+
+    // 4) 表情给嘴部底形，气泡口型留到原生动作和物理之后。
+    const expressionOpen = engine ? (engine.mouthOpen ?? 0) * 0.85 : (recipe?.mouthOpen ?? 0);
+    const mouth = neutralPose ? null : bubbleMouthPose(face.gap?.[0], frame.talk, expressionOpen, 1);
+    writeRole('mouthOpen', mouth?.base ?? 0);
+
+    // 5) 视线 + 头身跟随（表演层的待机动作叠在宿主跟随之上）
+    const look = neutralPose ? [0, 0] : (Array.isArray(frame.look) ? frame.look : [0, 0]);
+    const eyeLook = customGaze && !neutralPose && !previewState ? eyeLookForFrame(look, face, frame, dt) : look;
+    const tilt = neutralPose ? 0 : (frame.tilt ?? 0);
+    const lean = neutralPose ? 0 : (frame.lean ?? 0);
+    const ax = engine?.angleX ?? 0;
+    const ay = engine?.angleY ?? 0;
+    const az = engine?.angleZ ?? 0;
+    const bx = engine?.bodyX ?? 0;
+    const ex = engine?.eyeBallX ?? 0;
+    const ey = engine?.eyeBallY ?? 0;
+    if (engine) {
+      writeRole('eyeBallX', clamp(ex * 0.6 + (eyeLook[0] ?? 0) * 0.55, -1, 1));
+      writeRole('eyeBallY', clamp(ey * 0.6 - (eyeLook[1] ?? 0) * 0.45, -1, 1));
+      writeRole('angleX', clamp(ax * 0.75 + (look[0] ?? 0) * 0.4, -1, 1));
+      writeRole('angleY', clamp(ay * 0.75 - (look[1] ?? 0) * 0.35, -1, 1));
+      writeRole('angleZ', clamp(az + tilt * 0.4, -1, 1));
+      writeRole('bodyX', clamp(bx + lean * 0.35, -1, 1));
+      // 表情通道：引擎/配方已经算好，之前漏写，导致只有眼/嘴/头在动
+      for (const k of ['eyeSmile', 'mouthForm', 'browY', 'browAngle', 'cheek']) {
+        if (Number.isFinite(engine[k])) writeRole(k, engine[k]);
+      }
+      writeRole('breath', Number.isFinite(engine.breath) ? engine.breath : 0.5 + 0.5 * Math.sin(t * 1.6));
+    } else {
+      writeRole('eyeBallX', clamp(eyeLook[0] ?? 0, -1, 1));
+      writeRole('eyeBallY', clamp(-(eyeLook[1] ?? 0), -1, 1));
+      writeRole('angleX', clamp((look[0] ?? 0) * 0.73, -1, 1));
+      writeRole('angleY', clamp(-(look[1] ?? 0) * 0.6, -1, 1));
+      writeRole('angleZ', clamp(tilt * 0.67, -1, 1));
+      writeRole('bodyX', clamp(lean * 0.6, -1, 1));
+      writeRole('breath', neutralPose ? 0.5 : 0.5 + 0.5 * Math.sin(t * 1.6));
+    }
+
+    // 6) 外部直接驱动（工作台滑杆 / 参数面板）；放在最后，压过表情和待机
+    for (const [name, value] of Object.entries(roleOverrides)) {
+      if (Number.isFinite(value)) writeRole(name, value);
+    }
+    return mouth;
+  }
+
+  // ---------- 取景 ----------
+  // fitState 已在上方声明；这里只定义怎么应用
+  function applyFit() {
+    const fit = fitState;
+    const cw = model._model.getCanvasWidth?.() ?? 1;
+    const ch = model._model.getCanvasHeight?.() ?? 1;
+    const aspect = cw / ch;
+    const [px, py] = fit.padding ?? [0, 0];
+    const availW = 2 * (1 - 2 * px);
+    const availH = 2 * (1 - 2 * py);
+    const base = fit.mode === 'cover'
+      ? Math.max(availH, availW / aspect)
+      : Math.min(availH, availW / aspect);
+    const h = base * (Number.isFinite(fit.zoom) ? fit.zoom : 1);
+
+    model._modelMatrix.setHeight(h);
+
+    const [ox, oy] = fit.offset ?? [0, 0];
+    const anchor = fit.anchor ?? 'center';
+    const y = anchor === 'bottom' ? (-1 + py + h / 2)
+      : anchor === 'top' ? (1 - py - h / 2)
+        : 0;
+    const bounds = bongo && bongo.bongoCanvas(model._model);
+    const centerX = bounds ? (bounds.x + bounds.width / 2) * model._modelMatrix.getScaleX() : 0;
+    const centerY = bounds ? (bounds.y - bounds.height / 2) * model._modelMatrix.getScaleY() : 0;
+    model._modelMatrix.setY(y + oy - centerY);
+    if (typeof model._modelMatrix.setX === 'function') model._modelMatrix.setX(ox - centerX);
+    bongoArt?.clip();
+  }
+
+  // ---------- 绘制 ----------
+  let resolutionCheckedAt = -Infinity, shrinkTarget = 0, shrinkAt = 0, allocationCeiling = Infinity, validateTargets = true;
+  function qualityInfo() {
+    return {mode:renderPolicy.mode,canvas:[canvas.width,canvas.height],maskSize:renderConfig.maskSize,
+      maskBuffers,textureLimit:renderPolicy.textureLimit,canvasLimit:renderPolicy.canvasLimit,
+      textures:uploadedTextures,limits,warnings:[...renderWarnings],error:renderFailure};
+  }
+  function ensureResolution() {
+    if (renderFailure) return false;
+    const now = doc.defaultView.performance.now();
+    if (now - resolutionCheckedAt < 250 || !fo.isConnected) return true;
+    resolutionCheckedAt = now;
+    const pixels = capturePixels ?? displayPixels(fo.getScreenCTM?.(),fo.getBoundingClientRect(),BOX);
+    const dpr = capturePixels ? 1 : doc.defaultView.devicePixelRatio || 1;
+    const desired = unlimitedPreview ? Math.max(pixels,HIGH_PREVIEW_PX / dpr) : pixels;
+    const plan = resolutionPlan(desired,dpr,renderPolicy,limits);
+    if (plan.warning) showRenderNotice(plan.warning);
+    const size = Math.min(plan.size,allocationCeiling), previous = canvas.width;
+    if (size === previous) { shrinkTarget = 0; return true; }
+    if (size < previous) {
+      if (size > previous * .65) return true;
+      if (shrinkTarget !== size) { shrinkTarget = size; shrinkAt = now; return true; }
+      if (now - shrinkAt < 1200) return true;
+    }
+    const allocate = target => {
+      canvas.width = target; canvas.height = target;
+      if (gl.isContextLost() || gl.drawingBufferWidth !== target || gl.drawingBufferHeight !== target) throw Error(`画布 ${target}×${target} 分配失败`);
+      renderer.setRenderTargetSize(target,target);
+      validateTargets = true;
+      resizeMaskBuffers(renderConfig,model,gl,target,renderPolicy.strict);
+      if (renderConfig.warning) showRenderNotice(renderConfig.warning);
+    };
+    try { allocate(size); shrinkTarget = 0; }
+    catch (error) {
+      if (renderPolicy.strict || gl.isContextLost()) { showRenderNotice(error.message+'，无法保持所选精度。',true); return false; }
+      try {
+        const fallback = Math.max(128,Math.min(previous,Math.floor(size/2)));
+        allocate(fallback); allocationCeiling = fallback;
+        showRenderNotice(`请求 ${size}px 渲染失败，实际回退到 ${fallback}px。`);
+      } catch (failure) { showRenderNotice(failure.message,true); return false; }
+    }
+    return true;
+  }
+  function render() {
+    if (!ensureResolution()) return false;
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    const projection = new CubismMatrix44();
+    projection.scale(canvas.height / canvas.width, 1);
+    projection.multiplyByMatrix(model._modelMatrix);
+    renderer.setMvpMatrix(projection);
+    renderer.setRenderState(gl.getParameter(gl.FRAMEBUFFER_BINDING), [0, 0, canvas.width, canvas.height]);
+    try { renderer.drawModel(); }
+    catch (error) { showRenderNotice('模型绘制失败：'+error.message,true); return false; }
+    if (validateTargets) {
+      validateTargets = false;
+      const targets = [...(renderer._modelRenderTargets || []),...(renderer._drawableMasks || []),...(renderer._offscreenMasks || [])];
+      if (targets.some(target=>!target?.isValid()) || gl.getError() !== gl.NO_ERROR) {
+        showRenderNotice('渲染缓冲分配或绘制失败，无法保持所选精度。',true); return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * 量取景时强制中性姿势。
+   * 待机 / 呼吸 / 物理会让包围盒每帧变化；直接 measure 会把“这一帧”的姿势写死，
+   * 每次自动贴合就会得到不同的 zoom / offset。而且外部调用 readPixels 时，
+   * 默认帧缓冲可能已经被合成器清空。先重画一帧中性姿势再读，结果才稳定。
+   */
+  function renderNeutralPose() {
+    if (!texturesReady) return false;
+    model._model.loadParameters();
+    resetNativeBase();
+    applyFrame({}, {}, 1 / 60, true);
+    applyPartOpacity(null);
+    wardrobe.apply();
+    model._model.saveParameters();
+    // 物理是有状态的：同一中性姿势也会因为上一帧的惯性读出不同包围盒。
+    // 简单模式量取景不跑物理（脚底 / 躯干 / 高度不受头发尾巴滞后影响）。
+    if (!SIMPLE) {
+      try { model._physics?.evaluate(model._model, 1 / 60); } catch { /* 物理失败不致命 */ }
+      try { model._pose?.updateParameters(model._model, 1 / 60); } catch { /* 姿势失败不致命 */ }
+    }
+    applyCleanParams();
+    wardrobe.apply();
+    model._model.update();
+    return render();
+  }
+
+  function measureNeutralExtent() {
+    if (!renderNeutralPose()) return null;
+    return measureExtent();
+  }
+
+  /**
+   * 把当前 WebGL 帧抓成透明 PNG（data URL）。
+   * readPixels 是底向上、预乘 alpha；这里翻转并反预乘，再按最长边缩到 size。
+   * 调用前必须刚 render 过，否则默认帧缓冲可能已被合成器清空。
+   */
+  function canvasPng(size = 512) {
+    if (renderFailure) throw Error(renderFailure);
+    const w = canvas.width;
+    const h = canvas.height;
+    const src = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, src);
+    const out = doc.createElement('canvas');
+    out.width = w;
+    out.height = h;
+    const ctx = out.getContext('2d');
+    const image = ctx.createImageData(w, h);
+    const d = image.data;
+    const [left, top, right, bottom] = bongoArt?.pixels(w, h) ?? [0, 0, w, h];
+    for (let y = top; y < bottom; y++) {
+      const sy = h - 1 - y;
+      for (let x = left; x < right; x++) {
+        const i = (sy * w + x) * 4;
+        const o = (y * w + x) * 4;
+        const a = src[i + 3];
+        d[o + 3] = a;
+        if (a === 0) {
+          d[o] = d[o + 1] = d[o + 2] = 0;
+        } else {
+          // WebGL 里是预乘 alpha；2D canvas 的 ImageData 要 straight alpha
+          d[o] = Math.min(255, Math.round((src[i] * 255) / a));
+          d[o + 1] = Math.min(255, Math.round((src[i + 1] * 255) / a));
+          d[o + 2] = Math.min(255, Math.round((src[i + 2] * 255) / a));
+        }
+      }
+    }
+    ctx.putImageData(image, 0, 0);
+    if (bongoArt?.hasBackground) {
+      const layer = doc.createElement('canvas');
+      layer.width = w; layer.height = h;
+      layer.getContext('2d').putImageData(image, 0, 0);
+      bongoArt.composite(ctx, layer, w, h);
+    }
+    if (size === w) return out.toDataURL('image/png');
+    const small = doc.createElement('canvas');
+    small.width = size;
+    small.height = size;
+    const sctx = small.getContext('2d');
+    sctx.imageSmoothingEnabled = true;
+    sctx.imageSmoothingQuality = 'high';
+    sctx.drawImage(out, 0, 0, size, size);
+    return small.toDataURL('image/png');
+  }
+
+  // ---------- 交给 kit ----------
+  // extent / anchors 优先用实测：第一帧画出来后读一次 alpha 包围盒，
+  // 换模型/换贴图都不用再手填（不同画布留白差异太大，写死一定错）。
+  // profile.extent / profile.anchors 仍然可以覆盖（工作台校准后写死）。
+  const DEFAULT_EXTENT = [20, 8, 236, 256];
+  let extent = profile.extent ?? null;
+  let measuredExtent = null;
+  let wardrobeBaseline = null, wardrobeLayoutDirty = false, wardrobeAdjusted = false;
+  let silhouette = null;
+  let bodyMode = 'idle';
+  let elapsedBetweenDraws = 0;
+  const reduceMotion = doc.defaultView?.matchMedia?.('(prefers-reduced-motion: reduce)');
+  const schemeCrop = (id) => profile.bongo ? normalizeBodyCrop(null) : bodyCropForScheme(profile.crop, id);
+  let framingScheme = opts.scheme;
+  let crop = schemeCrop(opts.scheme);
+  let cropDisplay = null, cropTransition = null, cropDirty = true;
+  const rawExtent = () => extent ?? DEFAULT_EXTENT;
+  const cropExtent = () => measuredExtent ?? rawExtent();
+  const currentExtent = () => cropDisplay?.extent ?? rawExtent();
+  function updateCrop(dt = 0) {
+    if (!measuredExtent || !cropDirty && !cropTransition) return;
+    const transition = cropTransition;
+    if (transition) transition.elapsed += dt;
+    const progress = transition && !reduceMotion?.matches ? Math.min(1, transition.elapsed / transition.duration) : 1;
+    const shape = interpolateCrop(cropExtent(), transition?.from ?? crop, crop, progress, transition?.shape);
+    cropDisplay = cropPose(shape, silhouette);
+    if (progress === 1) cropTransition = null;
+    cropDirty = false;
+    publishInfo();
+  }
+  function setCrop(value, {immediate = false} = {}) {
+    const next = profile.bongo ? normalizeBodyCrop(null) : normalizeBodyCrop(value);
+    if (Object.keys(next).every(key => next[key] === crop[key]) && !(immediate && cropTransition)) return;
+    const duration = immediate || reduceMotion?.matches || !measuredExtent ? 0 : next.transition;
+    cropTransition = duration > 0 && (crop.mode === 'upper' || next.mode === 'upper' || cropDisplay)
+      ? { from: crop, shape: cropDisplay?.shape, duration, elapsed: 0 }
+      : null;
+    crop = next;
+    cropDirty = true;
+    updateCrop();
+  }
+  const fitCopy=()=>({...fitState,offset:[...(fitState.offset||[0,0])],padding:[...(fitState.padding||[0,0])]});
+  const hasWardrobePick = () => Object.values(wardrobe.state()).some(value => value && value !== 'default');
+  function changeWardrobe(update) {
+    const before = wardrobe.layoutKey();
+    update();
+    if (before !== wardrobe.layoutKey()) wardrobeLayoutDirty = true;
+  }
+  function settleWardrobe() {
+    if (!wardrobeLayoutDirty || !wardrobeBaseline) return;
+    const previousFit = fitCopy();
+    const previousGeometry = { hitBands, silhouette };
+    try {
+      fitState = { ...wardrobeBaseline.fit, offset: [...wardrobeBaseline.fit.offset] };
+      applyFit();
+      let measured = measureNeutralExtent();
+      if (!measured) throw Error('外观轮廓不可见');
+      const adjusted = hasWardrobePick();
+      const floorOffset = measured[3] - wardrobeBaseline.extent[3];
+      if (adjusted && floorOffset) {
+        fitState.offset[1] += floorOffset / (BOX / 2);
+        applyFit();
+        measured = measureNeutralExtent();
+        if (!measured) throw Error('外观贴地失败');
+      }
+      wardrobeAdjusted = adjusted;
+      extent = wardrobeAdjusted ? measured : profile.extent ?? measured;
+      measuredExtent = measured;
+      cropDirty = true;
+      updateCrop();
+    } catch (error) {
+      fitState = previousFit;
+      ({ hitBands, silhouette } = previousGeometry);
+      applyFit();
+      console.warn('[l2d] 外观轮廓测量失败', error);
+    }
+    wardrobeLayoutDirty = false;
+  }
+  /** 命中圈按高度带取可见 alpha 的中心；整张 bbox 会被尾巴/胡须带偏。 */
+  let hitBands = null;
+
+  function measureExtent() {
+    const w = canvas.width;
+    const h = canvas.height;
+    const buf = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    let x0 = w, y0 = h, x1 = -1, y1 = -1;
+    const rowMin = new Int32Array(h).fill(w);
+    const rowMax = new Int32Array(h).fill(-1);
+    const [left, top, right, bottom] = bongoArt?.pixels(w, h) ?? [0, 0, w, h];
+    for (let y = h - bottom; y < h - top; y++) {
+      for (let x = left; x < right; x++) {
+        if (buf[(y * w + x) * 4 + 3] > 8) {
+          if (x < x0) x0 = x;
+          if (x > x1) x1 = x;
+          if (y < y0) y0 = y;
+          if (y > y1) y1 = y;
+          if (x < rowMin[y]) rowMin[y] = x;
+          if (x > rowMax[y]) rowMax[y] = x;
+        }
+      }
+    }
+    if (x1 < 0) { hitBands = null; return null; }
+    const unit = BOX / w;                       // 每像素多少 logo 单位
+    const lx0 = x0 * unit, lx1 = (x1 + 1) * unit;
+    const ly0 = (h - 1 - y1) * unit, ly1 = (h - y0) * unit;
+    const lw = Math.max(1, lx1 - lx0), lh = Math.max(1, ly1 - ly0);
+    const radii = [
+      Math.min(lw * .46, lh * .18),
+      Math.min(lw * .52, lh * .26),
+      Math.min(lw * .48, lh * .22),
+    ];
+    const rowBand = (cy) => {
+      const yc = Math.round(h - 1 - cy / unit);
+      const half = Math.max(2, Math.round(lh * .045 / unit));
+      return [Math.max(y0, yc - half), Math.min(y1, yc + half)];
+    };
+    const centerAt = (cy, near) => {
+      const [first, last] = rowBand(cy);
+      let min = w, max = -1;
+      for (let yy = first; yy <= last; yy++) {
+        let left = rowMin[yy], right = rowMax[yy];
+        if (near?.center !== undefined) {
+          const half = Math.max(12, near.width * .75);
+          left = Math.max(left, Math.floor((near.center - half) / unit));
+          right = Math.min(right, Math.ceil((near.center + half) / unit));
+          while (left <= right && buf[(yy * w + left) * 4 + 3] <= 8) left++;
+          while (right >= left && buf[(yy * w + right) * 4 + 3] <= 8) right--;
+        }
+        if (left > right) continue;
+        if (left < min) min = left;
+        if (right > max) max = right;
+      }
+      return max >= 0 ? (min + max + 1) / 2 * unit : near?.center ?? (lx0 + lx1) / 2;
+    };
+    // Use the strongest continuous shape in each sampled row so a detached tail or accessory
+    // does not pull the center away from the head or body.
+    const dominantAt = (fraction) => {
+      const centers = [], widths = [];
+      const [first, last] = rowBand(ly0 + lh * fraction);
+      for (let y = first; y <= last; y++) {
+        let start = -1, bestStart = 0, bestWidth = 0;
+        for (let x = rowMin[y]; x <= rowMax[y] + 1; x++) {
+          if (x <= rowMax[y] && buf[(y * w + x) * 4 + 3] > 8) {
+            if (start < 0) start = x;
+          } else if (start >= 0) {
+            if (x - start > bestWidth) { bestStart = start; bestWidth = x - start; }
+            start = -1;
+          }
+        }
+        if (bestWidth) {
+          centers.push((bestStart + bestWidth / 2) * unit);
+          widths.push(bestWidth * unit);
+        }
+      }
+      const median = (values) => values.sort((a, b) => a - b)[Math.floor(values.length / 2)];
+      return { center: median(centers), width: median(widths) ?? 0 };
+    };
+    const head = dominantAt(.16), trunk = dominantAt(.50), lower = dominantAt(.76);
+    const headX = head.center ?? centerAt(ly0 + lh * .16);
+    let headY = ly0;
+    const halfHead = Math.max(2, Math.ceil(head.width * .42 / unit));
+    const headColumn = Math.floor(headX / unit);
+    const headRow = Math.max(y0, Math.round(y1 - (lh * .16) / unit));
+    const visibleThreshold = Math.max(1, Math.ceil(head.width * .08 / unit));
+    for (let y = y1; y >= headRow; y--) {
+      let pixels = 0;
+      for (let x = Math.max(x0, headColumn - halfHead); x <= Math.min(x1, headColumn + halfHead); x++) {
+        if (buf[(y * w + x) * 4 + 3] > 8) pixels++;
+      }
+      if (pixels >= visibleThreshold) {
+        headY = (h - 1 - y) * unit;
+        break;
+      }
+    }
+    const rowUnits = new Map();
+    for (let y = y1; y >= y0; y--) {
+      if (rowMax[y] < rowMin[y]) continue;
+      const level = Math.floor((h - 1 - y) * unit);
+      const left = rowMin[y] * unit, right = (rowMax[y] + 1) * unit;
+      const row = rowUnits.get(level);
+      if (row) { row[1] = Math.min(left, row[1]); row[2] = Math.max(right, row[2]); }
+      else rowUnits.set(level, [level, left, right]);
+    }
+    silhouette = {
+      headX, headY, headWidth: head.width,
+      footX: centerAt(ly0 + lh * .92, trunk.center === undefined ? lower : trunk),
+      width: Math.max(trunk.width, lower.width) || lw,
+      rows: [...rowUnits.values()],
+    };
+    hitBands = [0.14, 0.47, 0.80].map((k, i) => {
+      const cy = ly0 + lh * k;
+      return [centerAt(cy), cy, Math.max(1, radii[i])];
+    });
+    // 三段的水平中心统一用躯干：头/腿的单段 span 会被尾巴、胡须带偏
+    const bodyCx = trunk.center ?? hitBands[1]?.[0] ?? (lx0 + lx1) / 2;
+    for (const b of hitBands) b[0] = bodyCx;
+    // Keep the desktop art above the floor while retaining body hit circles.
+    const art = bongoArt?.hasBackground ? bongoArt.sceneBounds() : null;
+    return [
+      Math.round(art ? Math.min(lx0, art[0] * BOX) : lx0),
+      Math.round(ly0),
+      Math.round(art ? Math.max(lx1, art[2] * BOX) : lx1),
+      Math.round(art ? Math.max(ly1, art[3] * BOX) : ly1),
+    ];
+  }
+
+  /**
+   * 自动贴合：把可见 alpha 映射到 256 契约。
+   * 脚 256 / 中心 128 / 高约 232 / 宽 ≤ 208；宽模型只压宽，不压脚底。
+   */
+  function autoFitExtent(target = {}) {
+    const wantH = Number.isFinite(target.height) ? target.height : 232;
+    const maxW = Number.isFinite(target.maxWidth) ? target.maxWidth : 208;
+    const feet = Number.isFinite(target.feet) ? target.feet : 256;
+    const center = Number.isFinite(target.center) ? target.center : 128;
+    let m = measureNeutralExtent();
+    if (!m) return null;
+    for (let i = 0; i < 6; i++) {
+      const [x0, y0, x1, y1] = m;
+      const w = Math.max(1, x1 - x0);
+      const h = Math.max(1, y1 - y0);
+      const targetH = Math.min(wantH, (maxW * h) / w);
+      // 用“躯干可见带”的中心，而不是整张 bbox：尾巴/胡须会把 bbox 中心拉偏
+      const cx = hitBands?.[1]?.[0] ?? (x0 + x1) / 2;
+      const okH = Math.abs(h - targetH) <= 1.5;
+      const okX = Math.abs(cx - center) <= 1.5;
+      const okY = Math.abs(y1 - feet) <= 1.5;
+      if (okH && okX && okY) break;
+      if (!okH) fitState.zoom = clamp((Number(fitState.zoom) || 1) * (targetH / h), 0.15, 6);
+      const [ox, oy] = fitState.offset ?? [0, 0];
+      fitState.offset = [
+        clamp(ox + (center - cx) / 128, -1.5, 1.5),
+        clamp(oy + (y1 - feet) / 128, -1.5, 1.5),
+      ];
+      applyFit();
+      m = measureNeutralExtent() ?? m;
+    }
+    return m;
+  }
+
+  let extentFrames = 0;
+  const currentHits = () => cropDisplay?.hits ?? (!wardrobeAdjusted ? profile.hits : null) ?? hitBands ?? (() => {
+    const [x0, y0, x1, y1] = currentExtent();
+    const w = x1 - x0;
+    const h = y1 - y0;
+    const cx = (x0 + x1) / 2;
+    const r = (v) => Math.max(1, v);
+    // 单圆只覆盖胸口：头/脚抓不到，空白处又会吃点击。按可见范围给头 / 身 / 下三段。
+    return [
+      [cx, y0 + h * .14, r(Math.min(w * .46, h * .18))],
+      [cx, y0 + h * .47, r(Math.min(w * .52, h * .26))],
+      [cx, y0 + h * .80, r(Math.min(w * .48, h * .22))],
+    ];
+  })();
+  const currentAnchors = () => {
+    const measured = deriveAnchors(cropExtent(), silhouette);
+    const configured = profile.anchors ?? {};
+    const reference = wardrobeBaseline?.silhouette;
+    const moved = wardrobeAdjusted && reference && silhouette;
+    const dx = moved ? silhouette.headX - reference.headX : 0;
+    const dy = moved ? silhouette.headY - reference.headY : 0;
+    const shift = cropDisplay?.shift ?? 0;
+    const anchors = { ...measured, ...configured };
+    if (!dx && !dy && !shift) return anchors;
+    for (const [key, point] of Object.entries(anchors)) {
+      const x = Object.hasOwn(configured, key) ? dx : 0;
+      const y = shift + (Object.hasOwn(configured, key) ? dy : 0);
+      if (key === 'tears') anchors[key] = point.map(([a, b]) => [a + x, b + y]);
+      else if (key === 'hearts') anchors[key] = [point[0] + x, point[1] + x, point[2] + y];
+      else if (Array.isArray(point) && point.length === 2) anchors[key] = [point[0] + x, point[1] + y];
+    }
+    return anchors;
+  };
+
+  let emotionEffects, initialEmotionTrigger;
+  const emotionStyle = profile.emotionEffect ?? emotionConfig.default;
+  let emotionEffectsEnabled = emotionStyle !== 'native';
+  function triggerEmotionEffect(word) {
+    if (!emotionEffectsEnabled) return;
+    if (emotionEffects) emotionEffects.trigger(word);
+    else initialEmotionTrigger = word;
+  }
+  function drawEmotionEffects(parent, frame) {
+    if (!emotionEffectsEnabled) return;
+    try {
+      emotionEffects ??= createPetEmotionEffects({
+        doc, parent, art: fo, bounds: currentExtent, style: emotionStyle, size: profile.emotionEffectSize ?? emotionConfig.emotionEffectSize,
+      });
+      emotionEffects.setTheme(doc.documentElement.dataset.theme);
+      if (initialEmotionTrigger) {
+        emotionEffects.trigger(initialEmotionTrigger);
+        initialEmotionTrigger = undefined;
+      }
+      emotionEffects.draw(frame);
+    } catch (error) {
+      emotionEffectsEnabled = false;
+      emotionEffects?.dispose();
+      emotionEffects = undefined;
+      console.warn('[l2d] 情绪特效已停止', error);
+    }
+  }
+
+  const publishInfo = () => {
+    globalThis.__l2dInfo = {
+      extent: currentExtent(),
+      measured: measuredExtent ?? extent,
+      crop: { ...crop },
+      anchors: currentAnchors(),
+      hits: currentHits(),
+      roles: [...roles.keys()],
+      maskBuffers,
+      renderMode: renderConfig.mode,
+      renderWarning: renderConfig.warning,
+      renderQuality: qualityInfo(),
+      expressions: [...expressions.keys()],
+      idle: idleIds,
+      motion: profile.motion?.kind === 'stand' ? 'stand' : 'roam',
+      fit: { ...fitState, offset: [...(fitState.offset ?? [0, 0])], padding: [...(fitState.padding ?? [0, 0])] },
+    };
+  };
+
+  let touchReactionSequence = 0;
+  const figure = {
+    get extent() { return currentExtent(); },
+    get touch() { return profile.touch; },
+    reactTouch(action, gesture, region) {
+      try {
+        action ??= touchSuggestion(profile.native?.resources,gesture,region);
+        if (action?.word) return body.do(action.word);
+        if (action?.resource && draftLayer) {
+          const binding = { word:'happy', resource:action.resource, overlays:action.overlays, release:action.release, nativeOnly:false };
+          draftLayer.play(binding,'touch','touch-'+(++touchReactionSequence),'full');
+          return true;
+        }
+      } catch (error) {
+        console.warn('Touch reaction was not played:', error.message);
+        return false;
+      }
+      return false;
+    },
+    get touchExtent() {
+      if (!cropDisplay) return currentExtent();
+      const [left, top, right, bottom] = cropExtent();
+      return [left, top + cropDisplay.shift, right, bottom + cropDisplay.shift];
+    },
+    get hits() { return currentHits(); },
+    get anchors() { return currentAnchors(); },
+    colors: { z: '#7fb0e8' },
+
+    // 工作台调试接口：直接写 role（不是 ParamXXX），优先级高于表情/待机
+    __roles: {
+      list: () => [...roles.keys()],
+      set(values) {
+        for (const [name, value] of Object.entries(values ?? {})) {
+          if (roles.has(name) && Number.isFinite(value)) roleOverrides[name] = value;
+          else delete roleOverrides[name];
+        }
+      },
+      clear() { for (const name of Object.keys(roleOverrides)) delete roleOverrides[name]; },
+      read: () => ({ ...roleOverrides }),
+    },
+
+    // 工作台试看：临时指定一个 exp3，不写回 profile
+    __expr: {
+      list: () => [...expressions.keys()],
+      set(id) {
+        // '' 表示「明确不要 exp3」（压过 profile 映射）；null 表示回退到 profile
+        expressionOverride = id === '' ? '' : (id && expressions.has(id) ? id : null);
+      },
+      clear() { expressionOverride = null; },
+      read: () => expressionOverride,
+    },
+
+    // 工作台取景：位置/大小实时改，构建时写进 profile.fit
+    __fit: {
+      get: () => ({ ...fitState, offset: [...(fitState.offset ?? [0, 0])], padding: [...(fitState.padding ?? [0, 0])] }),
+      set(values) {
+        const next = { ...fitState, ...(values ?? {}) };
+        if (values?.mode) next.mode = values.mode;
+        fitState = next;
+        applyFit();
+      },
+      reset() {
+        fitState = { mode: 'contain', anchor: 'bottom', padding: [0.04, 0.02], offset: [0, 0], zoom: 1, ...(profile.fit ?? {}) };
+        applyFit();
+      },
+    },
+
+    // 工作台：改完 fit 后重量一次 alpha 包围盒（否则 extent / 命中圈还是旧的）
+    __remeasure() {
+      try {
+        const m = measureNeutralExtent();
+        if (m) { extent = measuredExtent = m; cropDirty = true; updateCrop(); }
+        return m;
+      } catch { return null; }
+    },
+
+    /**
+     * 封面：中性姿势 + 专用取景（高 200 / 脚底 236 / 中心 128）拍 512 和 128 两张 PNG。
+     * 拍完把 fitState / extent / 命中圈全部还原，绝不影响正常预览和命中测试。
+     */
+    __cover(size) {
+      if (!texturesReady) return null;
+      if (bongoArt) {
+        if (!renderNeutralPose()) return null;
+        return size ? { png: canvasPng(size) } : { png: canvasPng(512), png128: canvasPng(128) };
+      }
+      const oldFit = {
+        ...fitState,
+        offset: [...(fitState.offset ?? [0, 0])],
+        padding: [...(fitState.padding ?? [0, 0])],
+      };
+      const oldExtent = extent;
+      const oldHits = hitBands;
+      const oldSilhouette = silhouette;
+      try {
+        // 封面从固定的基准取景出发，不继承上一次的 zoom / offset；否则两次构建会差几像素。
+        fitState = { mode: 'contain', anchor: 'bottom', padding: [0.04, 0.02], offset: [0, 0], zoom: 1, autoFit: false };
+        applyFit();
+        const m = autoFitExtent({ height: 200, feet: 236, center: 128, maxWidth: 208 });
+        if (!m) return null;
+        if (!renderNeutralPose()) return null;
+        if (size) return { png: canvasPng(size) };
+        const png = canvasPng(512);
+        const png128 = canvasPng(128);
+        return png && png128 ? { png, png128 } : null;
+      } catch (e) {
+        console.warn('[l2d] 封面生成失败', e);
+        return null;
+      } finally {
+        fitState = oldFit;
+        applyFit();
+        extent = oldExtent;
+        hitBands = oldHits;
+        silhouette = oldSilhouette;
+        publishInfo();
+        render();
+      }
+    },
+
+    draw(petG, face, frame) {
+      if (fo.parentNode !== petG) petG.appendChild(fo);
+      bodyMode = frame.mode;
+      if (!texturesReady || renderFailure) return;
+      settleWardrobe();
+
+      if (opts.preview && previewState) frame = {...frame,face:previewState.word,gesture:null,talk:0,look:[0,0]};
+      const dt = clamp(frame.dt ?? (elapsedBetweenDraws || 1 / 60), 0.001, 0.1);
+      elapsedBetweenDraws = 0;
+      const layer = performancePlayback?.frame();
+      let nativeValues = [];
+      if (native && extent) {
+        try { nativeValues = native.update(frame, dt); }
+        catch (error) { console.warn('[l2d] Native update failed; generic behavior retained', error); }
+      }
+      const draft = draftLayer?.mix(nativeValues, frame, dt);
+      if (draft) nativeValues = draft.values;
+      const motionTracks = nativeValues.filter(value => value.nativeOnly && (value.target==='PartOpacity' ? partIndex : paramIndex).has(value.id));
+      const plannedTracks = draft?.nativePreview ? [] : layer?.tracks.filter(track => !draft?.covered?.has(track.target + ':' + track.id));
+      const plannedIds = new Set(plannedTracks?.map(track => track.id));
+      const animationOnly = motionTracks.length > 0 || Boolean(previewState?.raw || draft?.nativePreview);
+      petG.parentElement?.classList.toggle('figure-motion-only', animationOnly);
+      if (animationOnly) {
+        initialEmotionTrigger = undefined;
+        if (emotionEffects) { emotionEffects.dispose(); emotionEffects = undefined; }
+      } else drawEmotionEffects(petG, frame);
+
+      model._model.loadParameters();
+      resetNativeBase();
+      const neutralPose = !extent || animationOnly;
+      const speech = neutralPose ? null : desktopSpeechLevel;
+      const spokenMouth = voiceMouth.update(speech, 1, dt);
+      const mouth = applyFrame(face, layer?.face ? {...frame,face:layer.face} : frame, dt, neutralPose, speech, layer);
+      if (!animationOnly) stepMotion(frame, dt);
+      else if (currentId) {
+        model._motionManager.stopAllMotions();
+        currentId = lastGesture = null;
+        idlePlaying = false;
+      }
+      stepExpression(frame.face, dt, animationOnly);
+      applyPartOpacity(currentId);
+      const blendedValues = nativeValues.filter(value => !value.nativeOnly && !plannedIds.has(value.id));
+      applyNativeValues(blendedValues.filter(v => !nativePhysicsOutputs.has(v.id)), model._model, paramIndex, partIndex);
+      wardrobe.apply();
+      const locks = captureMotionLocks([...motionTracks.filter(value => !plannedIds.has(value.id)), ...(plannedTracks ?? [])], model._model, paramIndex, partIndex);
+      model._model.saveParameters();            // ← 必须在 physics 之前
+      // Save the authored pose first so the automatic contribution never accumulates.
+      if (bongoBreath !== undefined) model._model.addParameterValueByIndex(bongoBreath, bongo.bongoBreathContribution(frame.t ?? 0));
+      try { model._physics?.evaluate(model._model, dt); } catch { /* 物理失败不致命 */ }
+      if (blendedValues.length) applyNativeValues(blendedValues.filter(v => nativePhysicsOutputs.has(v.id)), model._model, paramIndex, partIndex);
+      try { model._pose?.updateParameters(model._model, dt); } catch { /* 姿势失败不致命 */ }
+      applyCleanParams();
+      wardrobe.apply();
+      // Audio owns even quiet samples once blended in. Its tail hands the
+      // parameter back to the same pose the model would use without audio.
+      if (Number.isFinite(roleOverrides.mouthOpen)) writeRole('mouthOpen', roleOverrides.mouthOpen);
+      else {
+        if (mouth?.weight > 0 && spokenMouth?.weight !== 1) writeRole('mouthOpen', mouth.open, mouth.weight);
+        if (spokenMouth && !neutralPose) writeRole('mouthOpen', spokenMouth.open, spokenMouth.weight);
+      }
+      if (bongoInput) bongoArt.draw(bongoInput.apply(dt));
+      applyNativeValues(locks, model._model, paramIndex, partIndex);
+      model._model.update();
+      render();
+
+      globalThis.__l2dMotion = {
+        id: currentId,
+        idle: idlePlaying,
+        idleCount: idleIds.length,
+        expr: currentExpr,
+        exprCount: expressions.size,
+        native: native?.state() ?? null,
+        nativeOnly: motionTracks.length > 0,
+      };
+
+      // 贴图就绪后的第 3 帧量一次可见范围（等姿势稳定，别量到眨眼/动作的瞬间）
+      if (!wardrobeBaseline && extentFrames < 30 && ++extentFrames >= 3) {
+        let m = null;
+        const selected = wardrobe.state();
+        const changed = hasWardrobePick();
+        try {
+          if (changed) wardrobe.select({});
+          m = !extent && fitState.autoFit !== false ? autoFitExtent() : measureNeutralExtent();
+        } catch (e) {
+          console.warn('[l2d] 量取景失败', e);
+        } finally {
+          if (changed) wardrobe.select(selected);
+        }
+        if (m) {
+          extent = profile.extent ?? m;
+          measuredExtent = m;
+          wardrobeBaseline = { fit: fitCopy(), extent: m, silhouette };
+          cropDirty = true;
+          updateCrop();
+          if (changed) wardrobeLayoutDirty = true;
+          console.info('[l2d] extent', JSON.stringify(m));
+          console.info('[l2d] fit', JSON.stringify(fitState));
+        } else if (extentFrames === 3) {
+          console.info('[l2d] extent 没量到（画面全透明？）');
+        }
+      }
+      if (crop.mode === 'upper' && !measuredExtent && extentFrames < 30) fo.setAttribute('visibility', 'hidden');
+      else fo.removeAttribute('visibility');
+      bodyMask.apply(petG, cropDisplay);
+    },
+
+    dispose() {
+      disposed = true;
+      performancePlayback?.dispose();
+      emotionEffects?.dispose();
+      clearTimeout(textureDeadline);
+      renderNotice?.remove();
+      bodyMask.dispose();
+      fo.remove();
+      try { performance?.dispose(); } catch { /* 忽略 */ }
+      try { model.release?.(); } catch { /* 忽略 */ }
+      if(opts.preview)try{gl.getExtension('WEBGL_lose_context')?.loseContext();}catch{}
+    },
+  };
+
+  // 只有动作词交给 kit；表情走 profile.expression，kit 自己的 KIT_EXPRESSIONS 仍然可用
+  const words = {};
+  for (const m of entry.motions ?? []) {
+    words[m.id] = { motion: { seconds: m.duration || 3 } };
+  }
+  const legacyWords={...words};
+  function syncNativeWords(bindings){
+    for(const word of Object.keys(words))delete words[word];Object.assign(words,legacyWords);
+    for (const binding of bindings ?? []) {
+      const resource = profile.native.resources.find(r => r.id === binding.resource);
+      if (resource) words[binding.word] = resource.kind === 'expression' ? { expression: {} }
+        : { motion: { seconds: nativeBindingDuration(binding,profile.native.resources) } };
+    }
+  }
+  syncNativeWords(profile.native?.bindings);
+
+  publishInfo();
+  globalThis.__l2dDrive = figure.__roles;
+  globalThis.__l2dFit = figure.__fit;
+  globalThis.__l2dRemesure = figure.__remeasure;
+  globalThis.__l2dAutoFit = () => {
+    const m = bongoArt ? measureNeutralExtent() : autoFitExtent();
+    if (m) { extent = measuredExtent = m; cropDirty = true; updateCrop(); }
+    return m;
+  };
+  if (opts.preview) globalThis.__l2dCrop = {
+    get: () => ({ ...crop }),
+    set: (value, options) => setCrop({ ...crop, ...value }, options),
+  };
+  globalThis.__l2dCover = figure.__cover;
+  globalThis.__l2dRenderQuality = qualityInfo;
+  globalThis.__l2dPreviewReady=()=>texturesReady&&!!extent&&!renderFailure;
+  globalThis.__l2dExpr = figure.__expr;
+
+  const bodyHost = bongoInput ? { ...host, start: { ...host.start, facing: 1 } } : host;
+  // The kit mounts its stage-coordinate particles after the transformed art group.
+  const hideNativeEffects = (emotionEffectsEnabled ? 'svg.kit > ellipse.shadow + g + g{display:none}' : '')
+    + 'svg.kit.figure-motion-only > ellipse.shadow + g + g{display:none}';
+  const body = kit.createBody(bodyHost, { figure, words, css: 'foreignObject{pointer-events:none}' + hideNativeEffects });
+  body.speechLevel = value => { desktopSpeechLevel = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : null; };
+  body.modelBehavior = { gaze: {
+    supported: !bongoInput && (roles.has('eyeBallX') || roles.has('eyeBallY')),
+    reason: bongoInput ? 'bongo-input' : !(roles.has('eyeBallX') || roles.has('eyeBallY')) ? 'no-eye-roles' : null,
+    settings: { ...gaze },
+  } };
+  if (gazeCapable) {
+    const pointerBase = body.pointer.bind(body);
+    body.pointer = (type, point) => {
+      if (type === 'move' || type === 'down') pointerInside = true;
+      else if (type === 'leave' && !body.layout().pressing) pointerInside = false;
+      return pointerBase(type, point);
+    };
+    const setBase = body.set.bind(body);
+    body.set = (state) => {
+      if (typeof state?.listening === 'boolean') listening = state.listening;
+      if (typeof state?.still === 'boolean') still = state.still;
+      return setBase(state);
+    };
+  }
+  if (emotionEffectsEnabled) {
+    const cueBase = body.cue.bind(body);
+    body.cue = (kind) => { cueBase(kind); triggerEmotionEffect(kind); };
+  }
+  // Playback arrives from the owning Coo audio domain.
+  if (!opts.preview && !profile.bongo) {
+    try {
+      const {createPerformancePlayback}=await import('./performance-playback.js');
+      const protectedIds = new Set([...nativePhysicsOutputs, ...Object.keys(profile.clean?.params ?? {}),
+        ...(roles.get('mouthOpen')?.items ?? []).map(item => item.handle.getString()),
+        ...[...paramIndex.keys()].filter(id => PROTECTED_PARAMETER.test(id)),
+        ...(profile.wardrobe?.resources ?? []).flatMap(resource => (resource.tracks ?? []).filter(track => track.target !== 'PartOpacity').map(track => track.id)),
+      ]);
+      performancePlayback = createPerformancePlayback({ model: model._model, paramIndex, protectedIds });
+      body.speechPlan = command => performancePlayback.media(command, profile.native?.resources ?? []);
+    } catch (error) { console.warn('[l2d] Figure performance unavailable', error); }
+  }
+  const shadow = host.root.querySelector('svg.kit > ellipse.shadow');
+  let fittedShadow;
+  function drawShadow() {
+    if (!shadow || !silhouette || bongoArt?.hasBackground) return;
+    if (!fittedShadow) {
+      fittedShadow = shadow.cloneNode(false);
+      shadow.before(fittedShadow);
+      // The kit can cache its values. Never feed our fitted radii back into it.
+      shadow.setAttribute('visibility', 'hidden');
+    }
+    const support = cropDisplay ?? silhouette;
+    const rx = Number(shadow.getAttribute('rx'));
+    const ry = Number(shadow.getAttribute('ry'));
+    const widthScale = clamp(support.width / 164, .16, 1.4);
+    let cx = Number(shadow.getAttribute('cx'));
+    if (bodyMode !== 'air' && bodyMode !== 'drag') {
+      const transform = fo.parentNode?.getCTM?.();
+      if (transform && Number.isFinite(transform.a) && Number.isFinite(transform.c)) {
+        cx += transform.a * (support.footX - BOX / 2) + transform.c * (currentExtent()[3] - BOX);
+      }
+    }
+    fittedShadow.setAttribute('cx', String(cx));
+    fittedShadow.setAttribute('rx', String(rx * widthScale));
+    fittedShadow.setAttribute('ry', String(1 + (ry - 1) * widthScale));
+    for (const name of ['cy', 'opacity']) fittedShadow.setAttribute(name, shadow.getAttribute(name) ?? '0');
+  }
+  const step = body.step.bind(body);
+  body.step = (dt, draw = true) => {
+    if (!renderFailure) {
+      const delta = Number.isFinite(dt) && dt > 0 ? dt : 0;
+      elapsedBetweenDraws = Math.min(0.1, elapsedBetweenDraws + delta);
+      if (texturesReady && draw) settleWardrobe();
+      updateCrop(delta);
+      step(dt, draw);
+    }
+    if (renderFailure) {
+      // Coo switches to its built-in figure when a running body reports an error.
+      if (!opts.preview) throw Error(renderFailure);
+      return;
+    }
+    if (draw) drawShadow();
+  };
+  let draftWardrobe = null;
+  body.setScheme = async (id) => {
+    framingScheme = id;
+    if (!draftWardrobe) changeWardrobe(() => wardrobe.scheme(id));
+    if (texturesReady) settleWardrobe();
+    setCrop(schemeCrop(id));
+  };
+  if (interactive && !profile.bongo) body.draftWardrobe = command => {
+    if (draftWardrobe && draftWardrobe.owner !== command.owner) throw Error('The wardrobe preview belongs to a different editor');
+    if (command.kind === 'restore') {
+      if (draftWardrobe) changeWardrobe(() => { wardrobe.configure(profile.wardrobe); wardrobe.scheme(framingScheme); });
+      draftWardrobe = null;
+      if (texturesReady) settleWardrobe();
+      return;
+    }
+    if (command.kind !== 'preview' || !texturesReady || !extent || renderFailure) throw Error('The model is not ready for wardrobe preview');
+    const catalog = { resources: (profile.native?.resources ?? []).map(resource => ({ ...resource, raw: resource.data })) };
+    const config = wardrobeConfig(catalog, command.groups, command.bindings ?? [], 0);
+    const previous = draftWardrobe, previousPicks = wardrobe.state();
+    try {
+      changeWardrobe(() => {
+        wardrobe.configure(config);
+        wardrobe.scheme(framingScheme);
+        wardrobe.select({...wardrobe.state(),...command.picks});
+      });
+      settleWardrobe();
+      draftWardrobe = { owner: command.owner, config };
+    } catch (error) {
+      changeWardrobe(() => { wardrobe.configure(previous?.config ?? profile.wardrobe); wardrobe.select(previousPicks); });
+      settleWardrobe();
+      throw error;
+    }
+  };
+  const layoutBase = body.layout.bind(body);
+  body.layout = () => {
+    const layout = layoutBase();
+    if (!cropDisplay) return layout;
+    const { x, y, w, h } = layout.box;
+    return { ...layout, side: { x: x + w / 2, y: y + h / 2, reach: w / 2 } };
+  };
+  globalThis.__l2dWardrobe=()=>wardrobe.state();
+  if(opts.preview)globalThis.__l2dWardrobeValues=()=>wardrobe.inspect();
+  if (native || emotionEffectsEnabled) {
+    const doBase = body.do.bind(body);
+    body.do = (word) => {
+      const accepted = doBase(word);
+      if (accepted !== false) {
+        native?.trigger(word);
+        triggerEmotionEffect(word);
+      }
+      return accepted;
+    };
+  }
+  if (native) {
+    globalThis.__l2dNativeSample = (id, time, word, generic = false, size = 384, overlays = [], nativeOnly = false) => {
+      if (!texturesReady) return null;
+      model._model.loadParameters();
+      for (let i = 0; i < model._model.getParameterCount(); i++) model._model.setParameterValueByIndex(i, model._model.getParameterDefaultValue(i));
+      resetNativeBase();
+      const previousPerformance = performance;
+      performance = word && performanceFactory ? performanceFactory(profile, () => {}) : null;
+      try {
+        // Reset and warm the same generic layer for repeatable static comparisons.
+        for (let i = 0; i < (word ? 60 : 1); i++) applyFrame({}, {face:word,t:i / 60}, 1 / 60, !word);
+        applyPartOpacity(null);
+        if (id !== '__neutral__' && !generic) native.sample(id, time, overlays);
+        const values = id !== '__neutral__' && !generic ? native.update({},0) : [];
+        if(!nativeOnly)applyNativeValues(values.filter(v => !nativePhysicsOutputs.has(v.id)),model._model,paramIndex,partIndex);
+        wardrobe.apply();
+        const locks=nativeOnly?captureMotionLocks(values,model._model,paramIndex,partIndex):[];
+        model._model.saveParameters();
+        // Static comparisons use equilibrium, avoiding residual motion from a prior sample.
+        try { model._physics?.stabilization(model._model); } catch { /* optional */ }
+        if(!nativeOnly)applyNativeValues(values.filter(v => nativePhysicsOutputs.has(v.id)),model._model,paramIndex,partIndex);
+        wardrobe.apply();
+        applyNativeValues(locks,model._model,paramIndex,partIndex);
+        model._model.update();render();return canvasPng(size);
+      }
+      finally { native.clearSample(); performance?.dispose(); performance = previousPerformance; }
+    };
+  }
+  if (opts.preview) globalThis.__l2dPreview = {
+    wardrobe(groups,picks){
+      changeWardrobe(()=>{wardrobe.configure(wardrobeConfig({resources:(profile.native?.resources||[]).map(r=>({...r,raw:r.data}))},groups||[]));wardrobe.select(picks||{});});
+    },
+    play(resource,word,bindings=[],raw=false) {
+      performance?.dispose(); performance=performanceFactory?.(profile,console.warn) || null;
+      previewState={word:word || 'neutral',raw};
+      const selected=bindings.filter(b=>b.word!==word);
+      if(resource){
+        const binding=bindings.find(b=>b.word===word&&b.resource===resource);
+        const motion=profile.native?.resources?.find(item=>item.id===resource)?.kind==='motion';
+        selected.push({...binding,word:word || 'neutral',resource,...(motion&&raw?{nativeOnly:true}:{})});
+      }
+      native=createNativeActions({...profile.native,bindings:selected});
+      body.do?.(word || 'neutral');
+    },
+    stop(){previewState=null;native=createNativeActions({...profile.native,bindings:[]});body.do?.('neutral');},
+  };
+  if(opts.preview)globalThis.__l2dStaticSample=(sample,size=previewPixels||512)=>{
+    changeWardrobe(()=>wardrobe.select(sample.picks||{}));settleWardrobe();
+    const png=globalThis.__l2dNativeSample(sample.resource||'__neutral__',sample.time,sample.word,false,size,sample.overlays||[],sample.nativeOnly);
+    return {png,fit:fitCopy(),picks:wardrobe.state(),values:wardrobe.inspect()};
+  };
+  if (draftLayer) {
+    Object.defineProperty(body, 'draftActionState', { get: draftLayer.state });
+    body.clearDraftAction = draftLayer.clear;
+    body.draftAction = (command, requestId) => {
+      if (!extent || !texturesReady || renderFailure) throw Error('The active model is not ready for preview');
+      const checkpoint = draftLayer.checkpoint();
+      try {
+        if (command.kind === 'play') draftLayer.play(command.binding, command.owner, requestId, command.mode);
+        else draftLayer.stop(command.owner, requestId);
+        body.step(0, true);
+        if (renderFailure) throw Error(renderFailure);
+      } catch (error) {
+        draftLayer.restore(checkpoint);
+        throw error;
+      }
+    };
+  }
+  // Transactional live framing: source settings stay unchanged until the host saves.
+  let framingCheckpoint = null, framingRequested = null;
+  const framingSnapshot = () => structuredClone({ fit:fitCopy(), extent, measuredExtent, hitBands, silhouette,
+    wardrobeBaseline, wardrobeLayoutDirty, wardrobeAdjusted, crop, cropDisplay, cropTransition, cropDirty });
+  const restoreFramingSnapshot = (value) => {
+    ({ extent, measuredExtent, hitBands, silhouette, wardrobeBaseline, wardrobeLayoutDirty,
+      wardrobeAdjusted, crop, cropDisplay, cropTransition, cropDirty } = structuredClone(value));
+    fitState = structuredClone(value.fit); applyFit(); publishInfo();
+  };
+  const framingFit = () => ({...structuredClone(framingRequested ?? wardrobeBaseline?.fit ?? fitCopy()),autoFit:false});
+  const framingReport = () => ({ supported:!profile.bongo, active:!!framingCheckpoint,
+    fit:framingFit(), crop:{...crop}, geometry:body.layout?.().box ? {...body.layout().box} : null,
+    reason:profile.bongo ? 'bongo-input' : !texturesReady || !wardrobeBaseline ? 'not-ready' : null });
+  const framingCapabilities = Object.getOwnPropertyDescriptor(body,'capabilities');
+  Object.defineProperty(body,'capabilities',{configurable:true,get:()=>({
+    ...(framingCapabilities?.get?.call(body) ?? framingCapabilities?.value ?? {}),
+    framing:{preview:!profile.bongo,restore:!profile.bongo},
+  })});
+  Object.defineProperty(body,'framingState',{get:framingReport});
+  body.framing = (command) => {
+    if (profile.bongo || !texturesReady || !wardrobeBaseline) throw Error('Framing preview unavailable');
+    if (!command || !['preview','restore'].includes(command.kind)) throw Error('Invalid framing command');
+    const previous = framingSnapshot(), picks = wardrobe.state(), pickKey = wardrobe.layoutKey();
+    if (command.kind === 'restore') {
+      if (!framingCheckpoint) return framingReport();
+      const saved = framingCheckpoint;
+      try {
+        restoreFramingSnapshot(saved.snapshot);
+        // A wardrobe switch made during preview remains selected after cancellation.
+        if (saved.pickKey !== pickKey) { wardrobeLayoutDirty = true; settleWardrobe(); }
+        if (saved.scheme !== framingScheme) setCrop(schemeCrop(framingScheme), {immediate:true});
+        framingCheckpoint = null; framingRequested = null;
+        publishInfo(); return framingReport();
+      } catch (error) { restoreFramingSnapshot(previous); throw error; }
+    }
+    const f = command.fit, pair = (v,min,max)=>Array.isArray(v)&&v.length===2&&v.every(n=>Number.isFinite(n)&&n>=min&&n<=max);
+    if (!f || Object.keys(f).some(k=>!['mode','anchor','autoFit','zoom','offset','padding'].includes(k))
+      || f.mode!=='contain' || f.anchor!=='bottom' || f.autoFit!==false || !Number.isFinite(f.zoom)
+      || f.zoom<.1 || f.zoom>5 || !pair(f.offset,-2,2) || !pair(f.padding,0,.45)) throw Error('Invalid framing fit');
+    try {
+      // Measure a new neutral wardrobe baseline, then reapply the current selection.
+      wardrobe.select({}); fitState=structuredClone(f); applyFit();
+      const measured=measureNeutralExtent();
+      if (!measured) throw Error('Framing preview has no visible model');
+      extent=measuredExtent=measured; wardrobeAdjusted=false;
+      wardrobeBaseline={fit:fitCopy(),extent:measured,silhouette:structuredClone(silhouette)};
+      wardrobe.select(picks); wardrobeLayoutDirty=hasWardrobePick();
+      if (wardrobeLayoutDirty) {
+        settleWardrobe();
+        if (!wardrobeAdjusted) throw Error('Framing wardrobe measurement failed');
+      }
+      if (command.crop) setCrop(command.crop,{immediate:true});
+      cropTransition=null; cropDirty=true; updateCrop();
+      framingCheckpoint ??= {snapshot:previous,pickKey,scheme:framingScheme};
+      framingRequested=structuredClone(f); publishInfo(); return framingReport();
+    } catch(error) { wardrobe.select(picks); restoreFramingSnapshot(previous); throw error; }
+  };
+  const defaultVisual = { hue: 0, brightness: 1 };
+  const visualSupported = typeof canvas.style.filter === 'string';
+  let savedVisual = profile.visual ?? defaultVisual, shownVisual = savedVisual;
+  const applyVisual = value => {
+    if (!visualSupported) throw Error('Model visual controls are unavailable');
+    canvas.style.filter = value.hue || value.brightness !== 1
+      ? 'hue-rotate(' + value.hue + 'deg) brightness(' + value.brightness + ')' : '';
+    shownVisual = value;
+  };
+  if (visualSupported) applyVisual(savedVisual);
+  Object.defineProperty(body.modelBehavior, 'visual', { enumerable: true, get: () => ({
+    hue: visualSupported, brightness: visualSupported, settings: shownVisual, saved: savedVisual,
+  }) });
+  body.previewVisual = value => applyVisual(value ?? savedVisual);
+  body.configureModel = (configuration) => {
+    const previous=framingSnapshot(),checkpoint=framingCheckpoint,requested=framingRequested;
+    const oldGaze={...gaze}, oldVisual = savedVisual;
+    const bindingChange=configuration.bindings!==undefined&&JSON.stringify(configuration.bindings)!==JSON.stringify(profile.native?.bindings??[]);
+    if(configuration.visual && !visualSupported) throw Error('Model visual controls are unavailable');
+    if(bindingChange){
+      if(!native)throw Error('The body has no native resource catalogue');
+      native.validateBindings(configuration.bindings);
+    }
+    try {
+      if(!configuration?.gaze||typeof configuration.gaze.enabled!=='boolean'||!Number.isFinite(configuration.gaze.speed)
+        ||configuration.gaze.speed<.25||configuration.gaze.speed>2.5)throw Error('Invalid gaze configuration');
+      // Reuse neutral/wardrobe measurement; accept its checkpoint as the saved baseline.
+      body.framing({kind:'preview',fit:configuration.fit});
+      Object.assign(gaze,configuration.gaze);
+      customGaze=gazeCapable&&(!gaze.enabled||gaze.speed!==1);
+      body.step(0,true);
+      framingCheckpoint=framingRequested=null;
+      profile.fit=structuredClone(configuration.fit);profile.gaze={...gaze};
+      body.modelBehavior.gaze.settings={...gaze};
+      sampledAt=0;lastLook.fill(0);kitCursorLook.fill(0);adjustedCursorLook.fill(0);
+      publishInfo();
+      if(bindingChange){
+        native.rebind(configuration.bindings);
+        profile.native={...profile.native,version:2,bindings:structuredClone(configuration.bindings)};
+        syncNativeWords(configuration.bindings);
+        body.words=[...new Set([...kit.KIT_EXPRESSIONS,...kit.KIT_MOTIONS,...Object.keys(words)])];
+      }
+      if (configuration.visual || visualSupported) {
+        applyVisual(configuration.visual ?? defaultVisual);
+        savedVisual = shownVisual;
+      }
+      body.clearDraftAction?.();
+    }catch(error){
+      if (visualSupported) applyVisual(oldVisual);
+      savedVisual = oldVisual;
+      restoreFramingSnapshot(previous);framingCheckpoint=checkpoint;framingRequested=requested;
+      Object.assign(gaze,oldGaze);customGaze=gazeCapable&&(!gaze.enabled||gaze.speed!==1);
+      throw error;
+    }
+  };
+  const roleNames = new Map();
+  for (const [name,role] of roles) for (const item of role.items) {
+    const id=item.handle.getString();if(!roleNames.has(id))roleNames.set(id,[]);roleNames.get(id).push(name);
+  }
+  const mouthTargets=(roles.get('mouthOpen')?.items ?? []).map(item=>item.handle.getString());
+  const parameterRows=[...paramIndex].map(([id,index])=>({id,min:model._model.getParameterMinimumValue(index),max:model._model.getParameterMaximumValue(index),default:model._model.getParameterDefaultValue(index),roles:roleNames.get(id)??[]}));
+  // Keep configured and mouth-named parameters visible first; the catalogue is bounded, never invented.
+  parameterRows.sort((a,b)=>Number(mouthTargets.includes(b.id)||/mouth/i.test(b.id))-Number(mouthTargets.includes(a.id)||/mouth/i.test(a.id)));
+  if (opts.editorPreview) body.previewMouth = mapping => {
+    if (mapping == null) { useMouthRole(savedMouth); return; }
+    if (mapping.mode === 'auto') { useMouthRole(automaticMouth); return; }
+    if (mapping.mode === 'off') { useMouthRole(undefined); return; }
+    const targets = mapping.targets;
+    if (mapping.mode !== 'mapped' || !Array.isArray(targets) || !targets.length || targets.length > 8
+      || targets.some(id => !paramIndex.has(id) || roleNames.get(id)?.some(role => role !== 'mouthOpen'))) {
+      throw Error('Invalid or conflicting mouth mapping');
+    }
+    useMouthRole(mappedMouth([...new Set(targets)]));
+  };
+  body.modelBehavior.mouth={mode:mouthMode,supported:mouthTargets.length>0,targets:mouthTargets,
+    missing:mouthMode==='mapped'?(profile.mouth.targets??[]).filter(id=>!paramIndex.has(id)):[],
+    parameters:parameterRows.slice(0,512),truncated:parameterRows.length>512};
+  Object.defineProperty(body.modelBehavior, 'crop', { enumerable: true, get: () => ({
+    supported: !profile.bongo, reason: profile.bongo ? 'bongo-input' : null, settings: { ...crop },
+  }) });
+  const motionKind = bongoInput || profile.motion?.kind === 'stand' ? 'stand' : 'roam';
+  body.modelBehavior.motion = { supported: true,
+    compiledKind: profile.motion?.kind === 'stand' ? 'stand' : 'roam', effectiveKind: motionKind,
+    facing: motionKind === 'stand' ? bongoInput || profile.facing !== 'mirror' ? 'fixed' : 'mirror' : 'host',
+    reason: bongoInput ? 'bongo-input' : null,
+  };
+
+  if (opts.awaitReady) {
+    await texturesLoaded;
+    try {
+      if (!texturesReady || renderFailure) throw Error(renderFailure || '模型贴图未就绪');
+      // Produce a real frame; fallback geometry alone is not readiness evidence.
+      for(let i=0;i<3;i++)body.step(0, true);
+    } catch (error) { figure.dispose(); throw error; }
+  }
+
+  if (SIMPLE && motionKind === 'stand') {
+    // 站定：无论 Coo / 预览传什么 roam，都强制 off；正面立绘也不镜像。
+    const setBase = body.set.bind(body);
+    body.set = (s) => setBase({ ...(s || {}), roam: 'off' });
+    try { setBase({ roam: 'off' }); } catch { /* ignore */ }
+    if (bongoInput || profile.facing !== 'mirror') {
+      const placeBase = body.place.bind(body);
+      body.place = (x, _facing, y, settle) => placeBase(x, 1, y, settle);
+      try { placeBase(body.layout?.().x ?? 0, 1); } catch { /* ignore */ }
+      if (bongoInput) {
+        bongo.connectBongoBody(body, bongoInput, words, word => native?.trigger(word) ?? false);
+        return body;
+      }
+      const stepBase = body.step.bind(body);
+      body.step = (dt, draw) => {
+        try {
+          const l = body.layout?.();
+          if (l?.mode === 'idle' && !l.pressing && !l.busy) body.place(l.x, 1);
+        } catch { /* ignore */ }
+        stepBase(dt, draw);
+      };
+    }
+  }
+  // roam：不拦截 set，也不驱动 place。让 kit 自己的 decide 跑
+  // look / walk / run / jump / sit / expr，和旧版一致。
+  return body;
+}

@@ -1,0 +1,245 @@
+{
+  "origin": "owned Figure working tree",
+  "version": "4.1.0",
+  "importedOn": "2026-11-12",
+  "note": "Snapshot includes uncommitted Figure implementation; original source SHA256 is authoritative, not HEAD. Local adaptations are listed separately.",
+  "files": [
+    {
+      "path": "pack/backends/body-crop.js",
+      "sourceSha256": "f30f8c83b5de0ea61b1f40904321a24398b962607057409185bf920dc5e066bb",
+      "importedSha256": "f30f8c83b5de0ea61b1f40904321a24398b962607057409185bf920dc5e066bb"
+    },
+    {
+      "path": "pack/backends/bongo.js",
+      "sourceSha256": "57daceb7f0a1ab2d20eb971cc75bd76b0f7f2136903f53bf2126a5b280f49bb9",
+      "importedSha256": "57daceb7f0a1ab2d20eb971cc75bd76b0f7f2136903f53bf2126a5b280f49bb9"
+    },
+    {
+      "path": "pack/backends/crop-config.js",
+      "sourceSha256": "358b5e3161cad559dc6f75507b18b5554fc245656d99f5344290abfb8ec0a27a",
+      "importedSha256": "358b5e3161cad559dc6f75507b18b5554fc245656d99f5344290abfb8ec0a27a"
+    },
+    {
+      "path": "pack/backends/emotion-effects/emotion-effects.js",
+      "sourceSha256": "0bd9c65234b3809a560f9df15819e689ee92d7f2896d13c4b2bcb6d051134c6a",
+      "importedSha256": "0bd9c65234b3809a560f9df15819e689ee92d7f2896d13c4b2bcb6d051134c6a"
+    },
+    {
+      "path": "pack/backends/emotion-effects/emotion-finals.js",
+      "sourceSha256": "79d8bbade0c7cbebed5678c1ba064d4bc8ab2527baa8338e7bcea1f10e5453bf",
+      "importedSha256": "79d8bbade0c7cbebed5678c1ba064d4bc8ab2527baa8338e7bcea1f10e5453bf"
+    },
+    {
+      "path": "pack/backends/emotion-effects/emotion-kaomoji.js",
+      "sourceSha256": "780ae99668ea682c680dddcc03527b8a9f083b9a1866515fb0bc22e2572f91ae",
+      "importedSha256": "780ae99668ea682c680dddcc03527b8a9f083b9a1866515fb0bc22e2572f91ae"
+    },
+    {
+      "path": "pack/backends/emotion-effects/emotion-orb.js",
+      "sourceSha256": "30be4d2a8b7d5684fbc23dadc54fc383786a6608a1184aeafdc931004cf0f90d",
+      "importedSha256": "30be4d2a8b7d5684fbc23dadc54fc383786a6608a1184aeafdc931004cf0f90d"
+    },
+    {
+      "path": "pack/backends/emotion-effects/emotion-particles.js",
+      "sourceSha256": "20d766114ecb71b8343fc5e5f657b04af49547da0836f8c177761e723b1e23c1",
+      "importedSha256": "20d766114ecb71b8343fc5e5f657b04af49547da0836f8c177761e723b1e23c1"
+    },
+    {
+      "path": "pack/backends/emotion-effects/emotion-softglow-field.js",
+      "sourceSha256": "3a98b9b87055494880dcc04b453fc35202ec113254440805601035fc67c4933d",
+      "importedSha256": "3a98b9b87055494880dcc04b453fc35202ec113254440805601035fc67c4933d"
+    },
+    {
+      "path": "pack/backends/emotion-effects/emotion-softglow-plan.js",
+      "sourceSha256": "8e18906d1aef6a01e24e25a663353c0a3558d67ec2c3670f5924229c4a0808e1",
+      "importedSha256": "8e18906d1aef6a01e24e25a663353c0a3558d67ec2c3670f5924229c4a0808e1"
+    },
+    {
+      "path": "pack/backends/emotion-effects/emotion-softglow.js",
+      "sourceSha256": "b0cf67c5c3eaddf65a4baee968cc3653aeb67274e003b0f07bae1b5a5ef5fdee",
+      "importedSha256": "b0cf67c5c3eaddf65a4baee968cc3653aeb67274e003b0f07bae1b5a5ef5fdee"
+    },
+    {
+      "path": "pack/backends/emotion-effects/index.js",
+      "sourceSha256": "c4e6ae5fde81b0065e31d48bd46da6882b77343fd236bf2b607be03f7dd4a45a",
+      "importedSha256": "c4e6ae5fde81b0065e31d48bd46da6882b77343fd236bf2b607be03f7dd4a45a"
+    },
+    {
+      "path": "pack/backends/emotion-effects/NOTICE.txt",
+      "sourceSha256": "e6df082b65e7c9ac059685068fe6b251c17d3dcd2c7e9b79382a68423902ea7a",
+      "importedSha256": "e6df082b65e7c9ac059685068fe6b251c17d3dcd2c7e9b79382a68423902ea7a"
+    },
+    {
+      "path": "pack/backends/emotion-style.js",
+      "sourceSha256": "625430fcb8fb7c3fa5c25bb9b14c421265adb1a5a4f38449391ed33432f4f66e",
+      "importedSha256": "625430fcb8fb7c3fa5c25bb9b14c421265adb1a5a4f38449391ed33432f4f66e"
+    },
+    {
+      "path": "pack/backends/gaze-config.js",
+      "sourceSha256": "467b319ee2785627614087898b122c816cef69326dcc719bfc3bf211b2d380ef",
+      "importedSha256": "467b319ee2785627614087898b122c816cef69326dcc719bfc3bf211b2d380ef"
+    },
+    {
+      "path": "pack/backends/live2d.js",
+      "sourceSha256": "f783a904d483183e3cdfd9f74a8355e55a85a789394ef760c80a12f6faeba2e9",
+      "importedSha256": "f783a904d483183e3cdfd9f74a8355e55a85a789394ef760c80a12f6faeba2e9"
+    },
+    {
+      "path": "pack/backends/native-actions.js",
+      "sourceSha256": "9a93358b0ab0269c14420a35db89f478917529e424d6c7b90242c73ca43ed777",
+      "importedSha256": "9a93358b0ab0269c14420a35db89f478917529e424d6c7b90242c73ca43ed777"
+    },
+    {
+      "path": "pack/backends/native-combination.js",
+      "sourceSha256": "896012abb826c7e1e4da9814f9ac5ba9f8e3de3cc23db5b210142bc29fb2890a",
+      "importedSha256": "896012abb826c7e1e4da9814f9ac5ba9f8e3de3cc23db5b210142bc29fb2890a"
+    },
+    {
+      "path": "pack/backends/performance-plan.js",
+      "sourceSha256": "d918417380b09be724a18e055cd97364de13446a44ba10684a1457dc795b682e",
+      "importedSha256": "d918417380b09be724a18e055cd97364de13446a44ba10684a1457dc795b682e"
+    },
+    {
+      "path": "pack/backends/performance-playback.js",
+      "sourceSha256": "cb814bf015daed2a077304f0bcbe1633a362e09ee4637deb809724cd8cc80edd",
+      "importedSha256": "cb814bf015daed2a077304f0bcbe1633a362e09ee4637deb809724cd8cc80edd"
+    },
+    {
+      "path": "pack/backends/render-config.js",
+      "sourceSha256": "eaec739273362e53e3232de09a99dcbb67d65aeaba38f443b50e86826aa415de",
+      "importedSha256": "eaec739273362e53e3232de09a99dcbb67d65aeaba38f443b50e86826aa415de"
+    },
+    {
+      "path": "pack/backends/render-quality.js",
+      "sourceSha256": "6958dfb46f3b52d89e97f917cf6ce441a7cdbd03a1cdc6b696d5a46104749338",
+      "importedSha256": "6958dfb46f3b52d89e97f917cf6ce441a7cdbd03a1cdc6b696d5a46104749338"
+    },
+    {
+      "path": "pack/backends/role-values.js",
+      "sourceSha256": "155de2caf2e10bc27a8409bf7ba8819c97d5afe2db470a7ab32154dd8ccee178",
+      "importedSha256": "155de2caf2e10bc27a8409bf7ba8819c97d5afe2db470a7ab32154dd8ccee178"
+    },
+    {
+      "path": "pack/backends/soullink.js",
+      "sourceSha256": "0cd6488656e67be6421ad8eeb887df9d088b76e48d2ae348ba69dfdfcff7f306",
+      "importedSha256": "0cd6488656e67be6421ad8eeb887df9d088b76e48d2ae348ba69dfdfcff7f306"
+    },
+    {
+      "path": "pack/backends/voice-playback.js",
+      "sourceSha256": "f339f53717fac86245314d3a9cac588250155fc12ca40bde2bdb45018fa7dade",
+      "importedSha256": "f339f53717fac86245314d3a9cac588250155fc12ca40bde2bdb45018fa7dade"
+    },
+    {
+      "path": "pack/backends/wardrobe-slots.js",
+      "sourceSha256": "06eaf55987cb85abcdd6812696f7aa25f30cb59675e84717dbd6573c640e7c89",
+      "importedSha256": "06eaf55987cb85abcdd6812696f7aa25f30cb59675e84717dbd6573c640e7c89"
+    },
+    {
+      "path": "pack/backends/wardrobe.js",
+      "sourceSha256": "404144d7311a40a12e62a2b9404a0342e0b579303525960819e6a58a7033b0c5",
+      "importedSha256": "404144d7311a40a12e62a2b9404a0342e0b579303525960819e6a58a7033b0c5"
+    },
+    {
+      "path": "pack/sdk/.npmignore",
+      "sourceSha256": "abf24271d3dd3892f4a47a7e32426097719b97f366b51ffdd2e5152e3947c6c2",
+      "importedSha256": "abf24271d3dd3892f4a47a7e32426097719b97f366b51ffdd2e5152e3947c6c2"
+    },
+    {
+      "path": "pack/sdk/LICENSE-live2d-components.txt",
+      "sourceSha256": "d552c8951cad0c0bf962f2216e2abf025b68dcceca128f2bc575b108fded1f4f",
+      "importedSha256": "d552c8951cad0c0bf962f2216e2abf025b68dcceca128f2bc575b108fded1f4f"
+    },
+    {
+      "path": "pack/sdk/LICENSE-live2d-core.txt",
+      "sourceSha256": "a0a30a430d95de5da445c5333258ee84bcdcfe86970e9a2b0e2c57c6cabc8dfc",
+      "importedSha256": "a0a30a430d95de5da445c5333258ee84bcdcfe86970e9a2b0e2c57c6cabc8dfc"
+    },
+    {
+      "path": "pack/sdk/README.md",
+      "sourceSha256": "b717b6ec15c73194d4403e1c3e2af9d0aaf462ee855ed14eba94668bffd83ed4",
+      "importedSha256": "b717b6ec15c73194d4403e1c3e2af9d0aaf462ee855ed14eba94668bffd83ed4"
+    },
+    {
+      "path": "pack/vendor/soullink/chunk-OPVA6SRP.js",
+      "sourceSha256": "0c23cf22b6db01a59c14d1ce9401f9b3e055892d5cc65d1922f0152906d672b8",
+      "importedSha256": "0c23cf22b6db01a59c14d1ce9401f9b3e055892d5cc65d1922f0152906d672b8"
+    },
+    {
+      "path": "pack/vendor/soullink/index.js",
+      "sourceSha256": "8bd6787090738f9e055021fd5e036f32efd8e7d2014de2b3eaeb1261cefa96cc",
+      "importedSha256": "8bd6787090738f9e055021fd5e036f32efd8e7d2014de2b3eaeb1261cefa96cc"
+    },
+    {
+      "path": "pack/vendor/soullink/LICENSE",
+      "sourceSha256": "0f55b9538f14e064233404f8df6a52fdf3467b5a6d8513592100254f7f41980c",
+      "importedSha256": "0f55b9538f14e064233404f8df6a52fdf3467b5a6d8513592100254f7f41980c"
+    },
+    {
+      "path": "pack/vendor/soullink/README.md",
+      "sourceSha256": "f90d51b7ce0f7d9b69efddfbbe2b643ca793438b80d870792e77b515d396bc2f",
+      "importedSha256": "f90d51b7ce0f7d9b69efddfbbe2b643ca793438b80d870792e77b515d396bc2f"
+    },
+    {
+      "path": "tools/bongo-package.mjs",
+      "sourceSha256": "4dea028fcac15a73ed2228ec6ffacfb2e031cadc06420726f54d7f137831a9f1",
+      "importedSha256": "4dea028fcac15a73ed2228ec6ffacfb2e031cadc06420726f54d7f137831a9f1"
+    },
+    {
+      "path": "tools/emotion-effect.mjs",
+      "sourceSha256": "741e2b56f35e9b8c6eac2328f0b28c92b4d3b6d9f5f1491442285ef30f003961",
+      "importedSha256": "741e2b56f35e9b8c6eac2328f0b28c92b4d3b6d9f5f1491442285ef30f003961"
+    },
+    {
+      "path": "tools/model-assets.mjs",
+      "sourceSha256": "eca4194de3b6183648f185c5ba5b1824024fccb898487cc0d0068d7b88250614",
+      "importedSha256": "eca4194de3b6183648f185c5ba5b1824024fccb898487cc0d0068d7b88250614"
+    },
+    {
+      "path": "tools/native-catalog.mjs",
+      "sourceSha256": "eddc28026f1ed08cc9a68b5034e8319ee365dc88e644ed920b08d1d8dec498ae",
+      "importedSha256": "eddc28026f1ed08cc9a68b5034e8319ee365dc88e644ed920b08d1d8dec498ae"
+    }
+  ],
+  "localAdaptations": [
+    {
+      "path": "pack/backends/native-actions.js",
+      "date": "2026-11-12",
+      "changes": [
+        "Validate and replace native bindings without replacing the controller or interrupting the current motion/release; changed expression combinations crossfade using the existing mixer.",
+        "Share native motion duration, pose hold and release timing between the direct resource vocabulary and renderer."
+      ]
+    },
+    {
+      "path": "pack/backends/live2d.js",
+      "date": "2026-11-12",
+      "changes": [
+        "Apply saved bindings at mount and accept validated same-body binding updates through the existing configuration transaction.",
+        "Reuse the DSH mutable words-map synchronization pattern; update future body vocabulary without recreating the kit or replaying a running motion."
+      ]
+    },
+    {
+      "path": "pack/backends/live2d.js",
+      "date": "2026-11-12",
+      "changes": [
+        "Direct bodies can disable Figure-private voice/performance file polling; Coo domains own playback.",
+        "Direct candidates opt into texture upload and real first-render readiness before committing. Legacy packs retain their existing background loading policy."
+      ]
+    },
+    {
+      "path": "pack/backends/live2d.js",
+      "date": "2026-11-12",
+      "changes": [
+        "Separate persisted fit/gaze configuration from immutable model data; direct mounts receive the saved runtime configuration.",
+        "Reuse transactional framing measurement for same-body configuration commits and restore failed updates. Gaze hooks remain attached so settings can change at runtime.",
+        "Wait three initial draw steps for measured wardrobe/framing readiness."
+      ]
+    },
+    {
+      "path": "tools/native-catalog.mjs",
+      "date": "2026-11-13",
+      "changes": [
+        "Discover original Live2D models only; skip packaged figure directories."
+      ]
+    }
+  ]
+}

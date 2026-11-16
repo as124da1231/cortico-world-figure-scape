@@ -1,0 +1,135 @@
+{
+  "name": "cortico-world-figure-scape",
+  "version": "0.1.0-dev.0",
+  "type": "module",
+  "description": "直接载入 Live2D 模型与兼容 Coo 形象包，在桌面、小屋、竖屏和壁纸场景中与 Coo 对话。",
+  "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/as124da1231/cortico-world-figure-scape.git"
+  },
+  "author": {
+    "name": "as124da1231",
+    "url": "https://github.com/as124da1231"
+  },
+  "contributors": [
+    {
+      "name": "Pal AI Lab",
+      "url": "https://github.com/Pal-AI-Lab/Coopanion"
+    },
+    {
+      "name": "mrdxabing",
+      "url": "https://github.com/mrdxabing-rgb"
+    },
+    {
+      "name": "SoulLink Emotion contributors",
+      "url": "https://github.com/nanlingyin/soullink-emotion-sdk"
+    }
+  ],
+  "keywords": [
+    "cortico-world",
+    "cortico",
+    "desktop-pet",
+    "live2d",
+    "voice",
+    "external-setup",
+    "experimental",
+    "streaming"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.28.6",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./web/*": "./web/*",
+    "./webui/key-capture.ts": "./src/webui/key-capture.ts",
+    "./host/*": "./host/*"
+  },
+  "cortico": {
+    "kind": "world",
+    "api": 6,
+    "displayName": "Figure Scape · 梦境",
+    "locales": {
+      "zh": {
+        "displayName": "Figure Scape · 梦境"
+      },
+      "en": {
+        "displayName": "Figure Scape",
+        "description": "Import Live2D models and compatible Coo figure packs, then interact with Coo on your desktop, in a room, in portrait mode, or over a wallpaper."
+      }
+    },
+    "webUiClient": "dist/webui-RVM66M6A.js",
+    "webUiStyle": "dist/webui-ZXZG44CT.css",
+    "describe": "describe.json",
+    "tags": [
+      "companion",
+      "voice",
+      "local",
+      "streaming",
+      "external-setup",
+      "experimental"
+    ]
+  },
+  "files": [
+    "src",
+    "web",
+    "!web/whale",
+    "host",
+    "dist",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "CREDITS.md",
+    "CHANGELOG.md",
+    "docs",
+    "licenses",
+    "describe.json",
+    "live2d-runtime",
+    "!web/speech",
+    "!web/speech.js",
+    "!src/speech/data",
+    "scripts/build-webui.mjs",
+    "tsconfig.json",
+    "!src/cua",
+    "!**/live2dcubismcore.min.js",
+    "!live2d-runtime/pack/sdk/framework.js",
+    "!live2d-runtime/pack/sdk/shaders.js",
+    "!**/*.moc3",
+    "!**/*.model3.json"
+  ],
+  "scripts": {
+    "build": "node scripts/build-webui.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "esbuild": "0.28.2",
+    "fflate": "0.8.3",
+    "jpeg-js": "^0.4.4",
+    "koffi": "3.3.1",
+    "opencc-js": "^1.4.1",
+    "sherpa-onnx-node": "1.13.8",
+    "webwallgl": "3.0.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.25",
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "electron": "44.4.4",
+    "jsdom": "^30.0.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.12"
+  },
+  "os": [
+    "win32"
+  ],
+  "live2dEditor": {
+    "script": "dist/editor-PEHUN2QE.js",
+    "style": "dist/editor-IVSSHP3S.css"
+  },
+  "live2dWallpaper": "dist/wallpaper-YJLN6PG7.js"
+}

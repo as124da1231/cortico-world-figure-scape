@@ -1,0 +1,40 @@
+:is(.pet-studio, .studio-workspace-chrome, .live2d-preview, .live2d-surface) {
+  color-scheme: light dark;
+  --studio-bg: light-dark(#F7F3EF, #221C22);
+  --studio-surface: light-dark(#FFFDFB, #2A2229);
+  --studio-sunken: light-dark(#F0EAE6, #352A31);
+  --studio-text: light-dark(#2D2428, #F6F0F3);
+  --studio-muted: light-dark(#6A5A5E, #CDBEC5);
+  --studio-accent: light-dark(#8F3049, #F6AFC3);
+  --studio-action-ink: var(--studio-accent);
+  --studio-action: light-dark(#F4E2E7, #482E3B);
+  --studio-hover: color-mix(in srgb, var(--studio-accent) 5%, var(--studio-surface));
+  --studio-tint: var(--studio-action);
+  --studio-line: light-dark(#DED4CE, #56454F);
+  --studio-control-line: light-dark(#B1A19B, #8D7580);
+  --studio-alert: light-dark(#A13037, #FFADB1);
+  --studio-ready: light-dark(#35604C, #A4D7B9);
+  --studio-wait: light-dark(#77501C, #EBC58F);
+  --studio-focus: light-dark(#795365, #F0C2D4);
+  --studio-shadow: 0 8px 24px light-dark(#32242B19, #09060880);
+  --studio-edge: clamp(12px, 3cqi, 32px);
+  --studio-gutter: 16px;
+  --studio-control: 36px;
+  --studio-touch: 44px;
+  --studio-radius: 8px;
+  --studio-card-radius: 12px;
+  --studio-panel-radius: 16px;
+  --studio-motion: 120ms;
+  --studio-font: "Instrument Sans", "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
+}
+
+.live2d-surface[data-theme="light"] { color-scheme: light; }
+.live2d-surface[data-theme="dark"] { color-scheme: dark; }
+:root[data-color-mode="light"] :is(.pet-studio,.studio-workspace-chrome) { color-scheme:light; }
+:root[data-color-mode="dark"] :is(.pet-studio,.studio-workspace-chrome) { color-scheme:dark; }
+
+@media (prefers-reduced-motion: reduce) {
+  :is(.pet-studio, .studio-workspace-chrome, .live2d-preview, .live2d-surface) {
+    --studio-motion: 0ms;
+  }
+}

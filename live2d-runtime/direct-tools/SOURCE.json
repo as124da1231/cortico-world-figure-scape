@@ -1,0 +1,47 @@
+{
+  "origin": "DSH body foundation local working tree",
+  "date": "2026-11-12",
+  "license": "AGPL-3.0-or-later",
+  "files": [
+    {
+      "source": "tools/prepare-model.mjs",
+      "target": "live2d-runtime/direct-tools/prepare-model.mjs",
+      "sha256": "efccc3c6fe960dcaef66a15ab90ea12222b9183d2359dab9f30833a5d6f433e7"
+    },
+    {
+      "source": "tools/model-source.mjs",
+      "target": "live2d-runtime/direct-tools/model-source.mjs",
+      "sha256": "adab3f7aa60ffc866f99eee8b14963947997a16053b6b728e2b4c395ad1c0bcd"
+    },
+    {
+      "source": "tools/model-metadata.mjs",
+      "target": "live2d-runtime/direct-tools/model-metadata.mjs",
+      "sha256": "63cb8e21814045756eba4150837cb9b45f1a65c3693f4bb81a7e6dad7a751d62"
+    },
+    {
+      "source": "tools/model-adaptation.mjs",
+      "target": "live2d-runtime/direct-tools/model-adaptation.mjs",
+      "sha256": "5f28abfc70366aaad360a2c771a1aaa5ee04e143259295fe1aebd7c4df0378b7"
+    },
+    {
+      "source": "tools/parameter-mapping.mjs",
+      "target": "live2d-runtime/direct-tools/parameter-mapping.mjs",
+      "sha256": "b4c14acdf20ea24aa72680d6bab2c69ca44c602921f1cb39524bfa07ac4d5106"
+    },
+    {
+      "source": "runtime/backends/model-adaptation.js",
+      "target": "live2d-runtime/direct-tools/support/model-adaptation.js",
+      "sha256": "d991a228bfbb5452f155edfa3b2c2207ad816a975389da530382e6ea5f82f8b3"
+    },
+    {
+      "source": "runtime/backends/parameter-roles.js",
+      "target": "live2d-runtime/direct-tools/support/parameter-roles.js",
+      "sha256": "9a411283df9aa346ca646e9f89b26cadff53d57e25b2607a460ece183cf68a8f"
+    }
+  ],
+  "adaptations": [
+    "Imports bind to owned shared runtime; preparation emits only model data. Source is not a pinned clean commit.",
+    "2026-11-12: prepare-model.mjs preserves native configuration versions 1 and 2. Existing expression combinations must retain their full resource catalogue when a fresh direct candidate is prepared.",
+    "2026-11-13: Reuse the Figure BongoCat artwork and input metadata reader in direct model preparation."
+  ]
+}
