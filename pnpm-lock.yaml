@@ -11,6 +11,15 @@ importers:
       acorn:
         specifier: 8.15.0
         version: 8.15.0
+      cortico-world-figure-scape-cabin-1of3:
+        specifier: 0.1.0-dev.1
+        version: 0.1.0-dev.1
+      cortico-world-figure-scape-cabin-2of3:
+        specifier: 0.1.0-dev.1
+        version: 0.1.0-dev.1
+      cortico-world-figure-scape-cabin-3of3:
+        specifier: 0.1.0-dev.1
+        version: 0.1.0-dev.1
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -633,6 +642,24 @@ packages:
 
   convert-source-map@2.0.0:
     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
+
+  cortico-world-figure-scape-cabin-1of3@0.1.0-dev.1:
+    resolution: {integrity: sha512-r/+qEAlB+Cz+7BIWtvLyVqu6WvnCTj/IpJfI/UTYQXln+j07g4xOIzPxVdV/6jI6kEbsGcGYiLfcYIYA04KKug==}
+    engines: {node: '>=22'}
+    cpu: [x64]
+    os: [win32]
+
+  cortico-world-figure-scape-cabin-2of3@0.1.0-dev.1:
+    resolution: {integrity: sha512-Xhfe3BckUvqAOy2iHkha2mdNEfMdjQ7LciUbcimmxhgMtF+EdX+SJL6d41SHx9eMLtZjC7wvPO8dXPx+xVZ6WA==}
+    engines: {node: '>=22'}
+    cpu: [x64]
+    os: [win32]
+
+  cortico-world-figure-scape-cabin-3of3@0.1.0-dev.1:
+    resolution: {integrity: sha512-Ct2uR1105lghIv6xsYWgZDCZntM1NiTZPYv84UFQSeTs0gHKfLS45ItqDDTG7XUL/P37aWc3w8+O+8C84CK4Mg==}
+    engines: {node: '>=22'}
+    cpu: [x64]
+    os: [win32]
 
   css-tree@3.2.1:
     resolution: {integrity: sha512-X7sjQzceUhu1u7Y/ylrRZFU2FS6LRiFVp6rKLPg23y3x3c3DOKAwuXGDp+PAGjh6CSnCjYeAul8pcT8bAl+lSA==}
@@ -1601,6 +1628,12 @@ snapshots:
   color-name@1.1.4: {}
 
   convert-source-map@2.0.0: {}
+
+  cortico-world-figure-scape-cabin-1of3@0.1.0-dev.1: {}
+
+  cortico-world-figure-scape-cabin-2of3@0.1.0-dev.1: {}
+
+  cortico-world-figure-scape-cabin-3of3@0.1.0-dev.1: {}
 
   css-tree@3.2.1:
     dependencies:
