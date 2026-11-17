@@ -1,6 +1,6 @@
 {
   "name": "cortico-world-figure-scape",
-  "version": "0.1.0-dev.1",
+  "version": "0.1.0-dev.2",
   "type": "module",
   "description": "把自己的角色带进 Coo。导入 Live2D 模型或兼容形象包，调整动作、装扮和触碰反馈。从桌面切到小屋、竖屏或动态壁纸，继续同一段对话。内置小屋世界。",
   "license": "AGPL-3.0-or-later",
@@ -61,7 +61,7 @@
         "description": "Bring your own character into Coo. Import Live2D models or compatible figure packs, then customize motions, outfits, and touch reactions. Keep chatting across the desktop, a furnished room, portrait view, and animated wallpapers. Includes Cabin World."
       }
     },
-    "webUiClient": "dist/webui-BLR2STUW.js",
+    "webUiClient": "dist/webui-4WGQCEXM.js",
     "webUiStyle": "dist/webui-SIZDYSPY.css",
     "describe": "describe.json",
     "tags": [
@@ -112,9 +112,9 @@
   },
   "dependencies": {
     "acorn": "8.15.0",
-    "cortico-world-figure-scape-cabin-1of3": "0.1.0-dev.1",
-    "cortico-world-figure-scape-cabin-2of3": "0.1.0-dev.1",
-    "cortico-world-figure-scape-cabin-3of3": "0.1.0-dev.1",
+    "figure-scape-cabin-1of3": "0.1.0-dev.2",
+    "figure-scape-cabin-2of3": "0.1.0-dev.2",
+    "figure-scape-cabin-3of3": "0.1.0-dev.2",
     "esbuild": "0.28.2",
     "fflate": "0.8.3",
     "jpeg-js": "^0.4.4",

@@ -25,12 +25,14 @@ npm pack --pack-destination "<本机输出目录>"
 
 npm 注册表对单个发布请求有未公开的 200MB 上限，带内置小屋世界的整包会被 `413` 拒收。发布版因此把 `cabin-runtime/` 拆成三个资源包，主包声明它们为依赖，扩展第一次进入小屋世界时拼回 `CabinWorld.exe` 并与 `manifest.json` 的摘要比对。
 
+资源包用 `figure-scape-cabin-*` 这类独立名字，不要以 `cortico-world-` 开头：那是世界包的命名空间，市场认证会按依赖名前缀判定本扩展依赖了另一个世界。
+
 ```powershell
 # 1. 生成资源包源码目录并逐个打包，先发资源包
 node scripts/split-cabin-runtime.mjs "<本机输出目录>\parts"
-npm pack "<本机输出目录>\parts\cortico-world-figure-scape-cabin-1of3" --pack-destination "<本机输出目录>"
+npm pack "<本机输出目录>\parts\figure-scape-cabin-1of3" --pack-destination "<本机输出目录>"
 # 2. 确认注册表里三个版本都能下载后，再发主包
-npm publish "<本机输出目录>\cortico-world-figure-scape-0.1.0-dev.1.tgz"
+npm publish "<本机输出目录>\cortico-world-figure-scape-<版本>.tgz"
 ```
 
 三个资源包和主包使用同一版本号。装好后从 `node_modules` 里删掉任意一个资源包都应导致进入小屋世界报错，重新装回后恢复；拼好的目录在数据目录的 `cabin-runtime/`，删掉它会在下次进入时重新拼。

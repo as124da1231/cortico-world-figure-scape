@@ -15,9 +15,9 @@ export const CABIN_EXE_SHA256 = 'c395a1ed69983b299743406c33decdd8948239a318f6a0b
 
 /** 资源包的固定顺序;每个包只带一段字节,拼起来正好是 CabinWorld.exe。 */
 export const CABIN_PART_PACKAGES = [
-  'cortico-world-figure-scape-cabin-1of3',
-  'cortico-world-figure-scape-cabin-2of3',
-  'cortico-world-figure-scape-cabin-3of3',
+  'figure-scape-cabin-1of3',
+  'figure-scape-cabin-2of3',
+  'figure-scape-cabin-3of3',
 ] as const;
 
 const markerName = '.figure-scape-bundle.json';

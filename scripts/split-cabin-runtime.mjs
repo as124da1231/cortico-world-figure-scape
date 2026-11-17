@@ -38,8 +38,10 @@ if (!size) throw new Error('缺少 cabin-runtime/CabinWorld.exe,先运行 script
 if (await sha256(exe) !== expected) throw new Error('CabinWorld.exe 与 manifest.json 的摘要不一致,重新准备运行时。');
 
 // 前三段在 gzip 后差别很大(前半段压缩比高),按 25%/75% 切能把三个包都压在 100MB 以内。
+// 包名不能用 `cortico-world-` 开头:那是世界包的命名空间,市场认证会认为本扩展在依赖另一个世界。
+const partPrefix = 'figure-scape-cabin';
 const cuts = [0, Math.round(size * 0.25), Math.round(size * 0.75), size];
-const names = cuts.slice(1).map((_, index) => `${pkg.name}-cabin-${index + 1}of${cuts.length - 1}`);
+const names = cuts.slice(1).map((_, index) => `${partPrefix}-${index + 1}of${cuts.length - 1}`);
 const parts = [];
 
 await rm(destination, { recursive: true, force: true });
