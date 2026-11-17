@@ -112,6 +112,8 @@ export function createCabinWorld(ports: {
   config: () => CabinConfig | undefined;
   persist: (value: CabinConfig) => void;
   bundled?: CabinRuntime;
+  /** 内置运行时由资源包拼成:进入前先等它就绪。 */
+  ensureRuntime?: () => Promise<void>;
   changed: (active: boolean) => void;
   presented?: () => void;
   conversation?: () => CabinConversation;
@@ -133,7 +135,8 @@ export function createCabinWorld(ports: {
   function selectedRuntime() {
     const cfg = ports.config();
     const bundled = ports.bundled;
-    if (cfg?.source !== 'external' && bundled && existsSync(join(bundled.root,'CabinWorld.exe'))) {
+    const available = bundled && (ports.ensureRuntime || existsSync(join(bundled.root,'CabinWorld.exe')));
+    if (cfg?.source !== 'external' && bundled && available) {
       return { root:bundled.root, dataDir:bundled.dataDir };
     }
     return { root:cfg?.root, dataDir:undefined };
@@ -275,6 +278,7 @@ export function createCabinWorld(ports: {
     detail = null;
     entering = (async () => {
       try {
+        await ports.ensureRuntime?.();
         const cfg = ports.config();
         const runtime = selectedRuntime();
         local = await installation(runtime.root,runtime.dataDir);

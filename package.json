@@ -79,7 +79,6 @@
     "web",
     "!web/whale",
     "host",
-    "cabin-runtime",
     "dist",
     "README.md",
     "LICENSE",
@@ -107,11 +106,15 @@
   "scripts": {
     "build": "node scripts/build-webui.mjs",
     "prepack": "node scripts/check-cabin-runtime.mjs",
+    "cabin:split": "node scripts/split-cabin-runtime.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "acorn": "8.15.0",
+    "cortico-world-figure-scape-cabin-1of3": "0.1.0-dev.1",
+    "cortico-world-figure-scape-cabin-2of3": "0.1.0-dev.1",
+    "cortico-world-figure-scape-cabin-3of3": "0.1.0-dev.1",
     "esbuild": "0.28.2",
     "fflate": "0.8.3",
     "jpeg-js": "^0.4.4",

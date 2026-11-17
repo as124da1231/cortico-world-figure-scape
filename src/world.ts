@@ -248,6 +248,8 @@ export interface DesktopPetWorldOptions {
   modelsDir: () => string;
   wallpaperDir?: string;
   cabinRuntime?: CabinRuntime;
+  /** 内置小屋世界由资源包拼成;进入场景前等它准备好。 */
+  ensureCabinRuntime?: () => Promise<void>;
   phone?: ReturnType<typeof import('./phone-link/service.ts').createPhoneConnection>;
   /** Downloads; tests pass a local stand-in. */
   fetchImpl?: typeof fetch;
@@ -500,6 +502,7 @@ export class DesktopPetWorld implements World {
       config:() => this.cfg.cabinWorld,
       persist:cabinWorld => opts.persist({ cabinWorld }),
       bundled:opts.cabinRuntime,
+      ensureRuntime:opts.ensureCabinRuntime,
       changed:active => this.cabinVisibility(active),
       presented:() => this.reportCabinScene(true),
       conversation:() => this.cabinConversation(),

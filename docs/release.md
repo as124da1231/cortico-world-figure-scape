@@ -23,6 +23,18 @@ node scripts/check-cabin-runtime.mjs
 npm pack --pack-destination "<本机输出目录>"
 ```
 
+npm 注册表对单个发布请求有未公开的 200MB 上限，带内置小屋世界的整包会被 `413` 拒收。发布版因此把 `cabin-runtime/` 拆成三个资源包，主包声明它们为依赖，扩展第一次进入小屋世界时拼回 `CabinWorld.exe` 并与 `manifest.json` 的摘要比对。
+
+```powershell
+# 1. 生成资源包源码目录并逐个打包，先发资源包
+node scripts/split-cabin-runtime.mjs "<本机输出目录>\parts"
+npm pack "<本机输出目录>\parts\cortico-world-figure-scape-cabin-1of3" --pack-destination "<本机输出目录>"
+# 2. 确认注册表里三个版本都能下载后，再发主包
+npm publish "<本机输出目录>\cortico-world-figure-scape-0.1.0-dev.1.tgz"
+```
+
+三个资源包和主包使用同一版本号。装好后从 `node_modules` 里删掉任意一个资源包都应导致进入小屋世界报错，重新装回后恢复；拼好的目录在数据目录的 `cabin-runtime/`，删掉它会在下次进入时重新拼。
+
 解包确认扩展入口、前端资源、源码与许可齐全，在解包目录再执行扩展检查。以源目录锁文件安装构建依赖，重建浏览器资源并比对文件名和 SHA-256。随包提供 Figure Pet APK 时，使用 Figure Pet 发布构建生成的安装包，核对其签名、版本、文件摘要和对应源码。检查归档文件清单，排除用户模型、Cubism Core、本机缓存、配置、配对身份和凭据。
 
 运行验收至少覆盖安装加载、原始 Live2D 导入、兼容形象包、网页草稿恢复、应用后的真实首帧和设置恢复。在 Coo 当前窗口确认工作台加载了本次构建，检查 Figure Pet 卡片的 APK 下载、扫码、聊天收发、读取角色与解除配对。验证旧连接器迁移时已有设备可以重连，另外记录 Android 实机结果。Windows 采集策略可读取系统回执。OBS 和系统截图按各自的工具验证。

@@ -19,11 +19,15 @@ import { petText } from './i18n/index.ts';
 import { HOST_ENV } from './window-host.ts';
 import { workspaceHref } from './framework/workspace.ts';
 import { createPhoneConnection } from './phone-link/service.ts';
+import { createCabinBundle } from './framework/cabin-bundle.ts';
 
 const BUILTIN_FIGURE = {
   id: 'figure-dab2862c640e3986ab094857',
   directory: fileURLToPath(new URL('../figures/coo-dungeon', import.meta.url)),
 };
+
+/** 内置小屋世界的拆包方式变了才需要动它;见 `scripts/split-cabin-runtime.mjs`。 */
+const CABIN_BUNDLE_VERSION = 'win32-x64-1';
 
 /** Public tools and events of the Figure Scape body. */
 const DESCRIBE: WorldDescribe = {
@@ -121,6 +125,15 @@ export function desktopPetDefinition(assembly: DesktopPetAssembly = {}): WorldDe
         ? (path: string) => { process.send?.({ type: 'companion:open', path }); }
         : undefined;
       const sdkService = createSdkService(ctx.dataDir);
+      // 发布版把 210MB 的小屋引擎拆成资源包,这里在后台先拼好;真正进入时还会再等一次。
+      const cabinBundle = process.platform === 'win32' && process.arch === 'x64'
+        ? createCabinBundle({
+          packageRoot: fileURLToPath(new URL('..', import.meta.url)),
+          targetRoot: join(ctx.dataDir, DESKTOP_PET_ID, 'cabin-runtime'),
+          version: CABIN_BUNDLE_VERSION,
+        })
+        : undefined;
+      void cabinBundle?.prepare().catch(() => {});
       const world = new DesktopPetWorld({
         cfg: ctx.cfg,
         modelService: createModelResources({ dataDir: ctx.dataDir, sdk: sdkService }),
@@ -145,10 +158,11 @@ export function desktopPetDefinition(assembly: DesktopPetAssembly = {}): WorldDe
         windowProfile: join(ctx.dataDir, DESKTOP_PET_ID, 'window-profile'),
         modelsDir: () => modelsDirFor(modelsRoot()),
         wallpaperDir: join(ctx.dataDir, DESKTOP_PET_ID, 'wallpapers'),
-        cabinRuntime: process.platform === 'win32' && process.arch === 'x64' ? {
-          root: fileURLToPath(new URL('../cabin-runtime', import.meta.url)),
+        cabinRuntime: cabinBundle && {
+          root: cabinBundle.root,
           dataDir: join(ctx.dataDir, DESKTOP_PET_ID, 'cabin-world'),
-        } : undefined,
+        },
+        ensureCabinRuntime: cabinBundle ? () => cabinBundle.prepare() : undefined,
         asrApiKey: () => ctx.secret(DESKTOP_PET_SECRETS.asrApiKey),
         storeAsrApiKey: (key) => ctx.storeSecret(DESKTOP_PET_SECRETS.asrApiKey, key),
         serviceSecrets: {
