@@ -1,7 +1,9 @@
 import { SCALE_MIN, SCALE_MAX } from '../web/framework/model-size.js';
+import { REPLY_BUBBLE_DEFAULT, REPLY_BUBBLE_MAX } from '../web/framework/bubble-timing.js';
 import type { ControlPages, ControlPanelSize } from '../web/framework/control-layout.js';
 import { CONTROL_COMPONENTS, CONTROL_RAIL_LIMIT } from '../web/framework/control-layout.js';
 import type { PresentationMode, ScenePosition } from './framework/presentation-service.ts';
+import type { CabinConfig } from './framework/cabin-world.ts';
 import { MAX_HOVER_BUTTONS, PET_ACTIONS, type PetAction } from './pet-actions.ts';
 export { MAX_HOVER_BUTTONS, PET_ACTIONS, type PetAction } from './pet-actions.ts';
 import { BODY_EFFECT_KEYS, DEFAULT_BODY_EFFECTS, type BodyEffects } from './body-effects.ts';
@@ -191,8 +193,10 @@ export interface DesktopPetConfigSection extends WorldSection {
     bubbleSize: number;
     /** The text in the bubbles and the icons on its line, 1 = as drawn by pet.css; the bubbles keep their widths. */
     fontSize: number;
-    /** How fast the bot's bubbles type and how long they stay, as a multiplier: typing runs at 20 × this characters a second and every hold is divided by it. */
+    /** How fast the bot's bubbles type and advance between parts of a reply. */
     bubbleSpeed: number;
+    /** Seconds to keep the final speech bubble after presentation finishes. */
+    replyBubbleSeconds?: number;
     /** How far the light halo reaches out from the body, in pixels (its outer blur); 0 turns it off. */
     glow: number;
     /** The pet page draws 60 frames a second at rest too; off, it drops to 30 while the body stands, sits or sleeps. */
@@ -219,6 +223,9 @@ export interface DesktopPetConfigSection extends WorldSection {
   /** Start each run where the pet stood when the World last stopped. */
   rememberPosition: boolean;
   presentationMode?: PresentationMode;
+  /** The Android relay listens on the LAN only after the workbench enables it. */
+  phoneLinkEnabled?: boolean;
+  cabinWorld?: CabinConfig;
   presentationScales?: Partial<Record<Exclude<PresentationMode, 'desktop'>, number>>;
   presentationPositions?: Partial<Record<Exclude<PresentationMode, 'desktop'>, ScenePosition>>;
   /**
@@ -300,13 +307,14 @@ export const DESKTOP_PET_DEFAULTS: DesktopPetConfigSection = {
   enabled: false,
   port: 7798,
   user: '',
-  window: { enabled: false, electronFile: '', scale: 1, bubbleSize: 1, fontSize: 1, bubbleSpeed: 1, glow: GLOW_DEFAULT, frameRate: 60, lockFrameRate: false, hideWhenFullscreen: false, passWhenFullscreen: false, hideFromCapture: false, overTaskbar: true, exportOverlay: false },
+  window: { enabled: false, electronFile: '', scale: 1, bubbleSize: 1, fontSize: 1, bubbleSpeed: 1, replyBubbleSeconds: REPLY_BUBBLE_DEFAULT, glow: GLOW_DEFAULT, frameRate: 60, lockFrameRate: false, hideWhenFullscreen: false, passWhenFullscreen: false, hideFromCapture: false, overTaskbar: true, exportOverlay: false },
   roam: 'calm',
   sound: true,
   sounds: { move: true, touch: true, face: true, snore: true, talk: true, ui: true, confirmation: true, snoreSeconds: 0, panByPosition: true, volume: 100 },
   speech: { enabled: false, pitch: 'mid', pitchHz: SPEECH_PITCH_HZ.mid, speed: 'mid', unitsPerSecond: SPEECH_RATE.mid },
   theme: 'dark',
   rememberPosition: false,
+  phoneLinkEnabled: false,
   petX: null,
   petY: null,
   hoverButtons: 'chat,voice',
@@ -367,6 +375,9 @@ export function desktopPetConfigGroups(language: Language = 'zh'): ConfigGroup[]
         [`${K}.window.bubbleSize`]: { type: 'number', title: c.bubbleSize.title, description: c.bubbleSize.description, minimum: BUBBLE_SIZE_MIN, maximum: BUBBLE_SIZE_MAX, multipleOf: .05, 'x-hot': true },
         [`${K}.window.fontSize`]: { type: 'number', title: c.fontSize.title, description: c.fontSize.description, minimum: BUBBLE_SIZE_MIN, maximum: BUBBLE_SIZE_MAX, multipleOf: .05, 'x-hot': true },
         [`${K}.window.bubbleSpeed`]: { type: 'number', title: c.bubbleSpeed.title, description: c.bubbleSpeed.description, minimum: BUBBLE_SPEED_MIN, maximum: BUBBLE_SPEED_MAX, multipleOf: .05, 'x-hot': true },
+        [`${K}.window.replyBubbleSeconds`]: { type: 'number', title: language.startsWith('zh') ? '角色发言停留' : 'Reply bubble hold',
+          description: language.startsWith('zh') ? '角色说完后，最后一条气泡保留的时间。设为 0 会立即收起。' : 'How long the final bubble stays after the character finishes speaking. Set to 0 to dismiss it immediately.',
+          minimum: 0, maximum: REPLY_BUBBLE_MAX, multipleOf: .25, 'x-hot': true },
         [`${K}.window.glow`]: { type: 'number', title: c.glow.title, description: c.glow.description, minimum: 0, maximum: GLOW_MAX, multipleOf: 1, 'x-hot': true },
         [`${K}.window.frameRate`]: { type: 'integer', title: c.frameRate.title, minimum: 0, description: c.frameRate.description, 'x-hot': true },
         [`${K}.window.lockFrameRate`]: { type: 'boolean', title: c.lockFrameRate.title, description: c.lockFrameRate.description, 'x-hot': true },

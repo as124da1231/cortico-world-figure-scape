@@ -1,0 +1,81 @@
+.pet-studio .studio-workbench-entries {
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  align-items:start;
+  gap:14px;
+  max-inline-size:1254px;
+}
+.pet-studio .studio-phone-card {
+  box-sizing:border-box;
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr) auto;
+  align-items:center;
+  gap:10px;
+  min-block-size:94px;
+  min-inline-size:0;
+  padding:12px 16px;
+  border:1px solid var(--studio-line);
+  border-radius:var(--studio-panel-radius);
+  background:var(--studio-surface);
+}
+.pet-studio .studio-phone-icon {
+  display:grid;
+  place-items:center;
+  inline-size:36px;
+  block-size:36px;
+  border-radius:var(--studio-radius);
+  color:var(--studio-action-ink);
+  background:var(--studio-action);
+}
+.pet-studio .studio-phone-icon svg { inline-size:20px; block-size:20px; }
+.pet-studio .studio-phone-copy h2 { margin:0 0 2px; font-size:15px; line-height:21px; }
+.pet-studio .studio-phone-summary {
+  margin:0;
+  color:var(--studio-muted);
+  font-size:12px;
+  line-height:18px;
+  overflow-wrap:anywhere;
+}
+.pet-studio .studio-phone-actions { display:flex; flex-wrap:wrap; gap:6px; }
+.pet-studio .studio-phone-actions button { min-block-size:36px; }
+.pet-studio .studio-phone-dialog { --studio-dialog-width:520px; }
+.pet-studio .studio-phone-dialog .studio-dialog-body { display:grid; gap:16px; align-content:start; }
+.pet-studio .studio-phone-section { display:grid; gap:8px; min-inline-size:0; }
+.pet-studio .studio-phone-section[hidden] { display:none; }
+.pet-studio .studio-phone-section + .studio-phone-section {
+  padding-block-start:14px;
+  border-block-start:1px solid var(--studio-line);
+}
+.pet-studio .studio-phone-section-header {
+  display:flex; align-items:center; flex-wrap:wrap; justify-content:space-between; gap:6px 10px;
+}
+.pet-studio .studio-phone-section-header > h3 { margin-inline-end:auto; }
+.pet-studio .studio-phone-section h3 { margin-block:0; font-size:14px; line-height:20px; }
+.pet-studio .studio-phone-section-header select { max-inline-size:100%; }
+.pet-studio .studio-phone-code {
+  display:grid;
+  justify-items:center;
+  gap:8px;
+  padding:12px;
+  border-radius:10px;
+  background:var(--studio-bg);
+}
+.pet-studio .studio-phone-code[hidden] { display:none; }
+.pet-studio .studio-phone-code img { display:block; max-inline-size:100%; height:auto; border-radius:6px; }
+.pet-studio .studio-phone-devices { display:grid; gap:6px; margin:0; padding:0; list-style:none; }
+.pet-studio .studio-phone-device {
+  display:flex; align-items:center; flex-wrap:wrap; gap:6px;
+  padding:6px 8px; background:var(--studio-bg); border-radius:8px;
+}
+.pet-studio .studio-phone-device > span { flex:1 1 120px; min-inline-size:0; overflow-wrap:anywhere; }
+.pet-studio .studio-phone-feedback,
+.pet-studio .studio-phone-summary[data-error=true] { color:var(--studio-alert); }
+.pet-studio .studio-phone-feedback { margin:0; font-size:12px; overflow-wrap:anywhere; }
+.pet-studio .studio-phone-feedback:empty { display:none; }
+@container (max-width:810px) {
+  .pet-studio .studio-workbench-entries { grid-template-columns:minmax(0,1fr); max-inline-size:620px; }
+}
+@container (max-width:460px) {
+  .pet-studio .studio-phone-card { grid-template-columns:auto minmax(0,1fr); }
+  .pet-studio .studio-phone-actions { grid-column:2; }
+}

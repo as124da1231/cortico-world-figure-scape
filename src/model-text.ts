@@ -109,9 +109,9 @@ const zh = {
   },
 
   sayEmpty: '[live2d_pet_say 没执行] 脚本是空的,也没带图片。不想说话就不调用。',
-  saySavedOnly: '回复已写入 Coo 对话。Live2D 当前无法播放气泡、声音和动作。',
+  saySavedOnly: '回复已写入 Coo 对话。梦境窗口当前无法播放气泡、声音和动作。',
   saySaveFailed: '[live2d_pet_say 没执行] 无法保存对话回复。',
-  sayReceipt: (r: SayReceipt) => `${r.waitSec > .5 ? `已排队,前面还有约 ${Math.round(r.waitSec)} 秒` : '已开始显示'},这段约 ${Math.round(r.selfSec)} 秒。`
+  sayReceipt: (r: SayReceipt) => `${r.waitSec > .5 ? `已交给桌宠排队，预计还需 ${Math.round(r.waitSec)} 秒` : '已交给桌宠，等待显示'}。这段约 ${Math.round(r.selfSec)} 秒。`
     + (r.chatOpen ? '对话页开着,这段也显示在那里。' : '')
     + (r.images ? `附带的 ${r.images} 张图片只显示在对话页。` : '')
     + (r.replaced !== null ? `替换了还没回答的提问「${r.replaced}」。` : '')
@@ -235,12 +235,12 @@ const en: typeof zh = {
   },
 
   sayEmpty: '[live2d_pet_say not run] The script is empty and there are no images. Do not call it when you have nothing to say.',
-  saySavedOnly: 'The reply is in the Coo conversation. Live2D is unavailable for bubble, audio, and motion playback.',
+  saySavedOnly: 'The reply is in the Coo conversation. The Figure Scape window is unavailable for bubble, audio, and motion playback.',
   saySaveFailed: '[live2d_pet_say not run] The reply could not be saved.',
   sayReceipt: (r) => [
     r.waitSec > .5
       ? `Queued behind about ${Math.round(r.waitSec)} s of earlier lines; this one takes about ${Math.round(r.selfSec)} s.`
-      : `Showing now; this one takes about ${Math.round(r.selfSec)} s.`,
+      : `Sent to the pet window for display; this line takes about ${Math.round(r.selfSec)} s.`,
     r.chatOpen ? 'The chat page is open and shows it too.' : '',
     r.images ? `The ${r.images} image${r.images > 1 ? 's' : ''} with it show only on the chat page.` : '',
     r.replaced !== null ? `Replaced the unanswered question "${r.replaced}".` : '',

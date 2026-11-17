@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { workspacePage } from '../src/webui/coopanion/features/framework/index.ts';
 import { createTouchEditor } from '../src/webui/coopanion/features/framework/touch-editor.ts';
 
-const api = vi.hoisted(() => ({ invokePanel: vi.fn(), pickPath: vi.fn() }));
+const api = vi.hoisted(() => ({ invokePanel: vi.fn(), pickPath: vi.fn(), get: vi.fn(), setConfig: vi.fn() }));
 vi.mock('../src/webui/coopanion/base/api.ts', () => api);
 vi.mock('../src/webui/coopanion/base/language.ts', () => ({ LANGUAGE: 'zh' }));
 
@@ -38,6 +38,8 @@ const fixture = (panel: Parameters<typeof workspacePage>[0]) => {
 
 afterEach(() => {
   api.invokePanel.mockReset();
+  api.get.mockReset();
+  api.setConfig.mockReset();
   document.body.replaceChildren();
   window.dispatchEvent(new PageTransitionEvent('pagehide'));
   delete window.coopanionWindow;
@@ -346,5 +348,55 @@ it('switches mouse pass-through independently of the Coo body route', async () =
   } finally {
     workbench.controller.abort();
   }
+});
+
+it('keeps stopped-window details actionable and reveals advanced settings on demand', async () => {
+  const state = {
+    ...runtime(), inWindow:false, onDesktop:false, bodyReady:false, url:'http://127.0.0.1:7800/pet',
+    activeScene:null, window:{phase:'stopped'}, windowHint:'',
+    electron:{phase:'ready',supported:true},
+  };
+  api.invokePanel.mockImplementation(async (_provider,_panel,method) => {
+    if (method === 'resources') return [];
+    if (method === 'runtime.openWindow') {
+      state.window.phase = 'error';
+      state.windowHint = '窗口进程启动失败';
+    }
+    return structuredClone(state);
+  });
+  const port = 'worlds.desktop-live2d-pet.port';
+  const executable = 'worlds.desktop-live2d-pet.window.electronFile';
+  api.get.mockResolvedValue({groups:[{
+    group:{id:'runtime',schema:{properties:{
+      [port]:{type:'integer',title:'页面端口','x-hot':false},
+      [executable]:{type:'string',title:'Electron 程序','x-path':{kind:'file'},'x-hot':false},
+    }}}, values:{[port]:7798,[executable]:''},
+  }]});
+  api.setConfig.mockResolvedValue(undefined);
+  const workbench = fixture('framework');
+  try {
+    workbench.root.querySelector<HTMLButtonElement>('.studio-version')!.click();
+    const details = workbench.root.querySelector<HTMLDialogElement>('dialog[open]')!;
+    const actions = () => [...details.querySelectorAll<HTMLButtonElement>('.studio-runtime-actions button:not([hidden])')];
+    await vi.waitFor(() => expect(actions().map(button => button.textContent)).toEqual(['启动梦境']));
+    expect(details.querySelector('.studio-runtime-state')?.textContent).toBe('未启动');
+    expect(details.querySelector('.studio-runtime-facts')?.textContent).toContain('所选角色');
+    expect(details.textContent).not.toContain('身体未就绪');
+    const startup = details.querySelector<HTMLDetailsElement>('.studio-runtime-startup')!;
+    expect(startup.open).toBe(false);
+    expect(startup.querySelector('input')).toBeNull();
+    startup.open = true;
+    startup.dispatchEvent(new Event('toggle'));
+    await vi.waitFor(() => expect(startup.querySelector('.studio-runtime-executable button')?.textContent).toBe('选择文件'));
+    const portField = startup.querySelector<HTMLInputElement>('input[type=number]')!;
+    portField.value = '7799';
+    portField.dispatchEvent(new Event('change'));
+    await vi.waitFor(() => expect(startup.querySelector('[role=status]')?.textContent).toBe('已保存，下次启动时生效。'));
+    expect(api.setConfig).toHaveBeenCalledWith('runtime',{[port]:7799},{signal:workbench.controller.signal});
+    actions()[0].click();
+    await vi.waitFor(() => expect(actions().map(button => button.textContent)).toEqual(['重试启动']));
+    expect(details.querySelector('.studio-runtime-state')?.textContent).toBe('窗口启动失败');
+    expect(details.querySelector('.studio-runtime-feedback')?.textContent).toBe('窗口进程启动失败');
+  } finally { workbench.controller.abort(); }
 });
 

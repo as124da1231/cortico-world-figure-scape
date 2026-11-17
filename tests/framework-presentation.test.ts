@@ -7,11 +7,12 @@ import { createSceneMovement } from '../web/framework/scene-movement.js';
 
 function fixture() {
   let desired: PresentationMode = 'desktop';
+  let visible = true;
   const send = vi.fn((_message: Record<string, unknown>) => true);
   const service = createPresentationService({ desired: () => desired, persist: mode => { desired = mode; },
-    connected: () => true, model: () => 'model', modelBusy: () => false, send, scene: () => null });
+    connected: () => true, visible: () => visible, model: () => 'model', modelBusy: () => false, send, scene: () => null });
   service.receive({ request: null, mode: 'desktop', figure: 'model', ok: true });
-  return { service, send };
+  return { service, send, hide: () => { visible = false; } };
 }
 
 describe('presentation transactions', () => {
@@ -48,6 +49,22 @@ describe('presentation transactions', () => {
     await expect(pending).resolves.toMatchObject({phase:'failed',applied:false});
     expect(replace).not.toHaveBeenCalled();
     expect(service.state()).toMatchObject({applied:'wallpaper',details:{wallpaper:{id:'first'}}});
+  });
+  it('stores a new background while hidden without reporting the previous wallpaper as the new frame', async () => {
+    const { service, send, hide } = fixture();
+    const first = service.select('wallpaper', 'first', {payload:{id:'first'},replace:true});
+    const receipt = {request:send.mock.lastCall?.[0].request,mode:'wallpaper',figure:'model',ok:true};
+    service.ready(receipt);
+    service.receive({...receipt,presentation:{wallpaper:{id:'first'}}});
+    await first;
+    hide();
+    send.mockClear();
+    const commit = vi.fn(async () => {});
+    await expect(service.select('wallpaper','second',{payload:{id:'second'},replace:true,commit}))
+      .resolves.toMatchObject({phase:'completed',applied:false});
+    expect(commit).toHaveBeenCalledOnce();
+    expect(send).not.toHaveBeenCalled();
+    expect(service.state()).toMatchObject({desired:'wallpaper',details:{wallpaper:{id:'first'}}});
   });
   it('ignores late cancelled receipts and recovers after a failed candidate', async () => {
     const { service, send } = fixture();

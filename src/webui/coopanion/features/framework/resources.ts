@@ -6,7 +6,7 @@ import { errorText, studioControls, studioText as t } from './controls.ts';
 import type { NotificationKind } from './notifications.ts';
 
 type CoverStatus = { phase: 'queued'|'rendering' } | { phase:'failed'; reason:string };
-type Resource = { coverJob?: CoverStatus; id: string; name: string; kind: string; active: boolean; ready?: boolean; failed?: boolean; failure?: string; loading?: boolean; wardrobe?: boolean; sourceActive?: boolean; source?: string; cover?: string; sourceId?: string };
+type Resource = { origin?: 'cabin-world'; builtin?: boolean; coverJob?: CoverStatus; id: string; name: string; kind: string; active: boolean; ready?: boolean; failed?: boolean; failure?: string; loading?: boolean; wardrobe?: boolean; sourceActive?: boolean; source?: string; cover?: string; sourceId?: string };
 type LibraryOptions = {
   confirm: () => Promise<boolean>;
   changed: () => Promise<void>;
@@ -164,18 +164,21 @@ export function resourceLibrary(ctx: PageContext, options: LibraryOptions) {
     const item = c.node('article', '', 'studio-model-card');
     item.dataset.resource = resource.id;
     item.dataset.active = String(resource.active);
+    if (resource.origin) item.dataset.origin = resource.origin;
     const identity = c.node('div', '', 'studio-model-identity');
     const visual = c.node('div', '', 'studio-model-cover');
     visual.append(
       c.node('span', '', 'studio-cover-status'),
-      c.node('span', resource.kind === 'figure-pack' ? t('Coo 形象包', 'Coo figure') : t('原始 Live2D', 'Live2D source'), 'studio-model-source'),
+      c.node('span', resource.builtin ? t('内置形象包', 'Built-in figure') : resource.origin === 'cabin-world' ? t('小屋世界 · Cabin World', 'Cabin World')
+        : resource.kind === 'figure-pack' ? t('Coo 形象包', 'Coo figure') : t('原始 Live2D', 'Live2D source'), 'studio-model-source'),
     );
     item.append(visual);
     syncCover(item,resource);
     const info = c.node('div', '', 'studio-model-info');
     const name = c.node('h3', resource.name);
     name.title = resource.name;
-    const originLabel = resource.source ?? t('原始 Live2D 模型', 'Original Live2D model');
+    const originLabel = resource.builtin ? t('内置形象包', 'Built-in figure') : resource.origin === 'cabin-world' ? t('小屋世界 · Cabin World', 'Cabin World')
+      : resource.source ?? (resource.kind === 'figure-pack' ? t('Coo 形象包', 'Coo figure') : t('原始 Live2D 模型', 'Original Live2D model'));
     item.title = originLabel;
     info.append(name);
     if (resource.failed && resource.failure) info.append(c.node('p', resource.failure, 'studio-help studio-model-failure'));
@@ -202,15 +205,17 @@ export function resourceLibrary(ctx: PageContext, options: LibraryOptions) {
     const outfit = action('wardrobe', t('快捷装扮', 'Quick outfit'), () => void openWardrobe(resource));
     outfit.disabled = !resource.wardrobe || !!activeRequest;
     row.append(outfit);
-    const removeButton = action('remove', t('移除', 'Remove'), () => {
-      removing = resource;
-      const active = resource.active ? t('会停止使用这个角色。', 'The character will stop running.') : '';
-      removeCopy.textContent = t('移出「', 'Remove “') + resource.name + t('」？原始文件和已保存的配置会保留。', '”? Source files and saved settings will be kept.') + active;
-      removeStatus.textContent = '';
-      removeDialog.open();
-    });
-    removeButton.disabled = !!activeRequest;
-    row.append(removeButton);
+    if (!resource.builtin) {
+      const removeButton = action('remove', t('移除', 'Remove'), () => {
+        removing = resource;
+        const active = resource.active ? t('会停止使用这个角色。', 'The character will stop running.') : '';
+        removeCopy.textContent = t('移出「', 'Remove “') + resource.name + t('」？原始文件和已保存的配置会保留。', '”? Source files and saved settings will be kept.') + active;
+        removeStatus.textContent = '';
+        removeDialog.open();
+      });
+      removeButton.disabled = !!activeRequest;
+      row.append(removeButton);
+    }
     if (resource.sourceId && reviewable.has(resource.sourceId)) {
       const sourceId = resource.sourceId;
       const review = action('review', t('审阅 Coo 方案', 'Review Coo proposal'), () => options.review(sourceId));

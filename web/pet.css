@@ -161,10 +161,13 @@ body.desk .floor{display:none}
    --bubble-size scales the frame (widths, padding, corners, tail) and --bubble-font the text and the icons on its lines, both
    factors set by pet-app.js from the bubbleSize and fontSize settings and unset at 1; the border keeps its line. */
 .bubble{
+  --bg:var(--coo-bg); --surface:var(--coo-surface); --text:var(--coo-text);
+  --muted:var(--coo-muted); --line:var(--coo-line); --shadow:var(--coo-shadow);
+  --said-bg:var(--coo-said-bg); --said-ink:var(--coo-said-ink);
   position:fixed; left:0; top:0; z-index:3; width:max-content; min-width:calc(46px * var(--bubble-size, 1)); max-width:min(calc(300px * var(--bubble-size, 1)), calc(100vw - 20px));
-  padding:calc(10px * var(--bubble-size, 1)) calc(14px * var(--bubble-size, 1)); border-radius:calc(13px * var(--bubble-size, 1)); background:var(--surface); color:var(--text);
+  padding:calc(10px * var(--bubble-size, 1)) calc(14px * var(--bubble-size, 1)); border-radius:calc(18px * var(--bubble-size, 1)); background:var(--surface); color:var(--text);
   border:2.5px solid var(--skin-ink); box-shadow:0 8px 22px var(--shadow);
-  font-size:calc(14px * var(--bubble-font, 1)); line-height:1.55;
+  font-size:calc(14.5px * var(--bubble-font, 1)); line-height:1.55;
   transform-origin:var(--tail, 50%) calc(100% + calc(10px * var(--bubble-size, 1)));
 }
 /* tail: an outline triangle whose base lies inside the border, so its sides join the border, and a

@@ -16,6 +16,7 @@ import { createSfx } from './sound.js';
 
 import { createDisplayDrag } from './framework/display-drag.js';
 import { createBubbleHover } from './framework/bubble-hover.js';
+import { REPLY_BUBBLE_DEFAULT, VOICE_BUBBLE_HOLD, replyBubbleSeconds, speechBubbleHold } from './framework/bubble-timing.js';
 import { nextToBody, inApproach } from './framework/desktop-controls.js';
 import { createDesktopSystem } from './desktop-system.js';
 import { fetchLooks, lookAvailable, lookPicture, sameLook, normalizeSkin } from './looks.js';
@@ -48,7 +49,7 @@ const bubbleStyle = document.createElement('style');
 document.head.append(accentStyle, bubbleStyle);
 
 const prefs = {
-  roam: 'calm', sound: true, theme: document.documentElement.dataset.theme, scale: 1, bubbleSize: 1, fontSize: 1, bubbleSpeed: 1, glow: 7, user: '', mic: false, micDevice: '', bot: null,
+  roam: 'calm', sound: true, theme: document.documentElement.dataset.theme, scale: 1, bubbleSize: 1, fontSize: 1, bubbleSpeed: 1, replyBubbleSeconds: REPLY_BUBBLE_DEFAULT, glow: 7, user: '', mic: false, micDevice: '', bot: null,
   /** Voice input: switched on, recognizer ready, why not, how to talk, and the mode in force. */
   voice: { enabled: false, ready: false, detail: null, hint: '', mode: 'hold' },
   /** The actions shown as buttons beside the pet on hover. */
@@ -164,6 +165,7 @@ function connect() {
     pendingModel?.controller.abort();
     system.cancelBodySwap();
     stopMic();
+    clearVoiceBubbles();
     // the World gave up on these steps when the page went; it asks again once the page is back
     dropDialogs();
     setStatus(null);
@@ -179,7 +181,7 @@ function reportVisibility() { if (host) send({ t: 'visibility', hidden: !windowS
 host?.onShown?.((shown) => {
   windowShown = shown; sfx.setShown(shown);
   system.presentation.setVisible?.(shown);
-  if (!shown) { resetDesktopControls(); presenting?.controller.abort(Error('window-hidden')); cancelUtterances('window-hidden'); system.movement.cancel('window-hidden'); cancelPointer('window-hidden'); }
+  if (!shown) { resetDesktopControls(); presenting?.controller.abort(Error('window-hidden')); cancelUtterances('window-hidden'); system.movement.cancel('window-hidden'); cancelPointer('window-hidden'); clearVoiceBubbles(); }
   else applyInitialPresentation();
   reportVisibility();
 });
@@ -329,9 +331,13 @@ async function changePresentation(message) {
       if (!response.ok) throw Error('wallpaper-source-unavailable');
       wallpaper = await response.json();
     }
+    if (message.mode === 'wallpaper' && !wallpaper?.id) throw Error('wallpaper-source-unavailable');
+    const currentWallpaper = system.mode === 'wallpaper' ? system.presentation.snapshot().wallpaper : undefined;
+    const replace = message.replace === true || message.mode === 'wallpaper' && system.mode === 'wallpaper'
+      && (currentWallpaper?.id !== wallpaper.id || currentWallpaper?.kind === 'failed');
     await system.selectPresentation(message.mode, {
       signal: controller.signal,
-      wallpaper, replace:message.replace,
+      wallpaper, replace,
       beforeCommit() {
         cancelPointer('presentation-changed');
         if (hold.el?.closest('.phone-chat-dock,.landscape-chat-dock')) endHold(true);
@@ -523,6 +529,7 @@ function applyPrefs(p) {
   if (typeof p.bubbleSize === 'number') { prefs.bubbleSize = p.bubbleSize; sizeVar('--bubble-size', p.bubbleSize); }
   if (typeof p.fontSize === 'number') { prefs.fontSize = p.fontSize; sizeVar('--bubble-font', p.fontSize); }
   if (typeof p.bubbleSpeed === 'number') prefs.bubbleSpeed = p.bubbleSpeed;
+  if (typeof p.replyBubbleSeconds === 'number') prefs.replyBubbleSeconds = replyBubbleSeconds(p.replyBubbleSeconds);
   if (typeof p.rememberPosition === 'boolean') { prefs.rememberPosition = p.rememberPosition; reportPosition(); }
   if (typeof p.user === 'string') prefs.user = p.user;
   if (typeof p.micDevice === 'string' && p.micDevice !== prefs.micDevice) { prefs.micDevice = p.micDevice; stopMic(); }
@@ -530,7 +537,7 @@ function applyPrefs(p) {
   if (p.voice && typeof p.voice === 'object') prefs.voice = { ...prefs.voice, ...p.voice };
   if (typeof p.doubleClickChat === 'boolean') prefs.doubleClickChat = p.doubleClickChat;
   if (typeof p.statusBubble === 'boolean') { prefs.statusBubble = p.statusBubble; setBody({ thoughtShown: p.statusBubble }); }
-  if (typeof p.saidBubbles === 'boolean') { prefs.saidBubbles = p.saidBubbles; if (!p.saidBubbles) for (const line of lines) if (!line.live) fadeLine(line); }
+  if (typeof p.saidBubbles === 'boolean') { prefs.saidBubbles = p.saidBubbles; if (!p.saidBubbles) for (const line of lines) if (line.src !== 'voice') fadeLine(line); }
   if (typeof p.lockFrameRate === 'boolean') prefs.lockFrameRate = p.lockFrameRate;
   if (typeof p.frameRate === 'number' && p.frameRate >= 0) prefs.frameRate = p.frameRate;
   // the window process does the hiding and the passing through; the page only passes the settings on
@@ -581,6 +588,7 @@ function onOrder(m) {
       break;
     case 'desktop-presentation-result': finishDesktopScene(m); break;
     case 'phone-message-result': phoneChat.receipt(m); landscapeChat.receipt(m); break;
+    case 'text-result': if (item?.kind === 'input') item.receiveText?.(m); break;
     case 'phone-history': phoneChat.history(m); break;
     case 'phone-control-result': settlePhoneControl(m); break;
     case 'presentation-resume': if (host) { initialPresentation = m.mode; applyInitialPresentation(); } break;
@@ -765,6 +773,7 @@ function openBubble(kind, html) {
   bubble.classList.add('pop');
 }
 function closeBubble(reason = 'bubble-closed') {
+  if (item?.kind === 'input') clearTimeout(item.sendTimer);
   if (item?.kind === 'say' || item?.kind === 'ask' && !item.confirm) rememberSpoken(item);
   releaseKeys(item);
   // a step taken off the bubble unanswered puts back the skin a card tried on
@@ -851,7 +860,11 @@ function skipBeat() {
 }
 
 function stepDialog(dt) {
-  if (!item && queue.length && at() && !at().busy) startItem(queue.shift());
+  const next = queue[0], layout = at();
+  const hasReplyText = next?.kind === 'say' && next.beats?.some(beat => beat.text);
+  if (hasReplyText && item?.kind === 'input' && !item.sending && !item.pending && !item.images.length
+    && !bubble.querySelector('textarea')?.value.trim() && !item.composing) closeBubble();
+  if (!item && next && layout && (!layout.busy || hasReplyText)) startItem(queue.shift());
   const it = item;
   if (!it) return;
   if (it.kind === 'say') {
@@ -871,7 +884,7 @@ function stepDialog(dt) {
     }
     const b = it.beats[it.i];
     if (T < it.startAt) return;
-    if (!b.text) { it.beatDone = true; it.holdUntil = T + .8 / prefs.bubbleSpeed; return; }
+    if (!b.text) { it.beatDone = true; it.holdUntil = T + speechBubbleHold(0, prefs.bubbleSpeed, false); return; }
     if (!it.startedBeat) {
       it.startedBeat = true;
       const clip = it.clips?.[it.i];
@@ -892,12 +905,16 @@ function stepDialog(dt) {
       p?.replaceChildren(linked(b.text, it.shown));
       const anchors = b.anchors ?? [];
       while (it.fired < anchors.length && anchors[it.fired].at <= it.shown) system.actions.enqueue(...anchors[it.fired++].actions);
-      if (!progress.done) return;
     } else typeText(it, b.text, dt, b.anchors || []);
+    if (!it.presented && it.shown > 0 && Number.isSafeInteger(it.cursor)) {
+      it.presented = true;
+      send({ t: 'speech-visible', cursor: it.cursor });
+    }
+    if (progress.mode === 'audio' && !progress.done) return;
     if (it.shown >= b.text.length && !it.beatDone) {
       it.beatDone = true;
       const last = it.i === it.beats.length - 1;
-      it.holdUntil = T + (it.rush ? RUSH_HOLD : (last ? 1.6 + b.text.length * .07 : .9 + b.text.length * .03) / prefs.bubbleSpeed);
+      it.holdUntil = T + (it.rush ? RUSH_HOLD : speechBubbleHold(b.text.length, prefs.bubbleSpeed, last, prefs.replyBubbleSeconds));
     }
     return;
   }
@@ -1288,8 +1305,11 @@ function openInput() {
     : '';
   openBubble('ask', `<button class="b-close" type="button" aria-label="${esc(t('bubble.close'))}">×</button><div class="b-imgs" hidden></div><form class="b-own"><textarea rows="1" maxlength="500" autocomplete="off" placeholder="${esc(t('bubble.typePlaceholder'))}" aria-label="${esc(t('bubble.typeLabel'))}"></textarea>${expand}<button type="submit">${esc(t('bubble.send'))}</button></form><span class="b-hint b-note" hidden></span>`);
   const form = bubble.querySelector('form'), input = form.querySelector('textarea');
+  const submit = form.querySelector('button[type="submit"]');
   const tray = bubble.querySelector('.b-imgs'), note = bubble.querySelector('.b-note');
   const say = (text) => { note.textContent = text || ''; note.hidden = !text; };
+  input.addEventListener('compositionstart', () => { it.composing = true; });
+  input.addEventListener('compositionend', () => { it.composing = false; });
   const draw = () => {
     tray.hidden = !it.images.length;
     tray.replaceChildren(...it.images.map((img) => {
@@ -1334,14 +1354,36 @@ function openInput() {
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     const v = input.value.trim();
-    if (it.pending || (!v && !it.images.length)) return;
-    if (!send({ t: 'text', text: v, ...(it.images.length ? { images: it.images.map(({ mime, base64, name }) => ({ mime, base64, name })) } : {}) })) {
+    if (it.sending || it.pending || (!v && !it.images.length)) return;
+    const images = it.images.map(({ mime, base64, name }) => ({ mime, base64, name }));
+    const key = JSON.stringify([v, images]);
+    if (it.request?.key !== key) it.request = { key, id: crypto.randomUUID() };
+    const request = it.request.id;
+    if (!send({ t: 'text', request, text: v, ...(images.length ? { images } : {}) })) {
       say(desktopLabel('连接已断开，输入已保留。','Disconnected. The draft is kept.'));
       return;
     }
-    sfx.select(); system.body?.cue('cheer');
-    closeBubble();
-    if (prefs.saidBubbles) addLine('type', v, false, { images: it.images.length });
+    it.sending = true;
+    submit.disabled = true;
+    say(desktopLabel('正在发送…', 'Sending…'));
+    const finish = (message) => {
+      clearTimeout(it.sendTimer);
+      it.sending = false;
+      submit.disabled = false;
+      say(message);
+    };
+    it.sendTimer = setTimeout(() => finish(desktopLabel('还没收到确认，可以重试。', 'No confirmation yet. You can retry.')), 8000);
+    it.receiveText = (receipt) => {
+      if (receipt.request !== request || it.request?.id !== request) return;
+      it.request = undefined;
+      finish(receipt.ok ? '' : receipt.reason);
+      if (!receipt.ok) return;
+      sfx.select(); system.body?.cue('cheer');
+      const unchanged = input.value.trim() === v && it.images.length === images.length
+        && it.images.every((image, index) => image.base64 === images[index].base64);
+      if (unchanged) closeBubble();
+      if (prefs.saidBubbles) addLine('type', v, false, { images: images.length, cursor: receipt.cursor });
+    };
   });
   host?.focus?.();
   setTimeout(() => input.focus(), 30);
@@ -1374,8 +1416,6 @@ function onListen(m) {
     const line = listen.line ?? addLine('voice', '', true);
     endListen();
     settleLine(line, m.text || '');
-    if (phoneChat.log.contains(line.el)) dropLine(line);
-    if (!prefs.saidBubbles) fadeLine(line);
     sfx.listenEnd();
     system.body?.cue('heard');
   } else if (m.phase === 'none') {
@@ -1386,6 +1426,10 @@ function onListen(m) {
 function endListen() {
   listen.phase = null; listen.line = null; listen.text = ''; listen.interim = '';
   setBody({ listening: false });
+}
+function clearVoiceBubbles() {
+  for (const line of [...lines]) if (line.src === 'voice') dropLine(line);
+  endListen();
 }
 /**
  * Draws what is being heard into the episode's bubble, the newest of the stack. `interim`, greyed, may still change.
@@ -1404,7 +1448,7 @@ function showHeard() {
 
 /*
  * ---------- what the person said: typed in the box, heard, or sent from the chat page ----------
- * Each line stays above Coo as a bubble of the heard kind (grey, no tail), the newest at the bottom. A line is
+ * Voice confirmation has its own short expiry. The typed lines stay above Coo, the newest at the bottom. A line is
  * answered by the first speech or question Coo starts after it settled; until that reply's bubble has closed (and,
  * for a line not answered yet, while Coo works or has speech queued) the line and those before it stay, and they
  * fade REPLIED_FADE seconds after it closes. A line Coo does not answer fades UNANSWERED_FADE seconds after it was
@@ -1424,8 +1468,10 @@ const MARKS = { voice: ICONS.mic, chat: ICONS.expand };
 const lines = [];
 
 function addLine(src, text, live = false, extra = {}) {
+  if (src === 'voice') for (const old of [...lines]) if (old.src === 'voice') dropLine(old);
   const el = document.createElement('div');
   el.className = 'bubble heard said pop';
+  el.dataset.origin = src;
   el.setAttribute('role', 'status');
   document.body.append(el);
   const line = { el, src, text, live, settledAt: live ? null : T, reply: null, fadeAt: null, ox: null, oy: null, images: 0, cursor: null, ...extra };
@@ -1456,7 +1502,8 @@ function fadeLine(line) {
 }
 function dropLine(line) {
   line.el.remove();
-  lines.splice(lines.indexOf(line), 1);
+  const index = lines.indexOf(line);
+  if (index >= 0) lines.splice(index, 1);
 }
 /** A chat-page message the person took back before delivery: its line goes. */
 function withdrawLine(cursor) {
@@ -1465,7 +1512,7 @@ function withdrawLine(cursor) {
 }
 /** Coo starts speaking or asking (`it`): the settled lines not answered yet are answered by it. */
 function answerLines(it) {
-  for (const line of lines) if (!line.live && !line.reply) line.reply = it;
+  for (const line of lines) if (line.src !== 'voice' && !line.live && !line.reply) line.reply = it;
 }
 /** Rows of text a line shows: its text (pet.css clamps it at MAX_ROWS), plus the image line. */
 function rowsOf(line) {
@@ -1480,16 +1527,21 @@ function stepLines() {
   const busy = !!status.wanted || queue.some((q) => q.kind === 'say' || q.kind === 'ask');
   let held = -1, answered = -1;
   lines.forEach((line, i) => {
-    if (line.live) return;
+    if (line.live || line.src === 'voice') return;
     const r = line.reply;
     if (r ? r.endedAt === undefined : busy) held = i;
     else if (r && T >= r.endedAt + REPLIED_FADE) answered = i;
   });
   lines.forEach((line, i) => {
-    if (line.fadeAt !== null || line.live || i <= held) return;
+    if (line.fadeAt !== null || line.live) return;
+    if (line.src === 'voice') {
+      if (T >= line.settledAt + VOICE_BUBBLE_HOLD) fadeLine(line);
+      return;
+    }
+    if (i <= held) return;
     if (i <= answered || (!line.reply && T >= line.settledAt + UNANSWERED_FADE)) fadeLine(line);
   });
-  const up = lines.filter((l) => l.fadeAt === null);
+  const up = lines.filter((l) => l.fadeAt === null && l.src !== 'voice');
   let rows = up.reduce((n, l) => n + rowsOf(l), 0);
   while (up.length > 1 && (up.length > MAX_LINES || rows > MAX_ROWS)) {
     const line = up.shift();
@@ -1574,7 +1626,7 @@ const ACTIONS = {
   interaction: { icon: () => ICONS.cursor, available: () => !!host, state: () => desktopLabel('互动设置', 'Interaction settings'), run: () => openQuickPage('interaction', 'interaction') },
   workbench: { icon: () => ICONS.settings, available: () => !!prefs.bot?.buttons?.settings, state: () => desktopLabel('打开工作台', 'Open workbench'), run: () => controlDesktop('settings') },
   hoverVisibility: { icon: () => ICONS.eye, available: () => !!host, state: () => desktopLabel('显示靠近按钮', 'Show hover buttons'), run: () => openQuickPage('hoverVisibility', 'interaction') },
-  close: { icon: () => ICONS.power, available: () => !!host, state: () => desktopLabel('关闭 Live2D', 'Close Live2D'), run: () => openQuickPage('close', 'close') },
+  close: { icon: () => ICONS.power, available: () => !!host, state: () => desktopLabel('关闭窗口', 'Close window'), run: () => openQuickPage('close', 'close') },
   through: { icon: () => ICONS.cursor, available: () => !!host, state: () => desktopLabel('鼠标穿透', 'Click-through'), run: () => openQuickPage('through', 'through') },
   menu: {
     icon: () => ICONS.apps, available: () => !!host,
@@ -1586,7 +1638,7 @@ const ACTIONS = {
   },
   desktopClose: {
     icon: () => ICONS.power, available: () => !!host,
-    state: () => desktopLabel('关闭 Live2D 桌宠', 'Close Live2D Desktop Pet'), run: () => controlDesktop('desktop-close'),
+    state: () => desktopLabel('关闭梦境窗口', 'Close Figure Scape window'), run: () => controlDesktop('desktop-close'),
   },
   chat: {
     icon: () => ICONS.chat,
@@ -1752,6 +1804,14 @@ const controlPhone = createControlPhone({
     openWallpapers: () => {
       if (send({t:'control',action:'desktop-wallpapers'})) closeMenu();
     },
+    openCabin: () => {
+      if (send({t:'control',action:'desktop-cabin-settings'})) closeMenu();
+    },
+    enterCabin: () => {
+      if (send({t:'control',action:'desktop-cabin'})) {
+        controlPhone.status(desktopLabel('正在准备小屋世界…', 'Preparing Cabin World…'), 'pending');
+      }
+    },
     wallpaper: host ? {
       current: () => system.mode === 'wallpaper' ? system.presentation.snapshot().wallpaper : null,
       preview: value => system.presentation.previewPlacement?.(value),
@@ -1790,7 +1850,10 @@ function syncPhoneChat() {
     online, controlsOpen: !menu.hidden, switching,
     speaking: active ? [item,...queue].filter(it => Number.isSafeInteger(it?.cursor)).map(it => it.cursor) : [],
   });
-  if (active && listen.line && !phoneChat.log.contains(listen.line.el)) phoneChat.attachListening(listen.line.el);
+  if (active) {
+    const voice = lines.findLast(line => line.src === 'voice');
+    if (voice) phoneChat.attachListening(voice.el);
+  }
   if (!active) landscapeChat.render({mode, area:mode === 'desktop' ? null : system.scene.rect(), online, switching, lines, inputOpen:item?.kind === 'input'});
 }
 function updateMenuStatus() {
@@ -1828,11 +1891,17 @@ function selectDesktopScene(mode, exiting = false) {
 }
 function finishDesktopScene(message) {
   if (message.request !== sceneRequest?.request) return;
-  const {exiting} = sceneRequest;
+  const {exiting, mode} = sceneRequest;
   if (exiting && message.ok) closeMenu();
   const label = desktopLabel(...desktopScenes[sceneRequest.mode].label);
   clearTimeout(desktopModeRequestTimer);
   sceneRequest = null;
+  if (mode === 'wallpaper' && message.reason === 'wallpaper-source-unavailable'
+    && send({t:'control',action:'desktop-wallpaper-enter'})) {
+    closeMenu();
+    updateMenuStatus();
+    return;
+  }
   const reasons = {
     'wallpaper-source-unavailable': ['请先打开壁纸库，选择可用的背景。', 'Open the wallpaper library and choose a background.'],
     'wallpaper-first-frame-failed': ['壁纸未能显示首帧，当前画面已保留。', 'The wallpaper could not draw its first frame. The current view is still active.'],
@@ -1895,7 +1964,7 @@ function renderControlComponent(id, button, switchIndicator) {
     case 'hide':
       return available(id) ? button(desktopLabel('隐藏桌宠', 'Hide pet'), 'eyeOff', ACTIONS[id].run) : null;
     case 'close': {
-      const close = button(desktopLabel('关闭 Live2D', 'Close Live2D'), 'power', ACTIONS.desktopClose.run);
+      const close = button(desktopLabel('关闭窗口', 'Close window'), 'power', ACTIONS.desktopClose.run);
       close.classList.add('control-phone-danger');
       return close;
     }

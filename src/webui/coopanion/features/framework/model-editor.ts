@@ -17,7 +17,7 @@ export function modelEditor(ctx: PageContext, options: {
  invoke?: <T>(method: string, args?: unknown[], request?: RequestOptions) => Promise<T>;
  onDraft?: (args: unknown[]) => void;
  onRead?: (profile: ModelProfile, catalog: ModelEditorState['catalog']) => void;
- touch?: { element: HTMLElement; value(): ModelProfile['touch']; setBindings?(value: NativeBinding[]): void };
+ touch?: { element: HTMLElement; value(): ModelProfile['touch']; setBindings?(value: NativeBinding[]): void; isDrawing?(): boolean };
  preview?: (kind: string, input?: Record<string, unknown>) => Promise<Record<string, unknown> | void> | undefined;
  onInvalid?: (section: string) => void;
 } = {}) {
@@ -34,7 +34,7 @@ export function modelEditor(ctx: PageContext, options: {
  const preview=ui.button(text('预览取景（不保存）','Preview framing (not saved)'),{size:'sm'}),revert=ui.button(text('还原预览','Revert preview'),{size:'sm'}),previewStatus=el('p');previewStatus.setAttribute('role','status');
  const save=c.node('button',text('保存并应用','Save and apply'),'studio-button is-primary');
  save.type='button';
- const reload=ui.button(text('重新读取','Reload'),{size:'sm'}),add=ui.button(text('添加原生动作绑定','Add native action binding'),{size:'sm'});
+ const reload=ui.button(options.onDraft?text('放弃修改','Discard edits'):text('重新读取','Reload'),{size:'sm'}),add=ui.button(text('添加原生动作绑定','Add native action binding'),{size:'sm'});
  const retry=c.button(text('重新应用已保存版本','Reapply saved version'),()=>void retryApply());retry.hidden=true;
  const tabs=el('nav'),workspace=el('div'),footer=el('footer'),draftState=el('span');tabs.className='framework-editor-tabs';tabs.setAttribute('aria-label',text('模型配置分类','Model sections'));workspace.className='framework-editor-workspace';footer.className='framework-editor-footer';draftState.className='framework-draft-state';
  const progress=doc.createElement('progress');progress.hidden=true;progress.setAttribute('aria-label',text('保存进度','Save progress'));
@@ -66,10 +66,31 @@ export function modelEditor(ctx: PageContext, options: {
  const bindingBar=el('div');bindingBar.className='studio-binding-bar';
  const bindingsHeading = el('h2', text('动作与表情', 'Actions and expressions'));
  bindingBar.append(bindingsHeading, add);
- const emptyBindings=el('p',text('还没有动作绑定。添加一个动作词即可配置主资源和叠加表情。','Add an action binding to choose a main resource and expression overlays.'));
- panes.get('bindings')!.append(bindingBar,bindingPicker,wordList,emptyBindings,bindings);
+ const wordSearch=doc.createElement('input');
+ wordSearch.type='search';
+ wordSearch.className='studio-binding-search';
+ wordSearch.placeholder=text('搜索动作或表情','Search actions or expressions');
+ wordSearch.setAttribute('aria-label',wordSearch.placeholder);
+ wordSearch.hidden=!options.preview;
+ const noWords=el('p',text('没有找到匹配的动作或表情。','No matching actions or expressions.'));
+ noWords.hidden=true;
+ noWords.className='studio-editor-note';
+ const emptyBindings=el('p',options.preview?text('选择上方的动作或表情，即可试播和绑定资源。','Choose an action or expression above to preview and bind resources.'):text('还没有动作绑定。添加一个动作词即可配置主资源和叠加表情。','Add an action binding to choose a main resource and expression overlays.'));
+ emptyBindings.className='studio-editor-note';
+ panes.get('bindings')!.append(bindingBar,bindingPicker,wordSearch,wordList,noWords,emptyBindings,bindings);
  bindingBar.querySelector('button')!.hidden=!!options.preview;
  bindingPicker.addEventListener('change',()=>showBinding(Number(bindingPicker.value)),{signal});
+ function filterWords(){
+  const search=wordSearch.value.trim().toLowerCase();
+  let matches=0;
+  for(const entry of wordList.querySelectorAll<HTMLButtonElement>('button')){
+   entry.hidden=!(entry.dataset.word??'').toLowerCase().includes(search)&&!(entry.dataset.wordTitle??'').toLowerCase().includes(search);
+   if(!entry.hidden)matches++;
+  }
+  noWords.hidden=matches!==0;
+  emptyBindings.hidden=!!rows.length||!noWords.hidden;
+ }
+ wordSearch.addEventListener('input',filterWords,{signal});
  const visualFields=el('div');visualFields.className='framework-model-fields';
  const visualHint=el('p');visualHint.className='studio-editor-note';
  const visualCommands=el('div');visualCommands.className='studio-inline';
@@ -105,13 +126,37 @@ export function modelEditor(ctx: PageContext, options: {
  if(options.externalNavigation){tabs.hidden=true;panel.classList.add('framework-editor-external');}
  status.className='studio-editor-save-status';
  status.tabIndex=0;
- const footerActions=el('div');footerActions.className='framework-editor-actions';footerActions.append(draftState,reload,retry,save);footer.append(progress,status,footerActions);panel.append(tabs,workspace,footer);
+ const saveNotice=options.onDraft?el('p'):status;
+ if(saveNotice!==status){
+  saveNotice.className='studio-editor-save-notice';
+  saveNotice.setAttribute('role','status');
+  draftState.setAttribute('role','status');
+ }
+ const footerActions=el('div');footerActions.className='framework-editor-actions';footerActions.append(draftState,reload,retry,save);
+ footer.append(progress,status);
+ if(saveNotice!==status)footer.append(saveNotice);
+ footer.append(footerActions);panel.append(tabs,workspace,footer);
  let dirty=false,loaded=false,stale=false,loadFailure:string|null=null,reading:Promise<void>|null=null;
- const markDirty=(event?:Event)=>{const target=event?.target as HTMLInputElement|HTMLSelectElement|undefined;if(target===bindingPicker||target?.type==='search'||target?.dataset.previewMode)return;dirty=true;draftState.textContent=text('有未保存的修改','Unsaved changes');if(current?.editor) options.onDraft?.([current.figure,readDraft(),current.editor.revision,current.editor.catalogFingerprint]);};
+ function saveButtons(){
+  save.disabled=busy||stale||!current?.editor||Boolean(options.onDraft&&!dirty);
+  reload.disabled=busy||Boolean(options.onDraft&&!dirty&&!stale);
+  reload.textContent=options.onDraft&&!stale?text('放弃修改','Discard edits'):text('重新读取','Reload');
+  retry.hidden=!retryRevision||Boolean(options.onDraft&&dirty);
+  retry.disabled=busy||stale;
+ }
+ function markDirty(event?:Event){
+  const target=event?.target as HTMLInputElement|HTMLSelectElement|undefined;
+  if(busy||stale||target===bindingPicker||target?.type==='search'||target?.dataset.previewMode)return;
+  dirty=true;
+  draftState.textContent=text('有未保存的修改','Unsaved changes');
+  if(options.onDraft)saveNotice.textContent='';
+  saveButtons();
+  if(current?.editor)options.onDraft?.([current.figure,readDraft(),current.editor.revision,current.editor.catalogFingerprint]);
+ }
  panel.addEventListener('input',markDirty,{signal});panel.addEventListener('change',markDirty,{signal});
  wardrobe.element.addEventListener('click',event=>{const button=(event.target as Element).closest('button');if(button?.dataset.draftChange==='true')markDirty();},{signal});
  const discard=doc.createElement('dialog');discard.className='framework-dialog';discard.setAttribute('aria-label',text('未保存的修改','Unsaved changes'));
- const keep=ui.button(text('继续编辑','Keep editing'),{size:'sm'}),discardButton=ui.button(text('放弃修改并继续','Discard and continue'),{size:'sm'});discard.append(el('h2',text('还有未保存的修改','Unsaved changes')),el('p',text('切换模型或重新读取会替换当前草稿。','Changing models or reloading replaces this draft.')),keep,discardButton);(options.externalNavigation?root:panel).append(discard);
+ const keep=ui.button(text('继续编辑','Keep editing'),{size:'sm'}),discardButton=ui.button(text('放弃修改并继续','Discard and continue'),{size:'sm'});discard.append(el('h2',text('还有未保存的修改','Unsaved changes')),el('p',options.onDraft?text('放弃当前角色的草稿并回到上一次保存的配置。','Discard this character’s draft and return to the last saved settings.'):text('切换模型或重新读取会替换当前草稿。','Changing models or reloading replaces this draft.')),keep,discardButton);(options.externalNavigation?root:panel).append(discard);
  let resolveDiscard:((value:boolean)=>void)|null=null;
  function settleDiscard(value:boolean){if(discard.open)discard.close();workspace.inert=false;footer.inert=false;resolveDiscard?.(value);resolveDiscard=null;}
  keep.addEventListener('click',()=>settleDiscard(false),{signal});discardButton.addEventListener('click',()=>settleDiscard(true),{signal});discard.addEventListener('cancel',event=>{event.preventDefault();settleDiscard(false);},{signal});
@@ -221,6 +266,8 @@ export function modelEditor(ctx: PageContext, options: {
    const catalog=current?.editor?.catalog;
    const named=[...new Set([...(catalog?.words.expressions??[]),...(catalog?.words.motions??[]),...rows.map(item=>item.value().word)])];
    const selected=rows[visibleBinding]?.value().word;
+   const scroll=wordList.scrollTop;
+   wordSearch.hidden=named.length===0;
    wordList.replaceChildren(...named.map(word=>{
     const at=rows.findIndex(item=>item.value().word===word);
     const binding=rows[at]?.value();
@@ -230,9 +277,11 @@ export function modelEditor(ctx: PageContext, options: {
      if(at===-1){row({word});showBinding(rows.length-1);}else showBinding(at);
      [...wordList.querySelectorAll<HTMLElement>('button')].find(node=>node.dataset.word===word)?.focus({preventScroll:true});
     });
-    button.dataset.word=word;button.dataset.bindingState=missing?'missing':binding?.resource?'bound':'default';
+    button.dataset.word=word;button.dataset.wordTitle=wordTitle(word);button.dataset.bindingState=missing?'missing':binding?.resource?'bound':'default';
     button.append(el('small',state));button.setAttribute('aria-pressed',String(word===selected));return button;
    }));
+   filterWords();
+   wordList.scrollTop=scroll;
   }
  }
  let activePreview: { figure: string; owner: string } | null = null;
@@ -320,7 +369,7 @@ export function modelEditor(ctx: PageContext, options: {
    status.textContent=text('正在准备试播…','Preparing preview…');
    if(options.preview){
     const receipt=await options.preview('action',{command:{kind:'play',owner:'editor',binding,mode}});
-    if(epoch!==editEpoch||signal.aborted)return;
+    if(epoch!==editEpoch||signal.aborted||receipt?.cancelled)return;
     actionRequest=typeof receipt?.id==='string'?receipt.id:undefined;
     status.textContent=text('正在试播','Preview playing');
     if(actionRequest && lastActionState?.id===actionRequest)actionState(actionRequest,lastActionState.status);
@@ -402,24 +451,27 @@ export function modelEditor(ctx: PageContext, options: {
   catch(error){if(!signal.aborted)status.textContent=String(error);}
  }
  async function retryApply(){
-  if(busy||stale||!retryRevision)return;
-  const target=retryRevision;busy=true;retry.disabled=true;save.disabled=true;reload.disabled=true;
-  progress.hidden=false;status.textContent=text('正在重新应用已保存版本…','Reapplying saved version…');
+  if(busy||stale||!retryRevision||options.onDraft&&dirty)return;
+  const target=retryRevision;
+  busy=true;workspace.inert=true;saveButtons();
+  progress.hidden=false;saveNotice.textContent=text('正在重新应用已保存版本…','Reapplying saved version…');
   try{
    const result=await call<ModelOperation>('applySavedModel',[target.figure,target.revision]);
    if(signal.aborted)return;
-   if(result.applied){retryRevision=null;retry.hidden=true;busy=false;await read();status.textContent=text('已应用已保存的版本。','The saved version is applied.');}
-   else status.textContent=text('版本已保存，打开桌宠后可应用。','The version is saved. Open the pet to apply it.');
-  }catch(error){if(!signal.aborted)status.textContent=String(error);}
-  finally{busy=false;retry.disabled=false;reload.disabled=false;save.disabled=stale;progress.hidden=true;}
+   if(result.applied)retryRevision=null;
+   saveNotice.textContent=result.applied?text('已应用已保存的版本。','The saved version is applied.')
+    :result.error??text('配置已保存，使用该角色时生效。','Saved. Settings apply when you use this character.');
+  }catch(error){if(!signal.aborted)saveNotice.textContent=String(error);}
+  finally{busy=false;workspace.inert=false;saveButtons();progress.hidden=true;}
  }
  async function read(preserveDraft=false){
   if(signal.aborted||busy)return;
   try{
    const result=await invokePanel<EditorContract>(PROVIDER,'framework','modelEditor',targetFigure?[targetFigure]:[],{signal});if(signal.aborted)return;
    if(preserveDraft&&dirty)return;
-   if(current&&current.figure!==result.figure)deactivate();
-   current=result;retryRevision=null;retry.hidden=true;loadFailure=null;loaded=true;dirty=false;stale=false;save.disabled=false;draftState.textContent=text('修改统一保存','Save edits together');readinessSerial++;previewControls();panel.hidden=!result.editor;if(!result.editor)return;
+   const previousWord=current?.figure===result.figure?rows[visibleBinding]?.value().word:undefined;
+   if(current&&current.figure!==result.figure){deactivate();wordSearch.value='';}
+   current=result;retryRevision=null;loadFailure=null;loaded=true;dirty=false;stale=false;draftState.textContent=options.onDraft?text('已载入保存的配置','Saved settings loaded'):text('修改统一保存','Save edits together');readinessSerial++;previewControls();panel.hidden=!result.editor;if(!result.editor){saveButtons();return;}
    committed=structuredClone(result.editor.profile);
    const olderDraft=result.draft && (result.draft.revision !== result.editor.revision || result.draft.catalogFingerprint !== result.editor.catalogFingerprint);
    if(result.draft?.profile?.fit) {
@@ -433,7 +485,8 @@ export function modelEditor(ctx: PageContext, options: {
    const canColor=visualReady();
    save.textContent=result.active===false?text('保存配置','Save settings'):text('保存并应用','Save and apply');
    visualHint.textContent=canColor?text('调整当前模型的色相和亮度。','Adjust the current model’s hue and brightness.'):text('显示 Live2D 后可检查模型是否支持配色。','Show Live2D to check whether this model supports colors.');
-   visualCommands.hidden=!canColor;
+   visualHint.hidden=!!options.preview&&canColor;
+   visualCommands.hidden=!canColor||!!options.preview;
    for(const field of [...result.fields,...(canColor?visualSchema:[])]){
     if(!['number','boolean','enum'].includes(field.type))continue;
     const pair=labels[field.path]??[field.path,field.path],label=el('label');
@@ -483,7 +536,8 @@ export function modelEditor(ctx: PageContext, options: {
      : crop?.reason==='bongo-input'
        ? text('当前模型由 Bongo 输入控制裁切。','Bongo input controls this model’s crop.')
        : crop ? text('当前身体不支持裁切。','The current body does not support cropping.')
-         : text('载入桌宠后可确认裁切是否生效。','Load the desktop pet to confirm crop support.');
+         : options.preview ? text('默认裁切用于首次加载。','The default crop applies on first load.')
+           : text('载入桌宠后可确认裁切是否生效。','Load the desktop pet to confirm crop support.');
    if(result.fields.some(f=>f.path==='motion.kind')){
     behaviorFields.append(el('p',text('站定仅关闭自主漫游，不会冻结姿态，也不禁止明确的行走命令或拖动。朝向选项仅在站定时生效。','Standing disables autonomous roaming, not explicit walking commands or dragging, and does not freeze the pose. Facing applies only while standing.')));
     const motion=result.behavior?.motion;
@@ -497,18 +551,41 @@ export function modelEditor(ctx: PageContext, options: {
    }
    if(result.framing?.state?.reason==='not-ready')void waitForFraming(result.figure,readinessSerial);
    for(const binding of result.editor.profile.bindings??[])row(binding);
-   showBinding(0);
+   let selection=previousWord?rows.findIndex(item=>item.value().word===previousWord):0;
+   const words=result.editor.catalog?.words;
+   if(options.preview&&previousWord&&selection<0&&(words?.expressions.includes(previousWord)||words?.motions.includes(previousWord))){
+    row({word:previousWord});
+    selection=rows.length-1;
+   }
+   showBinding(Math.max(0,selection));
    wardrobe.read(result.editor.profile.wardrobe,result.editor.catalog?.resources??[]);
    mouth.read(result.editor.profile.mouth,result.behavior?.mouth);
    add.disabled=!(result.editor.catalog?.resources.length&&result.editor.catalog?.words);
-   status.textContent=result.operation.error??(olderDraft?text('已恢复旧基准草稿。请检查失效的资源引用。','An older draft was restored. Review missing resources.'):'');
-  }catch(error){if(!signal.aborted){loadFailure=String(error);panel.hidden=false;status.textContent=loadFailure;}}
+   if(saveNotice!==status)status.textContent='';
+   saveNotice.textContent=(options.onDraft?null:result.operation.error)??(olderDraft?text('已恢复旧基准草稿。请检查失效的资源引用。','An older draft was restored. Review missing resources.'):'');
+   saveButtons();
+  }catch(error){if(!signal.aborted){loadFailure=String(error);panel.hidden=false;saveNotice.textContent=loadFailure;}}
  }
  add.addEventListener('click',()=>{if(!busy){row();showBinding(rows.length-1);markDirty();}},{signal});
  reload.addEventListener('click',async()=>{
   if(!await confirmDiscard())return;
-  try { if(options.invoke&&current)await options.invoke('edit.clearDraft',[current.figure]); await read(); }
-  catch(error){status.textContent=String(error);}
+  const wasDirty=dirty;
+  busy=true;workspace.inert=true;saveButtons();
+  try {
+   if(options.invoke&&current&&wasDirty){
+    await call('edit.clearDraft',[current.figure]);
+    dirty=false;
+    stale=true;
+   }
+   busy=false;
+   await read();
+   if(wasDirty&&!loadFailure){
+    await options.preview?.('restore')?.catch(()=>{});
+    saveNotice.textContent=text('已回到上一次保存的配置。','Last saved settings restored.');
+   }
+  }
+  catch(error){saveNotice.textContent=String(error);}
+  finally{busy=false;workspace.inert=false;saveButtons();}
  },{signal});
  function readDraft(){
   const profile=structuredClone(current!.editor!.profile);
@@ -525,11 +602,16 @@ export function modelEditor(ctx: PageContext, options: {
   return profile;
  }
  save.addEventListener('click',async()=>{
-  if(busy||previewBusy||previewTask||stale||!current?.editor)return;
+  if(busy||stale||!current?.editor||!options.preview&&(previewBusy||previewTask))return;
+  if(options.touch?.isDrawing?.()){
+   options.onInvalid?.('touch');
+   saveNotice.textContent=text('请先完成或取消触碰范围绘制。','Finish or cancel drawing the touch area first.');
+   return;
+  }
   for(const [id,valid] of [['wardrobe',()=>wardrobe.valid(!!options.preview)],['mouth',mouth.valid]] as const)if(!valid()){
    if(options.onInvalid)options.onInvalid(id);else selectSection(id);
    valid();
-   status.textContent=text('请修复当前工作区的无效值。','Correct the invalid value in this workspace.');
+   saveNotice.textContent=text('请修复当前工作区的无效值。','Correct the invalid value in this workspace.');
    return;
   }
   const invalid=[...fieldInputs].find(([,i])=>!i.validity.valid||(i.type==='number'&&!i.value));
@@ -538,23 +620,78 @@ export function modelEditor(ctx: PageContext, options: {
    if(options.onInvalid)options.onInvalid(id);else selectSection(id);
    invalid[1].focus();invalid[1].reportValidity();return;
   }
-  const profile=readDraft();releaseDraft();
-  busy=true;previewSerial++;previewControls();mouth.disabled(true);wardrobe.disabled(true);save.disabled=reload.disabled=add.disabled=true;
-  const locked=new Map(Array.from(workspace.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('input,select,button')).map(control=>[control,control.disabled]));for(const control of locked.keys())control.disabled=true;
-  panel.setAttribute('aria-busy','true');progress.hidden=false;let polling=false;
-  const poll=async()=>{if(polling||!busy||signal.aborted)return;polling=true;try{const state=await invokePanel<{model:{phase:string;saved:boolean}}>(PROVIDER,'framework','state',[],{signal});if(!busy||signal.aborted)return;const phases:Record<string,string>=zh?{saving:'正在保存配置…',preparing:'配置已保存，正在准备模型…',applying:'正在应用配置，等待桌宠确认…'}:{saving:'Saving configuration…',preparing:'Preparing model…',applying:'Applying settings; waiting for the pet…'};if(phases[state.model?.phase])status.textContent=phases[state.model.phase];}catch{/* The mutation response remains authoritative. */}finally{polling=false;}};
+  const id=crypto.randomUUID(),figure=current.figure,model=current.editor;
+  const profile=readDraft();
+  clearTimeout(framingTimer);
+  releaseDraft();
+  actionRequest=undefined;
+  void options.preview?.('release-task',{task:section})?.catch(()=>{});
+  busy=true;workspace.inert=true;previewSerial++;previewControls();saveButtons();
+  panel.setAttribute('aria-busy','true');progress.hidden=false;
+  let polling=false,finished=false;
+  const operation=()=>call<ModelOperation|null>('operation.get',[id]).catch(()=>null);
+  const poll=async()=>{
+   if(polling||finished||signal.aborted)return;
+   polling=true;
+   try{
+    const result=await operation();
+    if(finished||signal.aborted||!result)return;
+    const phases:Record<string,string>=zh?{saving:'正在保存配置…',preparing:'配置已保存，正在准备模型…',applying:'正在应用配置，等待桌宠确认…'}:{saving:'Saving settings…',preparing:'Settings saved. Preparing model…',applying:'Applying settings; waiting for the pet…'};
+    if(phases[result.phase])saveNotice.textContent=phases[result.phase];
+   }finally{polling=false;}
+  };
   const timer=setInterval(()=>void poll(),700);
-  status.textContent=text('正在保存并应用配置…','Saving and applying settings…');
+  saveNotice.textContent=text('正在保存配置…','Saving settings…');
+  async function saved(applied:boolean,receipt?:ModelOperation|null){
+   finished=true;
+   if(signal.aborted)return;
+   if(applied)previewFigure=null;
+   dirty=false;
+   busy=false;
+   await read();
+   if(signal.aborted)return;
+   if(loadFailure){
+    stale=true;
+    draftState.textContent=text('配置已保存','Settings saved');
+    saveNotice.textContent=text('已保存，重新读取后可继续编辑。','Saved. Reload before continuing to edit.');
+    return;
+   }
+   if(receipt?.error&&receipt.revision&&!applied)retryRevision={figure,revision:receipt.revision};
+   saveNotice.textContent=applied?text('已保存并应用','Saved and applied')
+    :receipt?.error?text('已保存，应用失败。','Saved. Application failed. ')+receipt.error
+    :text('已保存，使用该角色时生效。','Saved. Settings apply when you use this character.');
+  }
   try{
-   const id=crypto.randomUUID();
-   const result=await invokePanel<{saved:boolean;applied:boolean}>(PROVIDER, 'framework',targetFigure?'saveLibraryModel':'saveModel',[current.figure,profile,current.editor.revision,current.editor.catalogFingerprint,id],{signal});
-   if(result.applied)previewFigure=null;busy=false;await read();status.textContent=result.applied?text('已保存并应用到当前身体。','Saved and applied to the current body.'):current?.active===false?text('已保存。使用该角色时生效。','Saved. Settings apply when you use this character.'):text('已保存；当前窗口未连接，下次打开时应用。','Saved; the window is offline. Applied when it opens.');
-  }catch(error){busy=false;try{const state=await invokePanel<{model:ModelOperation}>(PROVIDER,'framework','state',[],{signal});if(current&&state.model){current.operation=state.model;if(state.model.saved&&state.model.revision){retryRevision={figure:current.figure,revision:state.model.revision};retry.hidden=false;}}}catch{}status.textContent=(current?.operation.saved?text('配置已保存，但应用失败；草稿已保留：','Saved, but application failed; draft retained: '):text('未完成保存；草稿已保留：','Save failed; draft retained: '))+String(error);}
-  finally{clearInterval(timer);busy=false;panel.setAttribute('aria-busy','false');progress.hidden=true;for(const[control,disabled]of locked)control.disabled=disabled;previewControls();mouth.disabled(false);wardrobe.disabled(false);save.disabled=stale;reload.disabled=false;add.disabled=!(current?.editor?.catalog?.resources.length&&current?.editor?.catalog?.words);}
+   const result=await call<{saved:boolean;applied:boolean;operation?:ModelOperation}>(targetFigure?'saveLibraryModel':'saveModel',[figure,profile,model.revision,model.catalogFingerprint,id]);
+   if(!result.saved)throw Error(result.operation?.error??text('未收到保存回执。','No save receipt was received.'));
+   await saved(result.applied,result.operation);
+  }catch(error){
+   finished=true;
+   if(signal.aborted)return;
+   const receipt=await operation();
+   if(receipt?.saved)await saved(receipt.applied,receipt);
+   else saveNotice.textContent=text('保存未完成，当前修改已保留。','Save did not complete. Your edits are still here. ')+String(error);
+  }finally{
+   finished=true;clearInterval(timer);busy=false;workspace.inert=false;
+   panel.setAttribute('aria-busy','false');progress.hidden=true;previewControls();saveButtons();
+  }
  },{signal});
  function modelChanged(figure:string){if(targetFigure||!current||current.figure===figure||busy)return;deactivate();stale=true;save.disabled=true;retry.hidden=true;previewControls();status.textContent=text('当前模型已切换，草稿仍保留。重新读取后才能编辑新模型。','The active model changed. Your draft is retained; reload to edit the new model.');if(!dirty)void read(true);}
- return {element:panel,refresh:read,deactivate,markDirty,actionState,
-  setPreviewBehavior(behavior: EditorContract['behavior']) { if(current?.editor)mouth.read(mouth.value()??current.editor.profile.mouth,behavior?.mouth); },confirmDiscard,cancelDiscard:()=>settleDiscard(false),modelChanged,selectSection,loadFailure:()=>loadFailure,modelLabel:()=>current?.editor?.modelFile.split(/[\\/]/).at(-1)?.replace(/\.model3\.json$/i,'')??'',hasModel:()=>!!current?.editor,dirty:()=>dirty,
+ return {element:panel,refresh:read,deactivate,markDirty,actionState,isSaving:()=>busy,
+  previewUnavailable(){
+   editEpoch++;
+   previewSerial++;
+   actionRequest=undefined;
+   status.textContent='';
+  },
+  setPreviewBehavior(behavior: EditorContract['behavior']) {
+   if(!current?.editor)return;
+   mouth.read(mouth.value()??current.editor.profile.mouth,behavior?.mouth);
+   if(dirty){
+    void framingCommand('preview');
+    void options.preview?.('visual',{value:readDraft().visual??{hue:0,brightness:1}})?.catch(()=>{});
+   }
+  },confirmDiscard,cancelDiscard:()=>settleDiscard(false),modelChanged,selectSection,loadFailure:()=>loadFailure,modelLabel:()=>current?.editor?.modelFile.split(/[\\/]/).at(-1)?.replace(/\.model3\.json$/i,'')??'',hasModel:()=>!!current?.editor,dirty:()=>dirty,
   async ensureLoaded(target?:string){
    if(busy)return false;
    if(targetFigure!==target){

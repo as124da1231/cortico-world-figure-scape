@@ -14,6 +14,7 @@ import type { EventEnvelope, EventStoreReader, RunPhase, WorldStreamSocket } fro
 import type { StreamEvent } from 'cortico/protocol/open-responses/index.ts';
 
 import { readTouchRegion, type TouchRegion } from '../web/framework/touch-geometry.js';
+import { parseScript } from './script.ts';
 
 export const SELF_TYPE = 'desktop-live2d-pet.self';
 
@@ -150,22 +151,47 @@ export function chatRefs(events: readonly EventEnvelope[]): ChatRefs {
 
 export const DESKTOP_CHAT_SOURCE = 'desktop-pet';
 
-// Peer rows share the conversation. Controls for questions and body activity stay with their World.
-export function isDesktopChatEvent(event: EventEnvelope): boolean {
-  if (event.source !== DESKTOP_CHAT_SOURCE) return false;
-  return event.type === 'desktop-pet.message' || event.type === 'desktop-pet.speech'
-    || (event.type === 'desktop-pet.self' && ['say', 'withdrawn', 'delivered'].includes(String(event.meta?.kind)));
+function historyReference(event: EventEnvelope): boolean {
+  return event.type === `${event.source}.self` && (event.meta?.kind === 'withdrawn' || event.meta?.kind === 'delivered');
 }
 
-export function chatPage(store: EventStoreReader, source: string, limit: number, before?: number) {
-  const query = { limit, ...(before === undefined ? {} : { toCursor: before - 1 }) };
-  const own = store.range({ source, ...query });
-  const peer = store.range({ source: DESKTOP_CHAT_SOURCE, ...query });
-  const recent = [...own, ...peer].sort((a, b) => a.cursor - b.cursor).slice(-limit);
-  const first = recent[0]?.cursor ?? 0;
-  const events = recent.filter(event => event.source === source || isDesktopChatEvent(event));
+function conversationEvent(event: EventEnvelope): boolean {
+  return event.type === `${event.source}.message` || event.type === `${event.source}.speech`
+    || event.type === `${event.source}.self` && event.meta?.kind === 'say' || historyReference(event);
+}
+
+// Peer rows share the conversation. Controls for questions and body activity stay with their World.
+export function isDesktopChatEvent(event: EventEnvelope): boolean {
+  return event.source === DESKTOP_CHAT_SOURCE && conversationEvent(event);
+}
+
+function readChatEvents(store: EventStoreReader, source: string, limit: number, end: number, accepts: (event: EventEnvelope) => boolean) {
+  const events: EventEnvelope[] = [];
+  while (end > 0 && events.length <= limit) {
+    const batch = store.range({ source, limit, toCursor: end });
+    for (let i = batch.length - 1; i >= 0 && events.length <= limit; i--) {
+      const event = batch[i]!;
+      if (accepts(event)) events.push(event);
+    }
+    if (batch.length < limit) break;
+    end = batch[0]!.cursor - 1;
+  }
+  return events;
+}
+
+export function chatPage(store: EventStoreReader, source: string, limit: number, before?: number, view: 'timeline' | 'conversation' = 'timeline') {
+  const end = before === undefined ? store.latestCursor() : before - 1;
+  const own = readChatEvents(store, source, limit, end, event => {
+    if (conversationEvent(event)) return true;
+    const item = chatItem(event);
+    return item !== null && (view === 'timeline' || item.kind === 'ask' || item.kind === 'answer');
+  });
+  const peer = readChatEvents(store, DESKTOP_CHAT_SOURCE, limit, end, isDesktopChatEvent);
+  const merged = [...own, ...peer].sort((a, b) => a.cursor - b.cursor);
+  const events = merged.slice(-limit);
+  const first = events[0]?.cursor ?? 0;
   const refs = chatRefs(events);
-  const more = own.length === limit || peer.length === limit || own.length + peer.length > limit;
+  const more = merged.length > limit;
   return {
     items: chatHistory(events),
     refs: { withdrawn: refs.withdrawn.filter(c => c < first), delivered: refs.delivered.filter(([c]) => c < first) },
@@ -214,23 +240,39 @@ export class ChatReplyFallback {
     const cursor = Math.max(this.input, ...events.filter(event => chatItem(event)?.kind === 'user').map(event => event.cursor));
     if (cursor === this.input) return;
     this.input = cursor;
+    this.abort();
     return cursor;
+  }
+
+  turn(): { after: number; input: number } | null {
+    return this.after === null ? null : { after: this.after, input: this.input };
   }
 
   observe(event: StreamEvent): void {
     if (!this.input) return;
-    if (event.type === 'response.created') this.abort();
+    if (event.type === 'response.created') this.candidate = '';
     if (event.type !== 'response.completed') return;
     const output = event.response.output;
-    // Cormini can end a turn in the same response as its final assistant message.
-    if (output.some(item => item.type === 'function_call' && item.name !== 'end_turn')) return;
+    // A model can include its answer in the same response as a scene action.
     this.candidate = output.flatMap(item => item.type === 'message' && item.role === 'assistant'
       && (!('phase' in item) || item.phase !== 'commentary')
       ? item.content.flatMap(part => part.type === 'output_text' ? [part.text] : part.type === 'refusal' ? [part.refusal] : []) : [])
       .join('\n').trim();
+    if (this.candidate) return;
+    this.candidate = output.flatMap(item => {
+      if (item.type !== 'function_call' || item.name !== 'pet_say') return [];
+      try {
+        const args = JSON.parse(item.arguments);
+        if (typeof args?.script !== 'string') return [];
+        return parseScript(args.script,[]).beats.map(beat => beat.text).filter(Boolean);
+      } catch { return []; }
+    }).join('').trim();
   }
 
-  endRound(): void { this.reply = this.candidate; this.candidate = ''; }
+  endRound(): void {
+    if (this.candidate) this.reply = this.candidate;
+    this.candidate = '';
+  }
   abort(): void { this.candidate = ''; this.reply = ''; }
 
   finish(store: EventStoreReader, sources: readonly string[]): string {
@@ -243,7 +285,7 @@ export class ChatReplyFallback {
     return events.some(event => {
       if (!event.type.endsWith('.self')) return false;
       const kind = event.meta?.kind;
-      return kind === 'say' || kind === 'ask' ||
+      return (event.cursor > input && (kind === 'say' || kind === 'ask')) ||
         (kind === 'conversation-input' && typeof event.meta?.cursor === 'number' && event.meta.cursor > input);
     }) ? '' : reply;
   }
@@ -288,13 +330,18 @@ export class ChatSockets {
     return [...this.sockets].filter((s) => s.open).length;
   }
 
-  add(socket: WorldStreamSocket, onMessage: (msg: Meta, socket: WorldStreamSocket) => void): void {
-    this.sockets.add(socket);
+  add(socket: WorldStreamSocket, onMessage: (msg: Meta, socket: WorldStreamSocket) => void, waitForHello = false): void {
+    if (!waitForHello) this.sockets.add(socket);
     socket.onClose(() => this.sockets.delete(socket));
     socket.onMessage((raw) => {
       let msg: unknown;
       try { msg = JSON.parse(raw); } catch { return; }
-      if (msg && typeof msg === 'object') onMessage(msg as Meta, socket);
+      if (!msg || typeof msg !== 'object') return;
+      if (!this.sockets.has(socket)) {
+        if ((msg as Meta).t !== 'hello') return;
+        this.sockets.add(socket);
+      }
+      onMessage(msg as Meta, socket);
     });
   }
 

@@ -1,11 +1,11 @@
 body {
-  --phone-paper: var(--studio-bg);
-  --phone-ink: var(--studio-text);
-  --phone-soft: var(--studio-muted);
-  --phone-line: var(--studio-line);
-  --phone-accent: var(--studio-accent);
-  --phone-tint: var(--studio-tint);
-  --phone-panel: var(--studio-surface);
+  --phone-paper:var(--coo-bg);
+  --phone-ink:var(--coo-text);
+  --phone-soft:var(--coo-muted);
+  --phone-line:var(--coo-line);
+  --phone-accent:var(--coo-accent-ink);
+  --phone-tint:var(--coo-tint);
+  --phone-panel:var(--coo-surface);
 }
 .pet-space.pet-space-phone {
   border:0;
@@ -136,20 +136,25 @@ body[data-frame-dragging=resize], body[data-frame-dragging=resize] :is(.scene-gr
   overflow-wrap:anywhere;
   white-space:pre-wrap;
 }
-.phone-chat-history .bubble.heard:not([hidden]) {
+.phone-chat-voice {
+  display:grid;
+  justify-items:end;
+  margin-block-end:6px;
+}
+.phone-chat-voice:empty { display:none; }
+.phone-chat-voice .bubble.heard:not([hidden]) {
   position:relative;
   inset:auto !important;
-  justify-self:end;
   max-inline-size:89%;
-  background:var(--phone-tint);
-  color:var(--phone-ink);
-  border:1px solid var(--phone-line);
-  border-radius:13px 13px 4px 13px;
+  min-inline-size:0;
+  max-block-size:108px;
+  overflow:auto;
 }
 .phone-chat-message[hidden] { display:none; }
 .phone-chat-message[data-side=user] {
   justify-self:end;
-  background:var(--phone-tint);
+  background:var(--coo-said-bg);
+  color:var(--coo-said-ink);
   border-radius:13px 13px 4px 13px;
 }
 .phone-chat-message a { color:var(--phone-accent); }
@@ -162,6 +167,7 @@ body[data-frame-dragging=resize], body[data-frame-dragging=resize] :is(.scene-gr
 }
 .phone-chat-live > .bubble:is(.status,.fading):not([hidden]) { pointer-events:none; }
 .phone-chat-live .bubble::before, .phone-chat-live .bubble::after { display:none; }
+.phone-chat-live > .bubble:is(.say,.ask,.talk):not([hidden]) { border-color:var(--skin-ink); }
 .phone-chat-dock {
   position:relative;
   padding:8px 47px 9px 12px;
@@ -182,7 +188,7 @@ body[data-frame-dragging=resize], body[data-frame-dragging=resize] :is(.scene-gr
 .phone-chat-input { width:100%; min-height:40px; max-height:74px; resize:none; padding:9px 10px; field-sizing:content; }
 .phone-chat-send {
   height:40px; padding:0 13px; font:inherit; font-weight:650;
-  border:1px solid transparent; border-radius:10px; color:var(--phone-accent); background:var(--phone-tint); cursor:pointer;
+  border:1px solid transparent; border-radius:8px; color:var(--coo-surface); background:var(--coo-text); cursor:pointer;
 }
 .phone-chat-send:disabled { opacity:.5; cursor:default; }
 .phone-chat-mic {
@@ -218,9 +224,14 @@ body[data-frame-dragging=resize], body[data-frame-dragging=resize] :is(.scene-gr
   border-radius:18px;
   background:var(--phone-paper);
   color:var(--phone-ink);
-  box-shadow:0 12px 30px #1e162d27, 0 2px 7px #1e162d12;
+  box-shadow:0 12px 30px var(--coo-shadow), 0 2px 7px var(--coo-shadow);
   font-size:13px;
   animation:control-in 140ms ease-out;
+}
+.control-phone .scene-size-control {
+  --studio-text:var(--coo-text); --studio-muted:var(--coo-muted);
+  --studio-control-line:var(--coo-control-line); --studio-tint:var(--coo-tint);
+  --studio-accent:var(--coo-accent); --studio-action-ink:var(--phone-accent); --studio-focus:var(--phone-accent);
 }
 .control-phone-header {
   display:grid;
@@ -240,7 +251,7 @@ body[data-frame-dragging=resize], body[data-frame-dragging=resize] :is(.scene-gr
 .control-phone-header-tools { grid-column:3; grid-row:1; display:flex; align-items:center; gap:6px; }
 .control-phone-header-tools .control-phone-close { width:34px; height:34px; color:var(--phone-soft); }
 .control-phone-connection { width:7px; height:7px; border-radius:50%; background:var(--phone-soft); }
-.control-phone-connection[data-online=true] { background:var(--skin-eye, #3a997c); }
+.control-phone-connection[data-online=true] { background:var(--coo-accent); }
 .control-phone-icon, .control-phone-row, .control-phone-shortcut {
   font:inherit; color:inherit; border:0; background:none; cursor:pointer;
 }
@@ -274,20 +285,47 @@ body[data-frame-dragging=resize], body[data-frame-dragging=resize] :is(.scene-gr
   background:var(--phone-panel);
 }
 .control-phone-group:last-child { margin-block-end:0; }
+.control-phone-scene-grid {
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:7px;
+}
+.control-phone-scene-app {
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr);
+  align-items:center;
+  align-content:center;
+  gap:3px 8px;
+  min-width:0;
+  min-height:62px;
+  padding:9px;
+  border:1px solid transparent;
+  border-radius:11px;
+  background:var(--phone-panel);
+  text-align:start;
+  overflow-wrap:anywhere;
+}
+.control-phone-scene-app .control-phone-value { grid-column:2; }
+.control-phone-scene-app[data-current=true] {
+  border-color:color-mix(in srgb,var(--phone-accent) 50%,transparent);
+  background:var(--phone-tint);
+  color:var(--phone-accent);
+}
+.control-phone-scene-detail { display:grid; gap:8px; padding:1px; }
+.control-phone-scene-detail > .control-phone-row {
+  box-shadow:none;
+  background:var(--phone-panel);
+}
+.control-phone-scene-detail > .control-phone-scene-enter {
+  font-weight:650;
+  background:var(--phone-tint);
+  color:var(--phone-accent);
+}
 .control-phone-items:not(.control-app-grid) .control-phone-danger, .control-phone-group .control-phone-danger { color:var(--phone-accent); }
 .control-phone-value, .control-phone-empty { color:var(--phone-soft); font-size:12px; }
 .control-phone-empty, .control-phone-description { padding:5px 8px; margin:0; }
 .control-phone-description { color:var(--phone-soft); font-size:11px; line-height:1.45; overflow-wrap:anywhere; }
-.control-phone-switch {
-  position:relative; inline-size:30px; block-size:17px; flex:none; margin-inline-start:auto;
-  border-radius:99px; background:var(--phone-line);
-}
-.control-phone-switch::before {
-  content:""; position:absolute; inset:3px auto 3px 3px; inline-size:11px;
-  background:var(--phone-panel); border-radius:50%;
-}
-[aria-checked=true] .control-phone-switch { background:var(--phone-accent); }
-[aria-checked=true] .control-phone-switch::before { inset-inline-start:16px; }
+.control-phone-row > .control-toggle { margin-inline-start:auto; }
 .control-phone-entry-arrow { transform:scaleX(-1); color:var(--phone-soft); }
 .control-phone .control-phone-entry-arrow svg { width:14px; height:14px; }
 .control-phone-items { display:grid; gap:6px; padding:1px; }
@@ -337,9 +375,10 @@ body[data-frame-dragging=resize], body[data-frame-dragging=resize] :is(.scene-gr
 .control-phone-shortcut[hidden] { display:none; }
 .control-phone-shortcut .ic { position:relative; }
 .control-phone-shortcut[aria-current=page] { color:var(--phone-accent); background:var(--phone-tint); }
-:is(.control-phone button:not(:disabled):not([aria-current]), .phone-chat-controls, .phone-chat-close:not(:disabled), .phone-chat-send:not(:disabled), .phone-chat-mic):hover {
+:is(.control-phone button:not(:disabled):not([aria-current]), .phone-chat-controls, .phone-chat-close:not(:disabled), .phone-chat-mic):hover {
   background:color-mix(in srgb,var(--phone-tint) 55%,transparent);
 }
+.phone-chat-send:not(:disabled):hover { background:color-mix(in srgb,var(--coo-text) 86%,var(--coo-accent)); }
 :is(.control-phone,.pet-phone-chat) :is(button,input,textarea,select,.phone-chat-log):focus-visible {
   outline:2px solid var(--phone-accent); outline-offset:-2px;
 }

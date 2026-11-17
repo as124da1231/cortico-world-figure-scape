@@ -94,15 +94,16 @@ export function createWallpaperPresentation({body,scene,surface,wallpaper}) {
   function post(message) { if (media?.tagName==='IFRAME') media.contentWindow?.postMessage(message,'*'); }
   function playback() {
     const paused=!!options.paused||!committed||!shown||doc.hidden;
+    const volume=paused?0:options.volume??0;
     screen.style.setProperty('--wallpaper-fit',options.fit==='contain'?'contain':'cover');
     screen.style.setProperty('--wallpaper-scale',options.scale??1);
     if (paused||!options.interactive) releasePointer();
     if (media?.tagName==='VIDEO') {
-      media.volume=options.volume??0;
-      media.muted=!committed||!options.volume;
+      media.volume=volume;
+      media.muted=volume===0;
       if(paused)media.pause();
       else void media.play().catch(()=>{});
-    } else post({type:'live2d-wallpaper-options',paused,fit:options.fit,volume:committed?options.volume:0});
+    } else post({type:'live2d-wallpaper-options',paused,fit:options.fit,volume});
   }
   function attach(node) { media=node;screen.replaceChildren(node);return node; }
   function awaitMedia(node, signal, event, timeout=4500) {
@@ -204,6 +205,7 @@ export function createWallpaperPresentation({body,scene,surface,wallpaper}) {
       }
       const node=doc.createElement('iframe');
       node.setAttribute('sandbox','allow-scripts');
+      node.allow='autoplay';
       node.title=t('壁纸画面','Wallpaper artwork');node.tabIndex=-1;
       attach(node);
       const first=awaitMedia(node,signal,'message',13500);

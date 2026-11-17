@@ -59,7 +59,11 @@ export function createDraftActionTransport(post, { timeoutMs = 2500 } = {}) {
       return new Promise((resolve, reject) => {
         const ticket = ++seq;
         pending = { ticket, command, requestId, resolve, reject,
-          timer: setTimeout(() => fail(Error('Draft action acknowledgement timed out')), timeoutMs) };
+          timer: setTimeout(() => {
+            const error = Error('Draft action acknowledgement timed out');
+            error.name = 'DraftActionTimeout';
+            fail(error);
+          }, timeoutMs) };
         try { post({ t: 'body-draft-action', seq: ticket, command, requestId }); } catch (error) { fail(error); }
       });
     },
@@ -72,7 +76,10 @@ export function createDraftActionTransport(post, { timeoutMs = 2500 } = {}) {
       const { report } = receipt;
       const { command, requestId, timer, resolve } = pending;
       const expected = command.kind === 'play' ? 'playing' : 'stopped';
-      if (report?.supported !== true || report.requestId !== requestId || report.owner !== command.owner || report.status !== expected) return;
+      if (report?.supported !== true || report.requestId !== requestId || report.owner !== command.owner || report.status !== expected) {
+        fail(Error('Draft action receipt did not match the request'));
+        return;
+      }
       clearTimeout(timer);
       pending = null;
       state = { supported: true, status: expected, requestId, owner: command.owner };

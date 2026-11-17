@@ -43,7 +43,10 @@ export function createControlPhone({ root, text, command, scenes, helpers }) {
     return el;
   }
 
-  const back = button(text('返回上一级', 'Back to section'), 'back', () => void navigate(sectionOf(page)), 'control-phone-icon');
+  const back = button(text('返回上一级', 'Back to section'), 'back', () => {
+    if (openedScene) showScene(null);
+    else void navigate(sectionOf(page));
+  }, 'control-phone-icon');
   back.classList.add('control-phone-back');
   back.setAttribute('aria-label', text('返回上一级', 'Back to section'));
   const close = button(text('关闭操作台', 'Close controls'), 'close', helpers.close, 'control-phone-icon');
@@ -66,7 +69,7 @@ export function createControlPhone({ root, text, command, scenes, helpers }) {
   dock.setAttribute('aria-label', text('桌宠操作分类', 'Pet control sections'));
   const shortcuts = Object.entries(CONTROL_SECTIONS).map(([id, section]) => {
     const item = button(text(...section.label), section.icon, () => {
-      if (page !== id) void navigate(id, false);
+      if (page !== id || openedScene) void navigate(id, false);
     }, 'control-phone-shortcut');
     item.dataset.section = id;
     dock.append(item);
@@ -82,7 +85,7 @@ export function createControlPhone({ root, text, command, scenes, helpers }) {
   let feedbackTimer = 0;
   let sceneFeedback = null;
   let state = null, fault = '', busy = false;
-  let sceneOrder = null, appStatus = null;
+  let sceneOrder = null, openedScene = null, sceneListScroll = 0, appStatus = null;
   let position = null, placementKey = '';
   let filter = '';
   let outfitDraft = null;
@@ -105,7 +108,9 @@ export function createControlPhone({ root, text, command, scenes, helpers }) {
     }
   }
 
-  const size = createModelSizeControl({ doc, text, mode: helpers.mode, ...helpers.size, report: note });
+  const size = createModelSizeControl({
+    doc, text, mode: () => openedScene && openedScene in scenes ? openedScene : helpers.mode(), ...helpers.size, report: note,
+  });
 
   const compositionDetails = node('details','wallpaper-placement-details');
   const compositionSummary = node('summary','');
@@ -138,6 +143,7 @@ export function createControlPhone({ root, text, command, scenes, helpers }) {
     closeComposition();
     size.stopPreview();
     helpers.cancelVoice();
+    openedScene = null;
     page = app;
     const generation = ++epoch;
     state = null; fault = ''; busy = false; appStatus = null; filter = '';
@@ -366,31 +372,74 @@ export function createControlPhone({ root, text, command, scenes, helpers }) {
   }
 
   function switchIndicator(el) {
-    const indicator = node('span', 'control-phone-switch');
+    const indicator = node('span', 'control-toggle');
     indicator.setAttribute('aria-hidden', 'true');
     el.setAttribute('role', 'switch');
     el.append(indicator);
   }
 
   function renderScenes() {
-    const choices = node('div', 'control-phone-group');
-    choices.setAttribute('aria-label', text('切换场景', 'Switch scene'));
-    for (const [id, scene] of Object.entries(scenes)) {
-      const el = choice(text(...scene.label), scene.icon, () => helpers.selectScene(id), id === helpers.mode(), sceneOrder?.mode === id ? text('切换中', 'Switching') : '');
+    const choices = node('div', 'control-phone-scene-grid');
+    choices.setAttribute('aria-label', text('场景', 'Scenes'));
+    const available = [...Object.entries(scenes), ...(helpers.openCabin ? [['cabin', cabinScene()]] : [])];
+    for (const [id, scene] of available) {
+      const el = button(text(...scene.label), scene.icon, () => showScene(id), 'control-phone-scene-app');
       el.dataset.scene = id;
-      el.disabled = id === helpers.mode() || !!sceneOrder;
+      const current = id === helpers.mode();
+      el.dataset.current = String(current);
+      if (current || sceneOrder?.mode === id) {
+        const badge = node('small', 'control-phone-value');
+        badge.textContent = current ? text('使用中','In use') : text('正在准备','Preparing');
+        el.append(badge);
+      }
       choices.append(el);
     }
-    if (scenes.wallpaper && helpers.openWallpapers) {
-      choices.append(choice(text('打开壁纸库','Open wallpaper library'),scenes.wallpaper.icon,helpers.openWallpapers,false,''));
+    return choices;
+  }
+
+  function cabinScene() {
+    return {label:['小屋世界','Cabin World'], icon:scenes.room?.icon ?? 'room'};
+  }
+
+  function showScene(next) {
+    const from = openedScene;
+    if (next) sceneListScroll = content.scrollTop;
+    closeComposition();
+    size.stopPreview();
+    helpers.cancelVoice();
+    openedScene = next;
+    note('');
+    render();
+    content.scrollTop = next ? 0 : sceneListScroll;
+    const tile = from && !next ? content.querySelector('[data-scene="' + from + '"]') : null;
+    (tile ?? title).focus({preventScroll:true});
+  }
+
+  function renderSceneDetails(id) {
+    const detail = node('div','control-phone-scene-detail');
+    if (id === 'cabin') {
+      detail.append(button(text('进入小屋世界','Enter Cabin World'), 'play', helpers.enterCabin, 'control-phone-row control-phone-scene-enter'),
+        button(text('住户与活动设置','Resident and activity settings'), 'settings', helpers.openCabin));
+      return detail;
+    }
+    const current = id === helpers.mode();
+    const pending = sceneOrder?.mode === id;
+    const enter = button(current ? text('使用中','In use') : pending ? text('正在进入…','Entering…') : text('进入场景','Enter scene'),
+      scenes[id].icon, () => helpers.selectScene(id), 'control-phone-row control-phone-scene-enter');
+    enter.disabled = current || !!sceneOrder;
+    enter.dataset.scene = id;
+    detail.append(enter, size.element);
+    size.sync();
+    if (id === 'wallpaper' && helpers.openWallpapers) {
+      detail.append(button(text('壁纸库','Wallpaper library'),scenes.wallpaper.icon,helpers.openWallpapers));
     }
     const wallpaper = helpers.wallpaper?.current();
-    if (wallpaper?.id && composition) {
+    if (id === 'wallpaper' && wallpaper?.id && composition) {
       composition.sync(wallpaper);
-      choices.append(compositionDetails);
+      detail.append(compositionDetails);
     }
-    if (sceneOrder) note(text('正在切换场景…', 'Switching views…'), 'pending');
-    return choices;
+    if (pending) note(text('正在切换场景…', 'Switching views…'), 'pending');
+    return detail;
   }
 
   function renderComponent(id) {
@@ -450,20 +499,22 @@ export function createControlPhone({ root, text, command, scenes, helpers }) {
   function render() {
     renderedMode = helpers.mode();
     root.dataset.app = page;
-    back.hidden = !DETAILS[page];
-    title.textContent = text(...(DETAILS[page] ? CONTROL_COMPONENTS[DETAILS[page].component] : CONTROL_SECTIONS[page]).label);
+    back.hidden = !openedScene && !DETAILS[page];
+    title.textContent = text(...(openedScene ? (scenes[openedScene] ?? cabinScene()) : DETAILS[page]
+      ? CONTROL_COMPONENTS[DETAILS[page].component] : CONTROL_SECTIONS[page]).label);
     for (const item of shortcuts) {
       if (item.dataset.section === sectionOf(page)) item.setAttribute('aria-current', 'page');
       else item.removeAttribute('aria-current');
     }
     content.replaceChildren();
-    if (layout.pages[page]) renderSection(layout.pages[page]);
+    if (openedScene) content.append(renderSceneDetails(openedScene));
+    else if (layout.pages[page]) renderSection(layout.pages[page]);
     else if (['size', 'scenes', 'through', 'close'].includes(page)) {
       if (page === 'through' || page === 'close') {
         const hint = node('p','control-phone-description');
         hint.textContent = page === 'through'
           ? text('启用后，鼠标会直接操作桌宠后面的窗口。可以在 Coo 的运行详情恢复。','Clicks go to the window behind the pet. Restore input in Coo’s runtime details.')
-          : text('关闭 Live2D 桌宠窗口。可以从 Coo 的工作台再次启动。','Close the Live2D pet window. You can reopen it from the Coo workbench.');
+          : text('关闭梦境窗口后，可从工作台再次启动。','You can reopen the Figure Scape window from the workbench.');
         content.append(hint);
       }
       renderSection([DETAILS[page].component]);
@@ -545,7 +596,7 @@ export function createControlPhone({ root, text, command, scenes, helpers }) {
       if (!root.hidden && layout.pages[page]) { helpers.cancelVoice(); size.stopPreview(); render(); }
     },
     scene(pending, feedback) {
-      const hasScenes = page === 'scenes' || layout.pages[page]?.includes('scenes');
+      const hasScenes = openedScene || page === 'scenes' || layout.pages[page]?.includes('scenes');
       const newFeedback = sceneFeedback !== feedback;
       sceneFeedback = feedback;
       if (sceneOrder !== pending) {

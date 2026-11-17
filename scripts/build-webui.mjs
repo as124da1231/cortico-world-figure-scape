@@ -31,6 +31,7 @@ const result = await esbuild.build({
   format: 'esm',
   target: 'es2022',
   platform: 'browser',
+  loader: {'.webp': 'dataurl'},
   minify: true,
   sourcemap: true,
   metafile: true,

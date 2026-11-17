@@ -8,6 +8,7 @@ export function createMediaSpeech({ audio, report = () => {}, level = () => {}, 
   function finish(clip, status, reason) {
     if (active !== clip) return;
     active = null;
+    clearTimeout(clip.preparation);
     clip.controller.abort();
     if (clip.node) {
       clip.node.onended = null;
@@ -25,6 +26,7 @@ export function createMediaSpeech({ audio, report = () => {}, level = () => {}, 
       if (active) finish(active, 'cancelled', 'replaced');
       const clip = { id, cues, face, state: 'preparing', controller: new AbortController(), position: 0, duration: 0 };
       active = clip;
+      clip.preparation = setTimeout(() => finish(clip, 'failed', 'Speech preparation timed out'), 12_000);
       latest = { id, status: 'preparing' };
       report(latest);
       if (wantsPlan && !cues?.length) {
@@ -41,7 +43,7 @@ export function createMediaSpeech({ audio, report = () => {}, level = () => {}, 
       void (async () => {
         const output = audio.speechOutput();
         if (!output) throw Error('Desktop audio is unavailable');
-        const signal = AbortSignal.any([clip.controller.signal, AbortSignal.timeout(12_000)]);
+        const signal = clip.controller.signal;
         const response = await read(id, signal);
         if (!response.ok) throw Error('Speech synthesis failed');
         const bytes = await response.arrayBuffer();
@@ -88,6 +90,7 @@ export function createMediaSpeech({ audio, report = () => {}, level = () => {}, 
   };
 
   function markStarted(clip) {
+    clearTimeout(clip.preparation);
     clip.state = 'started';
     clip.started = true;
     latest = { id: clip.id, status: 'started', duration: clip.duration };

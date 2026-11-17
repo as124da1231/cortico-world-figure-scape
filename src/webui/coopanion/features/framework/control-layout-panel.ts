@@ -5,8 +5,10 @@ import {
   allowsControl, controlPanelSize, defaultControlLayout, CONTROL_PANEL_LIMITS,
   type ControlId, type ControlLayout, type ControlLayoutState, type ControlPage, type ControlPanelSize, type ControlTarget,
 } from '../../../../../web/framework/control-layout.js';
+import { sceneScale, sceneSizePosition } from '../../../../../web/framework/model-size.js';
 import { ICONS } from '../../../../../web/icons.js';
 import type { NotificationKind } from './notifications.ts';
+import type { RuntimeState } from './runtime.ts';
 
 type Selection = { id: ControlId; target: ControlTarget };
 type Draft = { saved: ControlLayoutState; value: ControlLayout; history: ControlLayout[]; page: ControlPage };
@@ -57,11 +59,13 @@ export function controlLayoutPanel(ctx: PageContext, notify: Notify) {
   const sizeReadout = node('span', '', 'layout-panel-size');
   middleHeading.append(node('h2', t('右键操作台', 'Right-click controls')), sizeReadout);
   const previewStage = node('div', '', 'layout-panel-preview');
+  previewStage.style.maxInlineSize = CONTROL_PANEL_LIMITS.maxWidth + 16 + 'px';
   const mock = node('div', '', 'layout-control-phone');
   const mockHeader = node('div', '', 'layout-phone-header');
   const mockTitle = node('strong');
   const chrome = node('span', '', 'layout-phone-chrome');
-  chrome.append(node('span', '', 'layout-online'), icon('close'));
+  const lamp = node('span', '', 'layout-online');
+  chrome.append(lamp, icon('close'));
   chrome.setAttribute('aria-hidden', 'true');
   mockHeader.append(mockTitle, chrome);
   const canvas = node('div', '', 'layout-phone-canvas');
@@ -92,7 +96,7 @@ export function controlLayoutPanel(ctx: PageContext, notify: Notify) {
 
   const aside = node('section', '', 'layout-editor-aside');
   const railHeader = node('div', '', 'layout-rail-header');
-  const visibility = node('input');
+  const visibility = node('input', '', 'control-toggle');
   visibility.type = 'checkbox';
   visibility.setAttribute('role', 'switch');
   visibility.setAttribute('aria-label', t('显示靠近按钮', 'Show hover buttons'));
@@ -202,16 +206,37 @@ export function controlLayoutPanel(ctx: PageContext, notify: Notify) {
     if (from === 'apps') el.classList.add('control-app-tile');
     if (from && from !== 'rail' && from !== 'apps' && id === 'size') {
       const meter = node('span', '', 'layout-size-preview');
-      meter.append(node('span', '100%'));
+      meter.append(node('span'));
       el.append(meter);
     }
     if (from && from !== 'rail' && from !== 'apps' && (id === 'sound' || id === 'hoverVisibility')) {
-      const indicator = node('span', '', 'layout-switch-preview');
+      const indicator = node('span', '', 'control-toggle');
       indicator.setAttribute('aria-hidden', 'true');
       el.append(indicator);
     }
     if (from && from === selection?.target && id === selection.id) el.setAttribute('aria-pressed', 'true');
     return el;
+  }
+  let runtime: RuntimeState | undefined;
+  function reflectRuntime(next: RuntimeState) {
+    runtime = next;
+    const theme = next.theme ?? '';
+    mock.dataset.theme = rail.dataset.theme = theme;
+    lamp.dataset.online = String(next.onDesktop === true && next.bodyReady === true);
+    drawPreviewValues();
+  }
+  function drawPreviewValues() {
+    const meter = canvas.querySelector<HTMLElement>('.layout-size-preview');
+    if (meter && runtime) {
+      const mode = runtime.presentation?.applied ?? runtime.presentation?.desired ?? 'desktop';
+      const scale = sceneScale(mode, runtime.presentationScales?.[mode]);
+      meter.firstElementChild!.textContent = Math.round(scale * 100) + '%';
+      meter.style.setProperty('--size-fill', sceneSizePosition(mode, scale) * 100 + '%');
+    }
+    for (const toggle of canvas.querySelectorAll<HTMLElement>('[data-control] > .control-toggle')) {
+      const checked = toggle.parentElement?.dataset.control === 'sound' ? runtime?.sound : draft?.value.hoverVisible;
+      toggle.dataset.checked = String(checked === true);
+    }
   }
   function renderLibrary() {
     const query = search.value.trim().toLocaleLowerCase();
@@ -253,6 +278,7 @@ export function controlLayoutPanel(ctx: PageContext, notify: Notify) {
     canvas.dataset.drop = page;
     canvas.classList.toggle('control-app-grid',page === 'apps');
     canvas.replaceChildren(...value.pages[page].map(id => item(id, page)));
+    drawPreviewValues();
     if (!canvas.childElementCount) canvas.append(node('p', t('拖组件到此处','Drop controls here'), 'layout-empty'));
     railPreview.replaceChildren(...value.rail.map(id => item(id, 'rail')));
     railPreview.hidden = !value.rail.length;
@@ -414,5 +440,5 @@ export function controlLayoutPanel(ctx: PageContext, notify: Notify) {
   }, { signal });
   element.addEventListener('dragend', () => { dragging = undefined; clearMark(); }, { signal });
   render();
-  return { element, read };
+  return { element, read, reflectRuntime };
 }

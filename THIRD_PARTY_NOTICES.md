@@ -27,6 +27,14 @@ Electron 44.4.4,从 [electron/electron releases](https://github.com/electron/ele
 
 桌宠窗口、身体 Kit 和 Coo 面板基础来自 [Coopanion Desktop Pet](https://github.com/Pal-AI-Lab/Coopanion)。`src/webui/coopanion/` 基于 Coopanion 0.2.19 的控制台组件，`src/asr/address.ts` 来自 Coo Provider。派生代码按 AGPL-3.0-or-later 提供。
 
+梦境的气泡与快捷控件复用 Coopanion 0.2.21 桌宠 `web/pet.css` 的浅色、深色与气泡造型，以及 `web/ui.js` 的线条图标。
+
+## Figure Pet
+
+`src/phone-link/` 的局域网协议、配对、会话与角色转发来自 Figure Pet 的 `coo-link`，按 AGPL-3.0-or-later 提供。应用的 Android 安装包包含 AndroidX WebKit 和 [ZXing Android Embedded](https://github.com/journeyapps/zxing-android-embedded)，采用 Apache-2.0。
+
+局域网连接使用 `node-forge`（BSD-3-Clause）、`qrcode`（MIT）与 `acorn`（MIT）。
+
 ## 其他运行时依赖
 
 - `ws`:MIT
@@ -35,7 +43,7 @@ Electron 44.4.4,从 [electron/electron releases](https://github.com/electron/ele
 - [jpeg-js](https://github.com/jpeg-js/jpeg-js) (角色资源与预览转换): BSD-3-Clause
 
 - [rot.js 2.2.1](https://github.com/ondras/rot.js/tree/v2.2.1) 的四向 A* 打包在 `web/vendor/rot-astar.js`。版权和 BSD-3-Clause 许可随 `web/vendor/rot-astar.LICENSE.txt` 提供。
-- [pngjs](https://github.com/pngjs/pngjs) 用于缩小取证贴图，MIT 许可。
+- [pngjs](https://github.com/pngjs/pngjs) 用于裁取小屋世界角色封面和处理取证贴图，MIT 许可。
 
 ## Live2D 数据准备与表现代码
 
@@ -45,7 +53,7 @@ Electron 44.4.4,从 [electron/electron releases](https://github.com/electron/ele
 
 资源域的封面渲染、动作取证规则和 Cubism 缓存准备、音频域的语音服务与编排服务适配复用本机 Figure 4.1.0 的实现，按 AGPL-3.0-or-later 保留。桌宠通过独立窗口运行，语音通过本 World 的播放时钟接入现有表现规则。
 
-Live2D Cubism Core、Framework 和着色器由本机 SDK 缓存提供。相应的许可文本见 `live2d-runtime/pack/sdk/`。用户模型及贴图遵循各自的作者许可。公开分发时另需核对 Live2D 的 SDK Release License 和可扩展应用规则。 [Live2D 官方说明](https://www.live2d.com/en/sdk/license/)
+Live2D Cubism Core、Framework 和着色器由本机 SDK 缓存提供。相应的许可文本见 `live2d-runtime/pack/sdk/`。用户模型及贴图遵循各自的作者许可。 [Live2D 官方说明](https://www.live2d.com/en/sdk/license/)
 
 ## 小屋场景
 
@@ -54,6 +62,12 @@ Live2D Cubism Core、Framework 和着色器由本机 SDK 缓存提供。相应�
 ## 壁纸场景
 
 壁纸运行使用 WebWallGL 3.0.2（MIT）和 Mediabunny 1.66.0（MPL-2.0）。`dist/` 随附两份许可。Mediabunny 的对应源码根据 `v1.66.0` 标签获取，发布构建使用依赖原件。用户添加的 Wallpaper Engine 项目及本机图片、视频遵循各自素材许可。 [WebWallGL 源码](https://github.com/oneincase/webwallgl) · [Mediabunny 对应源码](https://github.com/Vanilagy/mediabunny/tree/v1.66.0)
+
+## Cabin World by VADS
+
+`cabin-runtime/` 随附 Cabin World 1.1.0 的 Windows 导出、桥接和可导入的像素角色素材。代码为 MIT，美术和游戏数据为 CC BY 4.0。内置导出用上游的团团造型替换 Naiwa 店员像素图。上游许可和 Godot 引擎的署名、许可及第三方声明放在同一目录。 [上游发布](https://github.com/BabyBus2022/cabin-world/releases/tag/V1.1.0) · [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+
+场景面板的小屋封面是上述大肥鱼小屋背景的缩小版。小屋世界封面使用 VADS 的 Cabin World 1.1.0 应用图标，缩小并转为 WebP。
 
 ## 本包的许可
 

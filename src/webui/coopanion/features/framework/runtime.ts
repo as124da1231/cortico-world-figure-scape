@@ -6,6 +6,7 @@ import type { HostState } from '../../../../window-host.ts';
 import type { WindowCompatibility } from '../../../../framework/window-compatibility.ts';
 import { errorText, studioControls, studioText as t } from './controls.ts';
 import type { SettingsState, SpeechState } from './settings-panels.ts';
+import { sceneTile } from './scene-workspace.ts';
 
 type Presentation = {
   desired: PresentationMode;
@@ -14,11 +15,12 @@ type Presentation = {
   visible?: boolean;
   operation?: { operationId: string; phase: string; mode: PresentationMode } | null;
   error: string | null;
-  details?: { rect?: { width?: number; height?: number; w?:number; h?:number }; view?: {width?:number;height?:number}; stage?: {width?:number;height?:number}; wallpaper?: {title?:string;kind?:string;paused?:boolean} } | null;
+  details?: { rect?: { width?: number; height?: number; w?:number; h?:number }; view?: {width?:number;height?:number}; stage?: {width?:number;height?:number}; wallpaper?: {id?:string;title?:string;kind?:string;paused?:boolean} } | null;
 };
 export type RuntimeState = {
   inWindow: boolean;
   theme?: string;
+  sound?: boolean;
   presentationScales?: Record<PresentationMode, number>;
   fontSize?: number;
   bubbleSize?: number;
@@ -30,7 +32,9 @@ export type RuntimeState = {
   windowHint?: string | null;
   windowCompatibility?: WindowCompatibility;
   overlayUrl?: string | null;
+  activeScene?: PresentationMode | 'cabin-world' | null;
   presentation?: Presentation;
+  cabinWorld?: { phase: string; presented?: boolean };
   previousModelUnavailable?: boolean;
   skin: PetSkin;
   figureLabel?: string;
@@ -62,9 +66,18 @@ const targets: Record<string, string> = {
   sofa: t('沙发', 'Sofa'), bed: t('床', 'Bed'),
 };
 export const modeLabel = (mode?: PresentationMode | null) => mode ? modes[mode][0] : '—';
-export const windowLabel = (state: RuntimeState) => state.onDesktop ? t('显示中', 'Visible')
+export function visibleScene(state: RuntimeState) {
+  if (state.activeScene !== undefined) return state.activeScene;
+  if (state.cabinWorld?.phase === 'active' && state.cabinWorld.presented !== false) return 'cabin-world';
+  return state.onDesktop && state.bodyReady !== false ? state.presentation?.applied ?? null : null;
+}
+export const windowLabel = (state: RuntimeState) => visibleScene(state) === 'cabin-world' ? t('小屋世界运行中', 'Cabin World is running')
+  : state.onDesktop ? t('显示中', 'Visible')
   : state.inWindow ? t('已隐藏', 'Hidden')
-    : state.window?.phase === 'running' ? t('正在连接', 'Connecting') : t('未启动', 'Closed');
+    : state.window?.phase === 'running' ? t('正在连接', 'Connecting')
+      : state.window?.phase === 'missing' ? t('缺少窗口运行时', 'Window runtime required')
+        : state.window?.phase === 'error' || state.window?.reason?.kind === 'exited' ? t('窗口启动失败', 'Window failed')
+          : t('未启动', 'Closed');
 
 function reason(code: string) {
   const names: Record<string, string> = {
@@ -79,13 +92,14 @@ function reason(code: string) {
   return names[code] ?? code;
 }
 
-function windowAction(state: RuntimeState) {
+function windowAction(state: RuntimeState, timedOut: boolean) {
+  if (visibleScene(state) === 'cabin-world') return { method: 'openWindow', label: t('返回梦境窗口', 'Return to Figure Scape window') };
   if (state.onDesktop) return { method: 'hideWindow', label: t('隐藏梦境', 'Hide Figure Scape') };
   if (state.inWindow) return { method: 'openWindow', label: t('显示梦境', 'Show Figure Scape') };
-  if (state.window?.phase === 'running') return { method: null, label: t('正在连接…', 'Connecting…') };
-  if (state.window?.phase === 'error' || state.window?.reason?.kind === 'exited') {
+  if (timedOut || state.window?.phase === 'error' || state.window?.reason?.kind === 'exited') {
     return { method: 'recoverWindow', label: t('重试启动', 'Retry launch') };
   }
+  if (state.window?.phase === 'running') return { method: null, label: t('正在连接…', 'Connecting…') };
   if (state.window?.phase === 'missing') return { method: null, label: t('修复启动', 'Fix launch') };
   return { method: 'openWindow', label: t('启动梦境', 'Start Figure Scape') };
 }
@@ -93,55 +107,69 @@ function windowAction(state: RuntimeState) {
 export function runtimeControls(ctx: PageContext, refresh: () => Promise<void>, notify: (message: string) => void) {
   const c = studioControls(ctx);
 
-  const view = c.section(t('窗口', 'Window'));
+  const view = c.node('section', '', 'studio-runtime-overview');
+  const overview = c.node('div', '', 'studio-runtime-overview-line');
   const status = c.status('studio-runtime-state');
-  const tools = c.node('div', '', 'studio-inline');
-  const windowFeedback = c.status();
+  status.textContent = t('正在读取运行状态…', 'Reading runtime status…');
+  const lamp = c.node('span', '', 'studio-runtime-indicator');
+  lamp.setAttribute('aria-hidden', 'true');
+  const tools = c.node('div', '', 'studio-runtime-actions');
+  const feedback = c.status('studio-runtime-feedback');
+  const artifactFeedback = c.status('studio-runtime-feedback');
   const detail = c.dialog(t('运行详情', 'Runtime details'), 'studio-runtime-dialog');
-  const detailList = c.node('dl', '', 'studio-data');
-  const detailFeedback = c.status();
-  detail.body.append(detailList, detailFeedback);
+  const detailList = c.node('dl', '', 'studio-runtime-facts');
+  const facts = Array.from({length:3}, () => {
+    const row = c.node('div'), key = c.node('dt'), value = c.node('dd');
+    row.hidden = true;
+    row.append(key,value);
+    detailList.append(row);
+    return {row,key,value};
+  });
+  function writeText(element: HTMLElement, message: string) {
+    if (element.textContent !== message) element.textContent = message;
+  }
 
 
   let current: RuntimeState | undefined;
-  let onDetails: (() => void) | undefined;
   let openWallpaper: ((opener?: HTMLElement) => void) | undefined;
   let wallpaperSelected: (() => boolean) | undefined;
-  let roomArtUrl = '';
   let pending = '';
   let waitingForVisibility: boolean | null = null;
   let visibilityTimer: number | undefined;
-  let watchingLaunch = false;
+  let connectionTimer: number | undefined;
+  let launchWait = false, timedOut = false, commandFeedback = '';
   const win = c.doc.defaultView!;
-  ctx.signal.addEventListener('abort', () => win.clearTimeout(visibilityTimer), { once: true });
-  function openDetails() {
+  ctx.signal.addEventListener('abort', () => {
+    win.clearTimeout(visibilityTimer);
+    win.clearTimeout(connectionTimer);
+  }, { once: true });
+  function openDetails(opener?: HTMLElement) {
     renderDetails();
-    if (detail.open()) onDetails?.();
+    detail.open(opener);
   }
-  const install = c.button(t('安装窗口运行时', 'Install window runtime'), () => void change('installElectron'));
-  detail.body.append(install);
-
   function command(name: string, label: string, primary = false) {
     return c.button(label, () => void change(name), primary);
   }
 
   const launch = c.button(t('启动梦境', 'Start Figure Scape'), () => {
     if (!current) return;
-    const action = windowAction(current);
+    const action = windowAction(current, timedOut);
     if (!action.method) { openDetails(); return; }
     void change(action.method, [], true);
   }, true);
   launch.classList.add('studio-runtime-launch');
-
-  const close = command('closeWindow', t('关闭 Live2D', 'Close Live2D'));
+  const primary = c.button(t('启动梦境', 'Start Figure Scape'), () => {
+    const method = current && windowAction(current, timedOut).method;
+    if (method) void change(method);
+  }, true);
+  const close = command('closeWindow', t('关闭窗口', 'Close window'));
   const pass = c.button(t('启用鼠标穿透', 'Enable click-through'), () => void change('setClickThrough', [!current?.clickThrough]));
-  const recover = command('recoverWindow', t('重试启动', 'Retry launch'));
+  const install = command('installElectron', t('安装窗口运行时', 'Install window runtime'), true);
   const statusOf = (phase?: string) => phase === 'ready' ? t('已安装', 'Installed')
     : phase === 'working' ? t('正在安装', 'Installing') : phase === 'error' ? t('安装失败', 'Installation failed')
       : phase === 'missing' || phase === 'absent' ? t('尚未安装', 'Not installed') : phase ?? '—';
   const meter = c.node('progress');
   meter.setAttribute('aria-label', t('窗口运行时安装进度', 'Window runtime installation progress'));
-  detail.body.append(meter);
   const scene = c.section(t('在小屋里移动', 'Move around the room'));
   const sceneButtons = c.node('div', '', 'studio-inline');
   const sceneStatus = c.status();
@@ -153,35 +181,29 @@ export function runtimeControls(ctx: PageContext, refresh: () => Promise<void>, 
   let sceneSending = false;
   let targetKey = '';
   let modeRequest: { id: string; mode: PresentationMode } | null = null;
-  const presentation = c.section(t('选择场景', 'Choose a scene'));
-  presentation.classList.add('studio-scene-selector');
-  const cards = c.node('div', '', 'studio-mode-grid');
+  let openedMode: PresentationMode | undefined;
+  let openScene: (mode: PresentationMode) => void = () => {};
   const modeStatus = c.status();
   const sceneViewport = c.status();
-  const retryMode = c.button(t('重试切换', 'Retry switch'), () => { if (lastMode) void chooseMode(lastMode); });
-  let lastMode: PresentationMode | undefined;
+  const failures = new Map<PresentationMode, string>();
   const cancelMode = c.button(t('取消切换', 'Cancel switch'), () => {
     if (!modeRequest) return;
+    const {id, mode} = modeRequest;
     cancelMode.disabled = true;
-    void c.call('operation.cancel', [modeRequest.id]).catch(error => {
-      if (!ctx.signal.aborted) modeStatus.textContent = errorText(error);
+    void c.call('operation.cancel', [id]).catch(error => {
+      if (!ctx.signal.aborted) {
+        failures.set(mode, errorText(error));
+        if (current) render(current);
+      }
     }).finally(() => { if (!ctx.signal.aborted) cancelMode.disabled = false; });
   });
-  cancelMode.hidden = retryMode.hidden = true;
+  cancelMode.hidden = true;
   const modeButtons = new Map(Object.entries(modes).map(([key, [title, hint]]) => {
     const mode = key as PresentationMode;
-    const button = c.button('', () => void chooseMode(mode));
-    button.className = 'studio-mode';
-    button.dataset.mode = mode;
-    const art = c.node('span', '', 'studio-mode-art');
-    art.setAttribute('aria-hidden', 'true');
-    const copy = c.node('span', '', 'studio-mode-copy');
-    const chip = c.node('span', '', 'studio-mode-status');
-    const name = c.node('span', '', 'studio-mode-name');
-    name.append(c.node('strong', title), chip);
-    copy.append(name, c.node('small', hint));
-    button.append(art, copy);
-    const tile = c.node('div', '', 'studio-scene-tile');
+    const {button, chip} = sceneTile(ctx, mode, title, hint, () => openScene(mode));
+    const enter = c.button(t('进入场景', 'Enter scene'), () => void chooseMode(mode), true);
+    enter.disabled = true;
+    const settings = c.node('section', '', 'studio-scene-settings');
     const sizeFeedback = c.status();
     let frame = 0, proposed: number | null = null, inPreview = false;
     let pendingPreview: Promise<unknown> | undefined;
@@ -223,89 +245,111 @@ export function runtimeControls(ctx: PageContext, refresh: () => Promise<void>, 
       win.cancelAnimationFrame(frame);
       if (inPreview && current?.presentation?.applied === mode) c.keepalive('presentation.previewScale',[mode,null]);
     }, {once:true});
-    tile.append(button, size.element, sizeFeedback);
-    cards.append(tile);
-    return [mode, { button, chip, size }] as const;
+    settings.append(size.element, sizeFeedback);
+    return [mode, { button, chip, size, enter, settings, hint }] as const;
   }));
   const modeActions = c.node('div', '', 'studio-mode-feedback');
-  modeActions.append(modeStatus, cancelMode, retryMode);
-  presentation.append(cards, modeActions, sceneViewport);
+  modeActions.append(modeStatus, cancelMode);
+  const sceneFeedback = c.node('div', '', 'studio-scene-feedback');
+  sceneFeedback.append(modeActions, sceneViewport);
 
-  const browser = c.node('a', t('在浏览器中查看桌宠', 'View pet in browser'), 'studio-link');
+  const browser = c.node('a', t('浏览器预览 ↗', 'Browser preview ↗'), 'studio-runtime-link');
+  browser.setAttribute('aria-label', t('在新标签页预览桌宠', 'Preview the pet in a new tab'));
   browser.target = '_blank';
   browser.rel = 'noopener noreferrer';
   browser.hidden = true;
-  tools.append(close, pass, recover, browser);
-  view.append(status, tools, windowFeedback);
-  detail.body.prepend(view);
+  tools.append(primary, install, pass, close);
+  overview.append(lamp, status, tools);
+  view.append(overview, feedback, meter, artifactFeedback);
+  detail.body.append(view, detailList);
+  const links = c.node('div', '', 'studio-runtime-links');
+  links.append(browser);
 
   function renderDetails() {
     if (!current) return;
-    const rows = [
-      [t('当前角色', 'Current character'), current.figureLabel ?? current.skin.figure ?? t('未选择模型', 'No model selected')],
-      [t('窗口', 'Window'), windowLabel(current)],
-      [t('模型首帧', 'Model first frame'), current.bodyReady ? t('已就绪', 'Ready') : t('未确认', 'Unconfirmed')],
-      [t('窗口运行时', 'Window runtime'), statusOf(current.electron?.phase)],
-      [t('鼠标穿透', 'Click-through'), current.clickThrough ? t('已启用', 'Enabled') : t('关闭', 'Off')],
-    ];
-    detailList.replaceChildren(...rows.map(([label, value]) => {
-      const row = c.node('div', '', 'studio-fact');
-      row.append(c.node('dt', label), c.node('dd', value));
-      return row;
-    }));
-    install.hidden = !current.electron?.supported || current.electron.phase === 'ready';
-    install.disabled = !!pending || current.electron?.phase === 'working';
-    meter.hidden = pending !== 'installElectron' && current.electron?.phase !== 'working';
+    const scene = visibleScene(current);
+    const action = windowAction(current, timedOut);
+    const detached = current.window?.phase === 'missing' || current.window?.phase === 'error' || !!timedOut
+      || current.window?.reason?.kind === 'exited';
+    const changing = waitingForVisibility !== null || !!pending;
+    const bodyLabel = current.onDesktop
+      ? current.bodyReady ? t('首帧已就绪', 'First frame ready') : t('等待角色画面', 'Waiting for the character')
+      : '';
+    lamp.dataset.state = detached ? 'error' : scene ? 'ready' : changing || current.window?.phase === 'running' && !current.inWindow ? 'busy' : 'idle';
+    const changingWindow = waitingForVisibility !== null || ['openWindow','hideWindow','closeWindow','recoverWindow'].includes(pending);
+    writeText(status, changingWindow ? launch.textContent || windowLabel(current)
+      : timedOut ? t('窗口连接超时', 'Window connection timed out')
+        : [windowLabel(current),bodyLabel].filter(Boolean).join(' · '));
+    primary.hidden = !action.method;
+    primary.disabled = changing || !current.skin.figure && !current.inWindow;
+    writeText(primary, launch.textContent || action.label);
+    pass.hidden = !current.onDesktop || !current.inWindow || scene === 'cabin-world';
+    pass.disabled = changing;
+    writeText(pass, current.clickThrough ? t('关闭鼠标穿透', 'Disable click-through') : t('启用鼠标穿透', 'Enable click-through'));
+    pass.setAttribute('aria-pressed', String(current.clickThrough === true));
+    close.hidden = scene === 'cabin-world' || !current.inWindow && current.window?.phase !== 'running';
+    close.disabled = changing;
     const artifact = current.electron;
+    install.hidden = !artifact?.supported || artifact.phase === 'ready' || current.inWindow;
+    install.disabled = changing || artifact?.phase === 'working';
+    writeText(install, artifact?.phase === 'error' ? t('重试安装窗口运行时', 'Retry window runtime installation') : t('安装窗口运行时', 'Install window runtime'));
+    meter.hidden = pending !== 'installElectron' && artifact?.phase !== 'working';
     if (artifact?.total) { meter.max = artifact.total; meter.value = artifact.done; } else meter.removeAttribute('value');
-    detailFeedback.textContent = artifact?.detail ?? current.windowHint ?? '';
+    writeText(artifactFeedback, artifact?.phase === 'error' || artifact?.phase === 'working' ? artifact.detail ?? '' : '');
+    const modelHint = current.previousModelUnavailable
+      ? t('上次选中的模型已不可用，请在工作台重新导入。', 'The selected model is unavailable. Reimport it from the workbench.')
+      : !current.skin.figure && !current.inWindow
+        ? t('请先在工作台导入并选择角色。', 'Import and select a character in the workbench first.') : '';
+    writeText(feedback, commandFeedback || modelHint || (current.window?.reason?.kind === 'closed' ? '' : current.windowHint) || '');
+    const rows = [
+      [current.bodyReady ? t('当前角色', 'Current character') : t('所选角色', 'Selected character'),
+        current.figureLabel ?? current.skin.figure ?? t('未选择', 'None selected')],
+      [t('当前场景', 'Current scene'), scene === 'cabin-world' ? t('小屋世界', 'Cabin World') : scene ? modeLabel(scene) : ''],
+      [t('窗口运行时', 'Window runtime'), statusOf(artifact?.phase)],
+    ];
+    for (const [i,{row,key,value}] of facts.entries()) {
+      writeText(key, rows[i][0]);
+      writeText(value, rows[i][1]);
+      row.hidden = !rows[i][1];
+    }
+    browser.hidden = !current.url || !current.skin.figure;
+    if (current.url) browser.href = current.url;
   }
 
   function render(next: RuntimeState) {
+    if (!current?.inWindow && next.inWindow && !pending) commandFeedback = '';
     current = next;
-    browser.hidden = !next.url;
-    if (next.url) browser.href = next.url;
-    if (next.url) {
-      const url = new URL('/web/vendor/feiyu-house/interior.png', next.url).href;
-      if (url !== roomArtUrl && (presentation.isConnected || next.presentation?.desired === 'room')) {
-        roomArtUrl = url;
-        const artwork = c.node('img');
-        artwork.src = url;
-        void artwork.decode().then(() => {
-          if (ctx.signal.aborted || roomArtUrl !== url) return;
-          const image = 'url("' + url + '")';
-          cards.style.setProperty('--room-art', image);
-          cards.dataset.roomArt = 'ready';
-        }).catch(() => {});
-      }
-    }
-    status.textContent = next.previousModelUnavailable
-      ? t('上次的模型来源已不可用，请从工作台重新导入。', 'The previous model source is unavailable. Reimport it from the workbench.')
-      : !next.skin.figure ? t('请先从工作台导入并选择 Live2D 模型。', 'Import and select a Live2D model in the workbench first.')
-      : windowLabel(next) + ' · ' + (next.bodyReady ? t('首帧已就绪', 'First frame ready') : t('身体未就绪', 'Body not ready'));
     const locked = !!pending;
     if (waitingForVisibility !== null && (!next.inWindow || next.onDesktop === waitingForVisibility)) clearVisibilityRequest();
-    if (watchingLaunch && next.window?.phase !== 'running' && next.windowHint) reportLaunchProblem(next.windowHint);
-    if (next.inWindow) watchingLaunch = false;
-    const action = windowAction(next);
+    if (!next.inWindow && next.window?.phase === 'running' && visibleScene(next) !== 'cabin-world') {
+      if (!timedOut && connectionTimer === undefined) connectionTimer = win.setTimeout(() => {
+        connectionTimer = undefined;
+        if (!current || ctx.signal.aborted || current.inWindow || current.window?.phase !== 'running') return;
+        timedOut = true;
+        render(current);
+      }, 12_000);
+    } else {
+      clearConnectionTimer();
+      timedOut = false;
+      if (launchWait && !next.inWindow && next.windowHint) reportLaunchProblem(next.windowHint);
+      launchWait = false;
+    }
+    const action = windowAction(next, timedOut);
     const visibilityBusy = waitingForVisibility !== null;
-    const label = visibilityBusy
-      ? waitingForVisibility ? t('正在显示…', 'Showing…') : t('正在隐藏…', 'Hiding…')
-      : pending === 'openWindow' || pending === 'recoverWindow' ? t('正在启动…', 'Starting…') : action.label;
-    if (launch.textContent !== label) launch.textContent = label;
+    const label = waitingForVisibility === false || pending === 'hideWindow' ? t('正在隐藏…', 'Hiding…')
+      : waitingForVisibility === true || pending === 'openWindow' && next.inWindow ? t('正在显示…', 'Showing…')
+        : pending === 'closeWindow' ? t('正在关闭…', 'Closing…')
+          : pending === 'openWindow' || pending === 'recoverWindow' ? t('正在启动…', 'Starting…') : action.label;
+    writeText(launch, label);
     const noModel = !next.inWindow && !next.skin.figure;
-    launch.disabled = locked || visibilityBusy || noModel;
+    launch.disabled = locked || visibilityBusy || noModel && action.method !== null;
     launch.title = noModel ? t('请先导入并选择模型', 'Import and select a model first') : '';
     if (action.method) launch.removeAttribute('aria-haspopup');
     else launch.setAttribute('aria-haspopup', 'dialog');
-    close.disabled = locked || (!next.inWindow && next.window?.phase !== 'running');
-    pass.disabled = locked || !next.inWindow;
-    pass.textContent = next.clickThrough ? t('关闭鼠标穿透', 'Disable click-through') : t('启用鼠标穿透', 'Enable click-through');
-    pass.setAttribute('aria-pressed', String(next.clickThrough === true));
-    recover.hidden = !next.windowHint && (next.inWindow || next.window?.phase !== 'running');
-    recover.disabled = locked;
-    if (next.windowHint && !pending) windowFeedback.textContent ||= next.windowHint;
     const selectedMode = next.presentation?.desired ?? 'desktop';
+    const cabinSwitching = next.cabinWorld?.phase === 'active' && next.cabinWorld.presented === false;
+    const activeMode = visibleScene(next);
+    const cabinActive = activeMode === 'cabin-world';
     const dimensions = next.presentation?.details?.rect;
     const width = dimensions?.w ?? dimensions?.width, height = dimensions?.h ?? dimensions?.height;
     const wallpaper = next.presentation?.details?.wallpaper;
@@ -313,26 +357,37 @@ export function runtimeControls(ctx: PageContext, refresh: () => Promise<void>, 
       'fallback-video':t('备用视频','Fallback video'), 'fallback-image':t('备用封面','Fallback image'),
       'live':t('实时壁纸','Live wallpaper'), failed:t('壁纸已失效，请重新选择。','Wallpaper unavailable. Choose another background.'),
     } as Record<string,string>)[wallpaper?.kind ?? ''];
-    sceneViewport.textContent = next.presentation?.applied === 'wallpaper' ? [wallpaper?.title, wallpaperLabel].filter(Boolean).join(' · ')
-      : next.presentation?.applied === 'phone'
+    sceneViewport.textContent = activeMode === openedMode && openedMode === 'wallpaper' ? [wallpaper?.title, wallpaperLabel].filter(Boolean).join(' · ')
+      : activeMode === openedMode && openedMode === 'phone'
       ? t('9:16 · 点击或左右摇晃角色', '9:16 · Tap or shake the character') + (width && height ? ' · ' + Math.round(width) + ' × ' + Math.round(height) : '')
-      : next.presentation?.applied === 'desktop' ? t('桌面活动范围随当前显示器的工作区变化。','The activity area follows the current display work area.') : '';
-    for (const [mode, { button, chip, size }] of modeButtons) {
+      : openedMode === 'desktop' ? t('桌面活动范围随当前显示器的工作区变化。','The activity area follows the current display work area.') : '';
+    for (const [mode, { button, chip, size, enter }] of modeButtons) {
       size.sync();
-      button.disabled = locked || !!modeRequest || !!next.presentation?.operation || !!next.framework.model?.busy
-        || next.presentation?.available?.includes(mode) === false;
-      button.setAttribute('aria-pressed', String(selectedMode === mode));
-      chip.textContent = modeRequest?.mode === mode || next.presentation?.operation?.mode === mode
+      const inUse = activeMode === mode;
+      const loading = modeRequest?.mode === mode || next.presentation?.operation?.mode === mode;
+      const selected = !cabinActive && selectedMode === mode;
+      const retry = failures.has(mode) || selected && !!next.presentation?.error;
+      const needsWallpaper = mode === 'wallpaper' && !wallpaperSelected?.();
+      enter.disabled = locked || !!modeRequest || !!next.presentation?.operation || !!next.framework.model?.busy
+        || cabinSwitching || ['connecting','leaving'].includes(next.cabinWorld?.phase ?? '') || next.presentation?.available?.includes(mode) === false
+        || !retry && (inUse || selected && !next.onDesktop && !needsWallpaper);
+      button.dataset.current = String(inUse);
+      chip.textContent = loading
         ? t('正在准备', 'Preparing')
-        : next.presentation?.applied === mode && next.onDesktop ? t('使用中', 'In use')
-          : selectedMode === mode ? t('已选定', 'Selected') : '';
+        : inUse ? t('使用中', 'In use')
+          : retry ? t('待重试', 'Retry available') : selected ? t('已选定', 'Selected') : '';
+      enter.textContent = loading ? t('正在进入…', 'Entering…')
+        : retry ? t('重试进入', 'Retry entry')
+          : inUse ? t('使用中', 'In use')
+            : needsWallpaper ? t('选择背景', 'Choose background')
+              : next.onDesktop || cabinActive ? t('进入场景', 'Enter scene')
+                : selected ? t('启动后进入', 'On startup') : t('设为启动场景', 'Set as startup scene');
     }
-    if (!modeRequest) {
-      modeStatus.textContent = next.presentation?.error ? reason(next.presentation.error)
-        : !next.onDesktop ? t('显示窗口后应用所选呈现。', 'The selected view applies when the window opens.') : '';
-    }
-    cancelMode.hidden = !modeRequest || next.presentation?.operation?.phase === 'committing';
-    scene.hidden = next.presentation?.applied !== 'room' || !next.onDesktop;
+    modeStatus.textContent = !openedMode ? ''
+      : modeRequest?.mode === openedMode ? t('正在准备画面，等待窗口确认…', 'Preparing the view and waiting for the window…')
+        : failures.get(openedMode) ?? (selectedMode === openedMode && next.presentation?.error ? reason(next.presentation.error) : '');
+    cancelMode.hidden = !modeRequest || modeRequest.mode !== openedMode || next.presentation?.operation?.phase === 'committing';
+    scene.hidden = openedMode !== 'room' || activeMode !== 'room';
     if (!scene.hidden && scene.isConnected) void readScene();
     if (detail.element.open) renderDetails();
   }
@@ -341,49 +396,50 @@ export function runtimeControls(ctx: PageContext, refresh: () => Promise<void>, 
     waitingForVisibility = null;
     win.clearTimeout(visibilityTimer);
   }
-
+  function clearConnectionTimer() {
+    win.clearTimeout(connectionTimer);
+    connectionTimer = undefined;
+  }
   function reportLaunchProblem(message: string) {
-    watchingLaunch = false;
-    if (!detail.element.open) notify(message + ' ' + t('点击右上角版本号查看运行详情。', 'Click the version in the upper right for runtime details.'));
+    commandFeedback = message;
+    if (detail.element.open) writeText(feedback, message);
+    else notify(message + ' ' + t('点击版本号查看运行详情。', 'Click the version to see runtime details.'));
   }
 
   async function change(method: string, args: unknown[] = [], fromHeader = false) {
     if (pending || !current) return;
+    commandFeedback = '';
+    const visibility = method === 'hideWindow' ? false : method === 'openWindow' && current.inWindow ? true : null;
+    const startsWindow = visibility === null && (method === 'openWindow' || method === 'recoverWindow');
+    if (startsWindow) { clearConnectionTimer(); timedOut = false; }
     pending = method;
     render(current);
-    const requestedVisibility = fromHeader && current.inWindow;
-    windowFeedback.textContent = t('正在处理…', 'Working…');
-    if (method === 'installElectron') detailFeedback.textContent = t('正在准备运行时…', 'Preparing runtime…');
     try {
       const next = await c.call<RuntimeState>('runtime.' + method, args);
       if (ctx.signal.aborted) return;
-      if (requestedVisibility && next.inWindow) {
-        const visible = method !== 'hideWindow';
-        if (next.onDesktop !== visible) {
-          waitingForVisibility = visible;
+      if (visibility !== null && next.inWindow) {
+        if (next.onDesktop !== visibility) {
+          waitingForVisibility = visibility;
           visibilityTimer = win.setTimeout(() => {
             clearVisibilityRequest();
             if (!current || ctx.signal.aborted) return;
+            reportLaunchProblem(t('窗口尚未确认显示状态，可以重试。', 'The window did not confirm visibility. Try again.'));
             render(current);
-            notify(t('窗口尚未确认状态，请稍后重试。', 'The window did not confirm its state. Try again.'));
           }, 5000);
         }
-      } else if (fromHeader) {
-        watchingLaunch = !next.inWindow && next.window?.phase === 'running';
-        if (!watchingLaunch && !next.inWindow) {
+      } else if (startsWindow) {
+        launchWait = !next.inWindow && next.window?.phase === 'running';
+        if (!launchWait && !next.inWindow) {
           reportLaunchProblem(next.windowHint ?? t('窗口未启动。', 'The window did not start.'));
         }
       }
       if (next.skin && next.framework) render(next);
-      const feedback = method === 'setClickThrough'
-        ? next.clickThrough ? t('穿透已开启，可在这里恢复鼠标交互。', 'Click-through is on. Restore mouse input here.')
-          : t('已恢复鼠标交互。', 'Mouse input restored.')
-        : next.windowHint ?? '';
-      windowFeedback.textContent = detailFeedback.textContent = feedback;
+      if (method === 'setClickThrough') commandFeedback = next.clickThrough
+        ? t('鼠标穿透已开启。', 'Click-through enabled.') : t('已恢复鼠标交互。', 'Mouse input restored.');
     } catch (error) {
       if (!ctx.signal.aborted) {
-        windowFeedback.textContent = detailFeedback.textContent = errorText(error);
         if (fromHeader) reportLaunchProblem(errorText(error));
+        else commandFeedback = errorText(error);
       }
     } finally {
       pending = '';
@@ -393,31 +449,25 @@ export function runtimeControls(ctx: PageContext, refresh: () => Promise<void>, 
 
   async function chooseMode(mode: PresentationMode) {
     if (!current || modeRequest || pending) return;
-    if (mode === 'wallpaper' && (!wallpaperSelected?.() || mode === current.presentation?.desired && !current.presentation?.error)) {
-      openWallpaper?.(modeButtons.get(mode)?.button);
+    if (mode === 'wallpaper' && !wallpaperSelected?.()) {
+      openWallpaper?.(modeButtons.get(mode)?.enter);
       return;
     }
-    if (mode === current.presentation?.desired && !current.presentation?.error && retryMode.hidden) return;
-    lastMode = mode;
+    failures.delete(mode);
     const id = c.doc.defaultView!.crypto.randomUUID();
     modeRequest = { id, mode };
-    retryMode.hidden = true;
     render(current);
-    modeStatus.textContent = t('正在准备画面，等待窗口确认…', 'Preparing the view and waiting for the window…');
-    let failure = '';
     try {
       const result = await c.call<{ phase: string; applied: boolean; error?: string }>('presentation.select', [mode, id]);
-      if (result.phase === 'failed') failure = reason(result.error ?? 'presentation-rejected');
-      if (result.phase === 'cancelled') failure = reason('cancelled');
-      retryMode.hidden = result.phase !== 'failed';
+      if (result.phase === 'failed') failures.set(mode, reason(result.error ?? 'presentation-rejected'));
+      if (result.phase === 'cancelled') failures.set(mode, reason('cancelled'));
     } catch (error) {
-      failure = errorText(error);
-      retryMode.hidden = false;
+      failures.set(mode, errorText(error));
     } finally {
       modeRequest = null;
       if (!ctx.signal.aborted) {
         await refresh();
-        if (failure) modeStatus.textContent = failure;
+        if (current) render(current);
       }
     }
   }
@@ -463,6 +513,24 @@ export function runtimeControls(ctx: PageContext, refresh: () => Promise<void>, 
     catch (error) { if (!ctx.signal.aborted) sceneStatus.textContent = errorText(error); }
   }
 
-  for (const control of [launch, close, pass, recover, ...Array.from(modeButtons.values(), v => v.button)]) control.disabled = true;
-  return { launch, openDetails, detail, presentation, scene, render, detailBody: detail.body, onDetails(fn: () => void) { onDetails = fn; }, onWallpaper(open: (opener?: HTMLElement) => void, selected: () => boolean) { openWallpaper = open; wallpaperSelected = selected; }, refreshScene: () => { if (!scene.hidden) void readScene(); } };
+  for (const control of [launch, primary, close, pass, install]) control.disabled = true;
+  for (const control of [primary, close, pass, install, meter]) control.hidden = true;
+  return {
+    launch, openDetails, detail, scene, sceneApps: modeButtons, render, detailBody: detail.body, detailLinks: links,
+    onSceneOpen(fn: (mode: PresentationMode) => void) { openScene = fn; },
+    showScene(mode: PresentationMode, page: HTMLElement) {
+      openedMode = mode;
+      page.prepend(sceneFeedback);
+      if (current) render(current);
+    },
+    closeScene(mode: PresentationMode) {
+      modeButtons.get(mode)?.size.stopPreview();
+      openedMode = undefined;
+      scene.hidden = true;
+    },
+    onWallpaper(open: (opener?: HTMLElement) => void, selected: () => boolean) {
+      openWallpaper = open; wallpaperSelected = selected;
+    },
+    refreshScene: () => { if (!scene.hidden) void readScene(); },
+  };
 }

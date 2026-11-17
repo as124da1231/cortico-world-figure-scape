@@ -69,7 +69,7 @@ describe('model touch', () => {
 it('separates per-source editor drafts from the committed profile across editor restarts', async () => {
   const directory=await mkdtemp(join(tmpdir(),'live2d-editor-'));
   const editor=vi.fn(async (figure: unknown)=> ({figure:String(figure),editor:{sourceId:String(figure),revision:'r1',catalogFingerprint:'f1'}}));
-  const model={editor,save:vi.fn(async()=>({saved:true,applied:false})),applySaved:vi.fn(),snapshot:vi.fn(),previewParameters:vi.fn()};
+  const model={editor,save:vi.fn(async()=>({saved:true,applied:false})),applySaved:vi.fn(),snapshot:vi.fn(),operation:vi.fn(),previewParameters:vi.fn()};
   try {
     let service=createEditorBackend(model as never,()=>directory);
     await service.invoke('modelEditor',['model-a']);
@@ -83,6 +83,12 @@ it('separates per-source editor drafts from the committed profile across editor 
     expect(await service.invoke('modelEditor',['model-a'])).toMatchObject({draft:null});
     expect(await service.invoke('modelEditor',['model-b'])).toMatchObject({draft:{profile:{fit:{zoom:1.2}}}});
     expect(model.save).toHaveBeenCalledTimes(1);
+
+    model.operation.mockReturnValueOnce(null).mockReturnValue({saved:true,applied:false,revision:'r2'});
+    model.save.mockRejectedValueOnce(Error('Application interrupted'));
+    await expect(service.invoke('saveLibraryModel',['model-b',{fit:{zoom:1.2}},'r1','f1','second-save'])).rejects.toThrow('Application interrupted');
+    expect(await service.invoke('operation.get',['second-save'])).toMatchObject({saved:true,applied:false,revision:'r2'});
+    expect(await service.invoke('modelEditor',['model-b'])).toMatchObject({draft:null});
   } finally {
     // Only removes the private directory returned by mkdtemp.
     await rm(directory,{recursive:true,force:true});

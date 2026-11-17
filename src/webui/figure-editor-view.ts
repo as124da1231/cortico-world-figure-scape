@@ -12,17 +12,20 @@ export function figureEditorView(report: OpenedFigure, ports: {
   touch: ReturnType<typeof createTouchEditor>;
   retainDraft(args: unknown[]): void;
   flushDraft(): Promise<void>;
+  discardDraft(model: string): Promise<void>;
   sendPreview(kind: string, input: Record<string, unknown>): Promise<unknown>;
   failure(error: unknown): void;
   feedback(text: string): void;
   previewReady(): boolean;
   freezeCanvas(locked: boolean): void;
+  selectTask(task: string): void;
 }) {
   const { id, tasks } = report.character;
   const { button, english, touch, sendPreview, failure } = ports;
   const text = (zh: string, en: string) => english ? en : zh;
   const draft = report.draft?.profile;
-  const initial = draft ?? report.settings;
+  let committed = report.settings;
+  const initial = draft ?? committed;
   touch.read(initial.touch, undefined, []);
   let revision = report.revision;
   let dirty = !!draft, busy = false, applyError = false, scheme = initial.scheme ?? '';
@@ -96,9 +99,11 @@ export function figureEditorView(report: OpenedFigure, ports: {
   footer.className = 'framework-editor-footer framework-editor-actions';
   const hint = document.createElement('span');
   hint.className = 'framework-draft-state';
-  if (draft) hint.textContent = report.draft?.revision !== revision
+  hint.setAttribute('role', 'status');
+  hint.textContent = draft ? report.draft?.revision !== revision
     ? text('已恢复旧版草稿，请核对后保存。', 'Earlier draft restored. Review it before saving.')
-    : text('已恢复草稿', 'Draft restored');
+    : text('已恢复草稿', 'Draft restored')
+    : text('已载入保存的配置', 'Saved settings loaded');
 
   function settings(): FigureSettings {
     const touchProfile = touch.value();
@@ -109,7 +114,8 @@ export function figureEditorView(report: OpenedFigure, ports: {
   }
   function renderFooter() {
     save.disabled = busy || !dirty;
-    retry.hidden = !applyError;
+    discard.disabled = busy || !dirty;
+    retry.hidden = !applyError || dirty;
     retry.disabled = busy;
     restore.disabled = busy || !scheme && !settings().touch;
     workspace.inert = busy;
@@ -117,16 +123,23 @@ export function figureEditorView(report: OpenedFigure, ports: {
   }
   function finish(result: FigureSaveResult) {
     revision = result.revision;
+    committed = result.settings;
     applyError = !!result.error;
     hint.textContent = result.applied ? text('已保存并应用', 'Saved and applied')
       : result.error ? text('已保存，应用失败', 'Saved. Application failed.')
       : text('已保存，下次加载角色时生效。', 'Saved. Applies when this character next loads.');
-    if (result.error) failure(result.error);
+    if (result.error) hint.textContent += ' · ' + result.error;
   }
   async function persist(applyOnly: boolean) {
-    if (busy) return;
+    if (busy || (applyOnly ? dirty || !applyError : !dirty)) return;
+    if (!applyOnly && touch.isDrawing()) {
+      ports.selectTask('touch');
+      hint.textContent = text('请先完成或取消触碰范围绘制。', 'Finish or cancel drawing the touch area first.');
+      return;
+    }
     busy = true;
     ports.feedback('');
+    hint.textContent = applyOnly ? text('正在重新应用…', 'Reapplying…') : text('正在保存配置…', 'Saving settings…');
     renderFooter();
     try {
       await ports.flushDraft();
@@ -136,12 +149,15 @@ export function figureEditorView(report: OpenedFigure, ports: {
         : await ports.invoke<FigureSaveResult>('character.saveFigure', [id, { scheme: value.scheme ?? null, touch: value.touch ?? null }, revision]);
       dirty = false;
       finish(result);
-    } catch (error) { failure(error); }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      hint.textContent = (applyOnly ? text('已保存，应用失败。', 'Saved. Application failed. ') : text('保存未完成，当前修改已保留。', 'Save did not complete. Your edits are still here. ')) + detail;
+    }
     finally { busy = false; renderFooter(); }
   }
-  const save = button(text('保存并应用', 'Save and apply'), () => void persist(false));
+  const save = button(report.active ? text('保存并应用', 'Save and apply') : text('保存配置', 'Save settings'), () => void persist(false));
   save.classList.add('is-primary');
-  const retry = button(text('重试应用', 'Retry application'), () => void persist(true));
+  const retry = button(text('重新应用已保存版本', 'Reapply saved version'), () => void persist(true));
   const restore = button(text('恢复作者默认', 'Restore author defaults'), () => {
     scheme = '';
     picker?.setValue(scheme);
@@ -149,26 +165,65 @@ export function figureEditorView(report: OpenedFigure, ports: {
     changed();
     previewOutfit();
   });
+  source.append(restore);
+  const confirmation = document.createElement('dialog');
+  confirmation.className = 'framework-dialog';
+  const confirmTitle = document.createElement('h2');
+  confirmTitle.textContent = text('放弃当前修改？', 'Discard these edits?');
+  confirmation.setAttribute('aria-label', confirmTitle.textContent);
+  const explanation = document.createElement('p');
+  explanation.textContent = text('将回到上一次保存的装扮和触碰设置。', 'Return to the last saved outfit and touch settings.');
+  const keep = button(text('继续编辑', 'Keep editing'), () => confirmation.close());
+  keep.autofocus = true;
+  const confirm = button(text('放弃修改并继续', 'Discard and continue'), () => {
+    confirmation.close();
+    void discardChanges();
+  });
+  confirmation.append(confirmTitle, explanation, keep, confirm);
+  const discard = button(text('放弃修改', 'Discard edits'), () => confirmation.showModal());
+  async function discardChanges() {
+    if (busy || !dirty) return;
+    busy = true;
+    renderFooter();
+    try {
+      await ports.discardDraft(id);
+      scheme = committed.scheme ?? '';
+      picker?.setValue(scheme);
+      touch.cancelDrawing();
+      touch.read(committed.touch, undefined, []);
+      dirty = false;
+      hint.textContent = text('已回到上一次保存的配置。', 'Last saved settings restored.');
+      previewOutfit();
+    } catch (error) {
+      failure(error);
+    } finally {
+      busy = false;
+      renderFooter();
+    }
+  }
   function changed() {
     dirty = true;
-    applyError = false;
     hint.textContent = text('有未保存的修改', 'Unsaved changes');
     ports.retainDraft([id, settings(), revision]);
     renderFooter();
   }
   renderFooter();
-  footer.append(hint, restore, retry, save);
-  panel.append(workspace, footer);
+  footer.append(hint, discard, retry, save);
+  panel.append(workspace, footer, confirmation);
   return {
-    element: panel, changed,
+    element: panel, changed, isSaving: () => busy,
     select(task: string) {
       actionRequest++;
       for (const [key, pane] of sections) pane.hidden = key !== task;
     },
+    previewUnavailable() {
+      actionRequest++;
+      syncActions();
+    },
     previewReady(words: unknown) {
       currentWords = Array.isArray(words) ? new Set(words.filter(word => typeof word === 'string')) : null;
       syncActions();
-      if (scheme !== (report.settings.scheme ?? '')) previewOutfit();
+      if (scheme !== (committed.scheme ?? '')) previewOutfit();
     },
   };
 }

@@ -41,6 +41,8 @@ const descriptions:Record<string,string>={
   'sounds.snoreSeconds':'设为 0 时持续到桌宠醒来。',
   'sounds.panByPosition':'按桌宠位置分配声道。',
   'window.frameRate':t('活动时的帧率，实际帧率受屏幕刷新率限制。', 'Frame rate while active, capped by the display refresh rate.'),
+  'window.bubbleSpeed':t('控制角色文字的显示速度和分段节奏。', 'Controls text reveal and pacing between parts of a reply.'),
+  saidBubbles:t('显示打字发送后的回显。语音转写单独显示，发送后自动收起。', 'Echo typed messages on screen. Voice transcripts use a separate bubble and dismiss after sending.'),
   'window.lockFrameRate':'开启后静止时也按所选帧率绘制。',
   doubleClickChat:'双击桌宠打开打字框。',
   'touch.showRegions':'在桌宠身上显示头部、躯干和腿部的触碰范围。',
@@ -52,6 +54,7 @@ const descriptions:Record<string,string>={
 const sliderUnits: Record<string, string> = {
   'sounds.volume': '%',
   'window.scale': '×', 'window.bubbleSize': '×', 'window.fontSize': '×', 'window.bubbleSpeed': '×',
+  'window.replyBubbleSeconds': t(' 秒', ' s'),
   'window.glow': ' px', 'asr.segment.thresholdDb': ' dBFS',
 };
 const choices:Record<string,string>={free:'自由活动',calm:'安静活动',off:'关闭',dark:'深色',light:'浅色',none:'不立即唤醒',poke:'仅戳一下',all:'所有触碰',custom:'自定义',default:'默认范围',any:'全部允许','ask-each-turn':'每轮确认','ask-before-acting':'操作前确认','ask-once':'授权一段时间','never-ask':'无需确认',chat:'对话',voice:'语音',roam:'活动',theme:'主题',sound:'声音',hide:'隐藏',dress:'装扮',worlds:'世界'};
@@ -61,6 +64,9 @@ const titlesByPath: Record<string, [string, string]> = {
   'touch.enabled': ['向 Coo 上报触碰', 'Report touches to Coo'],
   'touch.wakeOn': ['立即唤醒 Coo 的手势', 'Gestures that wake Coo'],
   'touch.showRegions': ['在桌宠上显示判定区', 'Show hit areas on the pet'],
+  saidBubbles: ['显示文字发送气泡', 'Show sent text bubbles'],
+  'window.electronFile': ['自定义窗口程序', 'Custom window executable'],
+  port: ['本地页面端口', 'Local page port'],
 };
 export function preferences(ctx:PageContext,notify:(s:string, kind?:'success'|'pending')=>void){
   const c=studioControls(ctx), panels=new Map<PreferenceTask,HTMLElement>(),controls=new Map<string,HTMLInputElement|HTMLSelectElement>(),pending=new Set<string>();
@@ -71,16 +77,24 @@ export function preferences(ctx:PageContext,notify:(s:string, kind?:'success'|'p
   let renderFrameRate: ((value: unknown) => void) | undefined;
   const customEntries=new Map<string,HTMLElement>();
   const custom = new Map<string,HTMLElement>();
-  async function write(group:string,key:string,value:unknown,control:HTMLInputElement|HTMLSelectElement){
-    if(pending.has(key))return;pending.add(key);control.disabled=true;notify('正在保存…','pending');
-    try{await setConfig(group,{[key]:value},{signal:ctx.signal});notify('已保存'+(entries.find(e=>e.group.id===group)?.group.schema.properties[key]?.['x-hot']===false?'，下次启动时生效。':'。'),'success');}
-    catch(e){notify(String(e));}finally{pending.delete(key);control.disabled=false;if(reading) await reading;await refresh();}
+  async function write(group:string,key:string,value:unknown,control:HTMLInputElement|HTMLSelectElement, report=notify){
+    if(pending.has(key))return;pending.add(key);control.disabled=true;report(t('正在保存…','Saving…'),'pending');
+    try {
+      await setConfig(group,{[key]:value},{signal:ctx.signal});
+      const restart = entries.find(e=>e.group.id===group)?.group.schema.properties[key]?.['x-hot']===false;
+      report(restart ? t('已保存，下次启动时生效。','Saved. Applies at the next startup.') : t('已保存。','Saved.'),'success');
+    }
+    catch(e){report(String(e));}finally{pending.delete(key);control.disabled=false;if(reading) await reading;await refresh();}
   }
   function build(task:PreferenceTask){
     const panel=c.section(titles[task]);
     panel.classList.add('studio-preferences');
     panel.dataset.preferenceGroup = task;
     const fields = c.node('div', '', 'studio-sound-cues');
+    const feedback = task === 'runtime' ? c.status('studio-runtime-config-feedback') : undefined;
+    const report = feedback ? (message: string) => {
+      if (!ctx.signal.aborted) feedback.textContent = message;
+    } : notify;
     panels.set(task,panel);
     for(const entry of entries)for(const[key,prop]of Object.entries(entry.group.schema.properties)){
       if(preferenceTask(key)!==task)continue;
@@ -93,7 +107,9 @@ export function preferences(ctx:PageContext,notify:(s:string, kind?:'success'|'p
       else{input.type=prop.type==='boolean'?'checkbox':prop.type==='number'||prop.type==='integer'?'number':'text';if(input.type==='checkbox')input.setAttribute('role','switch');if(prop.minimum!==undefined)input.min=String(prop.minimum);if(prop.maximum!==undefined)input.max=String(prop.maximum);input.step=String(prop.multipleOf??(prop.type==='integer'?1:'any'));}
       const path = key.slice(K.length);
       const unit = sliderUnits[path];
-      const description = (prop['x-hot'] === false ? '下次启动生效。 ' : '') +
+      const description = path === 'window.electronFile' ? t('留空时由梦境自动选择运行时。','Leave empty to use the detected runtime.')
+        : path === 'port' ? t('端口被占用时会尝试下一个端口。','Tries the next port if this one is busy.')
+        : (prop['x-hot'] === false ? '下次启动生效。 ' : '') +
         (path === 'doubleClickChat' ? '' : path === 'touch.enabled' ? t('关闭时，角色仍可在本地回应触碰。', 'Local touch responses still play when reporting is off.') : descriptions[path] ?? prop.description ?? '');
       let control: HTMLElement = input;
       if (unit && input instanceof HTMLInputElement && prop.minimum !== undefined && prop.maximum !== undefined) {
@@ -124,8 +140,24 @@ export function preferences(ctx:PageContext,notify:(s:string, kind?:'success'|'p
       const soundCategory = task === 'sound-effects' && path.startsWith('sounds.') && prop.type === 'boolean' && path !== 'sounds.panByPosition';
       if (task === 'sound-quick' && path === 'sounds.volume') panel.insertBefore(row, panel.children[1] ?? null);
       else (soundCategory ? fields : panel).append(row);
-      if(prop['x-path']){const spec=prop['x-path'];row.append(c.button('选择文件',()=>{void(async()=>{try{const path=await pickPath({kind:spec.kind,...(spec.extensions?{extensions:spec.extensions}:{})},{signal:ctx.signal});if(path){input.value=path;await write(entry.group.id,key,path,input);}}catch(e){notify(String(e));}})();}));}
-      input.addEventListener('change',()=>{editingRanges.delete(key);if(!input.reportValidity())return;let value:unknown=input.value;if(prop.type==='boolean')value=(input as HTMLInputElement).checked;else if(prop.type==='number'||prop.type==='integer'){if(!input.value)return;value=Number(input.value);}void write(entry.group.id,key,value,input);},{signal:ctx.signal});
+      if (prop['x-path']) {
+        const spec=prop['x-path'];
+        const browse = c.button(t('选择文件', 'Choose file'), () => {
+          void (async () => {
+            try {
+              const path = await pickPath({kind:spec.kind,...(spec.extensions?{extensions:spec.extensions}:{})},{signal:ctx.signal});
+              if (path) { input.value=path; await write(entry.group.id,key,path,input,report); }
+            } catch (error) { report(String(error)); }
+          })();
+        });
+        if (task === 'runtime' && path === 'window.electronFile') {
+          input.setAttribute('placeholder',t('自动选择','Auto-detect'));
+          const executable = c.node('div', '', 'studio-runtime-executable');
+          row.replaceWith(executable);
+          executable.append(row,browse);
+        } else row.append(browse);
+      }
+      input.addEventListener('change',()=>{editingRanges.delete(key);if(!input.reportValidity())return;let value:unknown=input.value;if(prop.type==='boolean')value=(input as HTMLInputElement).checked;else if(prop.type==='number'||prop.type==='integer'){if(!input.value)return;value=Number(input.value);}void write(entry.group.id,key,value,input,report);},{signal:ctx.signal});
     }
     if (task === 'sound-effects' && fields.childElementCount) {
       const categories = c.node('section');
@@ -134,6 +166,7 @@ export function preferences(ctx:PageContext,notify:(s:string, kind?:'success'|'p
     }
     if (task === 'touch') special(panel,'wake');
     if(task==='autonomy')special(panel,'self');
+    if (feedback) panel.append(feedback);
     return panel;
   }
   function frameRate(group: string, key: string, initial: unknown) {

@@ -13,7 +13,7 @@ type FigureEditor = {
 };
 
 /** The editor window has its own draft and transport. ModelDomain owns committed settings. */
-export function createEditorBackend(model: Pick<ReturnType<typeof createModelDomain>, 'editor' | 'save' | 'applySaved' | 'snapshot' | 'previewParameters'>, directory: () => string, touchPolicy?: () => unknown, figures?: FigureEditor) {
+export function createEditorBackend(model: Pick<ReturnType<typeof createModelDomain>, 'editor' | 'save' | 'applySaved' | 'snapshot' | 'operation' | 'previewParameters'>, directory: () => string, touchPolicy?: () => unknown, figures?: FigureEditor) {
   const sessions = new Map<string, EditorSession>();
   const pending = new Map<string, Promise<unknown>>();
   const pathFor = (sourceId: string) => join(directory(), sourceId + '.json');
@@ -101,13 +101,23 @@ export function createEditorBackend(model: Pick<ReturnType<typeof createModelDom
         case 'saveModel': {
           const { sourceId } = identity(figure);
           if (typeof figure !== 'string' || typeof revision !== 'string') throw Error('Invalid model revision');
-          const status = await model.save(figure, profile, revision, typeof catalog === 'string' ? catalog : undefined, operation, method === 'saveLibraryModel');
-          if (status.saved) await serialize(sourceId, () => rm(pathFor(sourceId), { force: true }));
-          return status;
+          const existing = operation === undefined ? null : model.operation(operation);
+          let saved = false;
+          try {
+            const status = await model.save(figure, profile, revision, typeof catalog === 'string' ? catalog : undefined, operation, method === 'saveLibraryModel');
+            saved = status.saved;
+            return status;
+          } catch (error) {
+            saved = !existing && operation !== undefined && model.operation(operation)?.saved === true;
+            throw error;
+          } finally {
+            if (saved) await serialize(sourceId, () => rm(pathFor(sourceId), { force: true }));
+          }
         }
         case 'applySavedModel':
           identity(figure);
           return model.applySaved(String(figure), String(profile), revision);
+        case 'operation.get': return model.operation(figure);
         case 'state': return { model: model.snapshot() };
         case 'edit.touchPolicy': return touchPolicy?.() ?? null;
         default: throw Error('Unknown model editor command');

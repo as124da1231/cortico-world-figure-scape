@@ -21,6 +21,31 @@ const manifest = {
 };
 
 describe('figure packages in the direct library', () => {
+  it('reuses the imported identity for a bundled figure and keeps user settings separate', async () => {
+    const temp = await mkdtemp(join(tmpdir(), 'figure-bundled-'));
+    try {
+      const packaged = join(temp, 'pack'), directory = join(temp, 'library');
+      await mkdir(packaged);
+      await writeFile(join(packaged,'figure.json'), JSON.stringify(manifest));
+      const model = join(packaged,'author.json'), original = '{"pose":"author"}';
+      await writeFile(model, original);
+      await writeFile(join(packaged,'body.mjs'),'export function render() {}');
+      const imported = createFigureLibrary(directory);
+      const id = await imported.prepare(join(packaged, 'figure.json'), new AbortController().signal);
+      await imported.save(id,{scheme:'blue'});
+
+      const library = createFigureLibrary(directory,{id,directory:packaged});
+      expect(library.list()).toMatchObject([{id,builtin:true,dir:packaged}]);
+      expect(library.asset(id,'author.json')).toBe(model);
+      expect(library.asset(id,'../library')).toBeNull();
+      expect(library.settings(id)).toEqual({scheme:'blue'});
+      await expect(library.remove(id,[])).rejects.toThrow('内置形象包');
+      await expect(library.prepare(join(packaged,'figure.json'),new AbortController().signal)).resolves.toBe(id);
+      expect(library.list()).toHaveLength(1);
+      expect(await readFile(model,'utf8')).toBe(original);
+    } finally { await rm(temp,{recursive:true,force:true}); }
+  });
+
   it('imports directories and ZIPs under one identity and keeps author files byte-for-byte', async () => {
     const temp = await mkdtemp(join(tmpdir(), 'figure-library-'));
     const directory = join(temp,'original');

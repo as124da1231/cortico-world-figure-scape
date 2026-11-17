@@ -644,6 +644,7 @@ export function createTouchEditor(options: {
       sync();
     },
     value: () => profile && structuredClone(profile),
+    isDrawing: () => draft !== undefined,
     pointer(value: { point?: TouchPoint; start?: TouchPoint; area?: string }) {
       if (!visible || !ready) return;
       if (draft) {

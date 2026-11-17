@@ -20,6 +20,7 @@ const query = new URLSearchParams(location.search);
 const lifetime = new AbortController();
 const english = !document.documentElement.lang.startsWith('zh');
 const studioName = english ? 'Figure Scape' : document.documentElement.lang === 'zh-Hant' ? '夢境' : '梦境';
+const text = (zh: string, en: string) => english ? en : zh;
 const tasks = [
   ['framing', '取景与外观', 'Framing and appearance'],
   ['bindings', '动作与表情', 'Actions and expressions'],
@@ -39,15 +40,46 @@ const header = document.createElement('header');
 header.className = 'editor-heading';
 const title = document.createElement('div');
 const contextLabel = document.createElement('span');
-contextLabel.textContent = english ? 'Character editor' : '角色编辑台';
+contextLabel.textContent = text('角色编辑台', 'Character editor');
 title.append(contextLabel, heading);
-header.append(title, feedback);
+heading.textContent = text('加载角色', 'Loading character');
+const headerNotices = document.createElement('div');
+headerNotices.className = 'editor-notices';
+const loadRetry = button(text('重新加载角色', 'Reload character'), () => schedule(query.get('model'), selectedTask || query.get('task')));
+loadRetry.hidden = true;
+const draftNotice = document.createElement('div');
+draftNotice.className = 'editor-draft-notice';
+draftNotice.hidden = true;
+const draftFeedback = document.createElement('p');
+draftFeedback.setAttribute('role', 'status');
+const draftRetry = button(text('重试保留草稿', 'Retry draft backup'), () => void flushDraft().catch(draftFailure));
+draftNotice.append(draftFeedback, draftRetry);
+headerNotices.append(feedback, loadRetry, draftNotice);
+header.append(title, headerNotices);
 const layout = document.createElement('div');
 layout.className = 'studio-edit-layout editor-layout';
 const nav = document.createElement('nav');
 nav.className = 'studio-editor-nav';
+nav.setAttribute('aria-label', text('角色编辑任务', 'Character editing tasks'));
 const canvas = document.createElement('section');
 canvas.className = 'editor-canvas';
+canvas.setAttribute('aria-label', text('角色实时预览', 'Live character preview'));
+const canvasHeader = document.createElement('header');
+canvasHeader.className = 'editor-canvas-heading';
+const canvasTitle = document.createElement('h2');
+canvasTitle.textContent = text('角色预览', 'Character preview');
+const canvasState = document.createElement('span');
+canvasState.dataset.state = 'loading';
+canvasState.textContent = text('准备中', 'Preparing');
+canvasHeader.append(canvasTitle, canvasState);
+const previewNotice = document.createElement('div');
+previewNotice.className = 'editor-preview-notice';
+const previewFeedback = document.createElement('p');
+previewFeedback.setAttribute('role', 'status');
+const previewRetry = button(text('重试预览', 'Retry preview'), () => { if (activeModel) attachPreview(activeModel); });
+previewRetry.hidden = true;
+previewNotice.append(previewFeedback, previewRetry);
+canvas.append(canvasHeader, previewNotice);
 const inspector = document.createElement('section');
 inspector.className = 'editor-inspector';
 layout.append(nav, canvas, inspector);
@@ -77,10 +109,18 @@ let frame: HTMLIFrameElement | null = null;
 let loading = Promise.resolve();
 let queuedDraft: unknown[] | undefined;
 let savingDraft: Promise<void> | undefined;
+let lastDraftRequest: string | undefined;
+let clearingDraft = false;
 let previewReady = false;
 const receipts = new Map<string, (event: Record<string, unknown>) => void>();
 const failure = (error: unknown) => { feedback.textContent = error instanceof Error ? error.message : String(error); };
+const draftFailure = () => {
+  if (clearingDraft) return;
+  draftNotice.hidden = false;
+  draftFeedback.textContent = text('本次修改还在编辑台，草稿备份未写入。', 'Your edits are still here. The draft backup was not written.');
+};
 async function flushDraft(): Promise<void> {
+  if (clearingDraft) return;
   if (!savingDraft && queuedDraft) {
     const args = queuedDraft;
     queuedDraft = undefined;
@@ -90,13 +130,38 @@ async function flushDraft(): Promise<void> {
     }).finally(() => { savingDraft = undefined; });
   }
   await savingDraft;
-  if (queuedDraft) await flushDraft();
+  if (queuedDraft && !clearingDraft) await flushDraft();
+  if (!queuedDraft) {
+    draftNotice.hidden = true;
+    draftFeedback.textContent = '';
+  }
 }
 function retainDraft(args: unknown[]) {
+  const request = JSON.stringify(args);
+  if (request === lastDraftRequest) return;
+  lastDraftRequest = request;
   queuedDraft = args;
-  void flushDraft().catch(failure);
+  void flushDraft().catch(draftFailure);
 }
-addEventListener('pagehide', () => { void flushDraft().catch(failure); lifetime.abort(); });
+async function discardDraft(model: string) {
+  clearingDraft = true;
+  try {
+    await savingDraft?.catch(() => {});
+    await invoke('edit.clearDraft', [model]);
+    queuedDraft = lastDraftRequest = undefined;
+    draftNotice.hidden = true;
+    draftFeedback.textContent = '';
+  } finally {
+    clearingDraft = false;
+  }
+}
+addEventListener('beforeunload', event => {
+  if (queuedDraft || savingDraft || clearingDraft || editor?.isSaving() || figure?.isSaving()) event.preventDefault();
+}, { signal: lifetime.signal });
+addEventListener('pagehide', event => {
+  void flushDraft().catch(draftFailure);
+  if (!event.persisted) lifetime.abort();
+}, { signal: lifetime.signal });
 function sendPreview(kind: string, input: Record<string, unknown> = {}) {
   if (!previewReady || !frame?.contentWindow) return Promise.reject(Error(english ? 'Preparing model preview' : '模型预览正在准备'));
   const id = crypto.randomUUID();
@@ -120,7 +185,7 @@ const touch = createTouchEditor({
   send: sendPreview,
 });
 type OpenedCharacter = ({ character: CharacterEditorSource } | OpenedFigure) & { policy: Parameters<typeof touch.setPolicy>[0] };
-let selectedTask = 'framing';
+let selectedTask = '';
 const navButtons = new Map<string, HTMLButtonElement>();
 function showTasks(enabled: CharacterTask[], packaged: boolean) {
   navButtons.clear();
@@ -135,12 +200,23 @@ function showTasks(enabled: CharacterTask[], packaged: boolean) {
 }
 function select(id: string) {
   const task = navButtons.has(id) ? id : navButtons.keys().next().value ?? '';
+  if (!task) return;
+  if (task !== selectedTask) {
+    feedback.textContent = '';
+  }
   selectedTask = task;
   for (const [key, entry] of navButtons) entry.setAttribute('aria-current', key === task ? 'page' : 'false');
   editor?.selectSection(task);
   figure?.select(task);
   touch.show(task === 'touch', previewReady);
-  navButtons.get(task)?.scrollIntoView({block:'nearest',inline:'nearest'});
+  navButtons.get(task)?.scrollIntoView?.({block:'nearest',inline:'nearest'});
+  if (activeModel) {
+    const url = new URL(location.href);
+    if (url.searchParams.get('task') !== task) {
+      url.searchParams.set('task', task);
+      history.replaceState(null, '', url);
+    }
+  }
 }
 let activeModel: string | null = null;
 let controller: AbortController | null = null;
@@ -154,9 +230,16 @@ async function open(model: string | null, task: string | null) {
   const signal = controller.signal;
   previewReady = false;
   editor = figure = null;
+  frame?.remove();
   frame = null;
-  canvas.replaceChildren();
   inspector.replaceChildren();
+  nav.replaceChildren();
+  navButtons.clear();
+  selectedTask = '';
+  previewNotice.hidden = false;
+  previewRetry.hidden = true;
+  previewFeedback.textContent = text('正在读取角色配置…', 'Loading character settings…');
+  loadRetry.hidden = true;
   const context = {
     root,
     signal,
@@ -171,15 +254,17 @@ async function open(model: string | null, task: string | null) {
   const report = await invoke<OpenedCharacter>('character.open', [model], { signal });
   const packaged = report.character.kind === 'figure-pack';
   showTasks(report.character.tasks, packaged);
+  contextLabel.textContent = packaged ? text('Coo 形象包', 'Coo figure pack') : text('原始 Live2D', 'Raw Live2D');
   touch.setPolicy(report.policy);
   if (packaged) {
     if (!('settings' in report)) throw Error('The figure editor did not return its settings');
     const opened = report;
     figure = figureEditorView(opened, {
-      button, english, invoke, touch, retainDraft, flushDraft, sendPreview, failure,
+      button, english, invoke, touch, retainDraft, flushDraft, discardDraft, sendPreview, failure,
       feedback: text => { feedback.textContent = text; },
       previewReady: () => previewReady,
       freezeCanvas: locked => { canvas.inert = locked; },
+      selectTask: select,
     });
     inspector.append(figure.element);
     activeModel = opened.character.id;
@@ -198,7 +283,12 @@ async function open(model: string | null, task: string | null) {
         initial = undefined;
         return result as T;
       }
-      if (method === 'saveModel' || method === 'saveLibraryModel' || method === 'edit.clearDraft') await flushDraft();
+      if (method === 'edit.clearDraft' && typeof args[0] === 'string') {
+        await discardDraft(args[0]);
+        touch.cancelDrawing();
+        return undefined as T;
+      }
+      if (method === 'saveModel' || method === 'saveLibraryModel') await flushDraft();
       return invoke<T>(method, args, options);
     },
     onDraft: retainDraft,
@@ -218,6 +308,12 @@ async function open(model: string | null, task: string | null) {
 }
 
 function attachPreview(model: string) {
+  dropPreview();
+  canvasState.dataset.state = 'loading';
+  canvasState.textContent = text('载入中', 'Loading');
+  previewNotice.hidden = true;
+  previewRetry.hidden = true;
+  frame?.remove();
   const view = document.createElement('iframe');
   view.className = 'studio-preview-frame';
   view.title = english ? 'Model preview' : '模型实时预览';
@@ -225,23 +321,45 @@ function attachPreview(model: string) {
   frame = view;
   canvas.append(view);
 }
+function dropPreview() {
+  previewReady = false;
+  editor?.previewUnavailable();
+  figure?.previewUnavailable();
+  touch.show(selectedTask === 'touch', false);
+  for (const complete of receipts.values()) complete({ cancelled: true });
+}
 
 addEventListener('message', event => {
   if (event.origin !== location.origin || event.source !== frame?.contentWindow || !event.data) return;
   if (event.data.type === 'live2d-editor:ready') {
     previewReady = true;
+    canvasState.dataset.state = 'ready';
+    canvasState.textContent = text('实时', 'Live');
+    previewNotice.hidden = true;
     figure?.previewReady(event.data.words);
     editor?.setPreviewBehavior(event.data.behavior);
     if (editor && activeModel && Array.isArray(event.data.behavior?.mouth?.parameters))
       void invoke('edit.previewParameters',[activeModel,event.data.behavior.mouth.parameters]).catch(failure);
     if (selectedTask === 'touch') touch.show(true);
+  } else if (event.data.type === 'live2d-editor:preview-error') {
+    dropPreview();
+    canvasState.dataset.state = 'error';
+    canvasState.textContent = text('预览失败', 'Preview failed');
+    previewFeedback.textContent = String(event.data.message);
+    previewNotice.hidden = previewRetry.hidden = false;
   } else if (event.data.type === 'live2d-editor:receipt') receipts.get(event.data.id)?.(event.data);
   else if (event.data.type === 'live2d-editor:action-state') editor?.actionState(event.data.id,event.data.status);
   else if (event.data.type === 'live2d-editor:touch-point') touch.pointer(event.data.point);
   else if (event.data.type === 'live2d-preview:close' && selectedTask === 'touch') touch.cancelDrawing();
-});
+}, { signal: lifetime.signal });
 function schedule(model: string | null, task: string | null) {
-  loading = loading.then(() => open(model, task)).catch(failure);
+  loading = loading.then(() => open(model, task)).catch(error => {
+    failure(error);
+    previewFeedback.textContent = text('角色加载失败', 'Could not load the character');
+    canvasState.dataset.state = 'error';
+    canvasState.textContent = text('加载失败', 'Load failed');
+    loadRetry.hidden = !key || !model;
+  });
 }
 schedule(query.get('model'), query.get('task'));
 

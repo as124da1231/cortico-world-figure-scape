@@ -28,30 +28,37 @@ export function validateFigureScheme(manifest: FigureManifest, value: unknown): 
   return value;
 }
 
-export function createFigureLibrary(directory: string) {
+export function createFigureLibrary(directory: string, builtin?: { id: string; directory: string }) {
   const root = resolve(directory), snapshots = join(root, 'sources'), preferences = join(root, 'profiles');
   const snapshot = (id: string) => join(snapshots, id);
   const hidden = (id: string) => join(preferences, id + '.removed');
   const profile = (id: string) => join(preferences, id + '.json');
   const pending = new Map<string, Promise<unknown>>();
 
+  const isBuiltin = (id: string) => id === builtin?.id;
+  const figureDirectory = (id: string) => builtin?.id === id ? resolve(builtin.directory) : snapshot(id);
+
   function find(id: string, includeRemoved = false): FigurePack | null {
-    if (!ID.test(id) || !includeRemoved && existsSync(hidden(id))) return null;
-    const dir = snapshot(id);
+    if (!ID.test(id) || !isBuiltin(id) && !includeRemoved && existsSync(hidden(id))) return null;
+    const dir = figureDirectory(id);
     try {
       const manifest = readManifest(dir);
-      return typeof manifest === 'string' ? null : { id, dir, base: '/figure-assets/' + id + '/', manifest };
+      return typeof manifest === 'string' ? null : {
+        id, dir, base: '/figure-assets/' + id + '/', manifest, ...(isBuiltin(id) ? { builtin:true } : {}),
+      };
     } catch { return null; }
   }
   function list() {
+    const packaged = builtin && find(builtin.id);
     try {
-      return readdirSync(snapshots, { withFileTypes: true }).flatMap(item => {
-        if (!item.isDirectory() || item.isSymbolicLink()) return [];
+      const imported = readdirSync(snapshots, { withFileTypes: true }).flatMap(item => {
+        if (!item.isDirectory() || item.isSymbolicLink() || item.name === packaged?.id) return [];
         const pack = find(item.name);
         return pack ? [pack] : [];
       });
+      return packaged ? [packaged,...imported] : imported;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return packaged ? [packaged] : [];
       throw error;
     }
   }
@@ -59,7 +66,7 @@ export function createFigureLibrary(directory: string) {
   function asset(id: string, path: string): string | null {
     if (!ID.test(id) || !path || isAbsolute(path) || path.split(/[\\/]/).some(part => !part || part === '.' || part === '..' || /[<>:"|?*\u0000-\u001f]/.test(part))) return null;
     try {
-      const source = snapshot(id), base = realpathSync(source);
+      const source = figureDirectory(id), base = realpathSync(source);
       const file = realpathSync(join(source, path)), subpath = relative(base, file);
       if (source.toLocaleLowerCase() !== base.toLocaleLowerCase() || !subpath || isAbsolute(subpath) ||
         subpath === '..' || subpath.startsWith('..' + sep) || !lstatSync(file).isFile()) return null;
@@ -153,8 +160,19 @@ export function createFigureLibrary(directory: string) {
     } finally { await rm(temp, { recursive: true, force: true }); }
   }
 
+  async function importGenerated(generate: (directory: string, signal: AbortSignal) => Promise<void>) {
+    const signal = new AbortController().signal;
+    await mkdir(root, { recursive:true });
+    const directory = await mkdtemp(join(root, '.generated-'));
+    try {
+      await generate(directory, signal);
+      return await prepare(join(directory,'figure.json'), signal);
+    } finally { await rm(directory, { recursive:true, force:true }); }
+  }
+
   async function remove(id: string, protectedIds: readonly string[]) {
     if (!find(id)) throw Error('形象包已经移出角色库');
+    if (isBuiltin(id)) throw Error('内置形象包无法移出角色库');
     if (protectedIds.includes(id)) throw Error('先切换到另一个角色，再移出当前角色');
     await mkdir(preferences, { recursive: true });
     await writeFile(hidden(id), '');
@@ -168,5 +186,5 @@ export function createFigureLibrary(directory: string) {
     return writeSettings(id, validated, expectedRevision);
   }
 
-  return { find, list, asset, settings, save, prepare, remove, revisionOf, rememberWardrobe: (id: string, scheme: string) => writeSettings(id, { scheme }) };
+  return { find, list, asset, settings, save, prepare, importGenerated, remove, revisionOf, rememberWardrobe: (id: string, scheme: string) => writeSettings(id, { scheme }) };
 }

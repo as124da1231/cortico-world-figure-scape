@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, readFile, rename, rm } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rename, rm, statfs } from 'node:fs/promises';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { readManifest } from '../packs.ts';
 // @ts-expect-error Figure's bounded model discovery is shared with the converter.
@@ -26,6 +26,9 @@ export function createModelIntake(directory: string) {
   const root = resolve(directory);
   const known = new Map<string, Candidate>();
   let active: AbortController | null = null;
+  const drive = /^([A-Za-z]):/.exec(root)?.[1];
+  const destination = drive ? drive.toUpperCase() + ' 盘' : '模型库所在磁盘';
+  const noSpace = destination + '空间不足。腾出空间后重新导入。';
 
   function remember(result: Discovery): Discovery {
     for (const model of result.models) known.set(model.id, model);
@@ -60,17 +63,32 @@ export function createModelIntake(directory: string) {
     const files = kind === 'zip' ? filesFromZip(bytes, undefined, limit) : filesFromBundle(bytes);
     if (typeof files === 'string') throw Error(files);
     if (!files.length) throw Error('Import contains no files');
-    await mkdir(root, { recursive: true });
-    const temp = await mkdtemp(join(root, '.import-'));
+    let temp: string | undefined;
     try {
+      await mkdir(root, { recursive: true });
+      const volume = await statfs(root).catch(() => null);
+      if (volume && volume.bsize > 0) {
+        const needed = files.reduce((total, file) => total + Math.ceil(file.bytes.length / volume.bsize) * volume.bsize, 0);
+        const available = volume.bavail * volume.bsize;
+        if (needed > available) {
+          const mib = 1024 * 1024;
+          throw Error(destination + '空间不足。解包至少需要 ' + Math.ceil(needed / mib) + ' MiB，当前可用 '
+            + Math.floor(available / mib) + ' MiB。腾出空间后重新导入。');
+        }
+      }
+      signal.throwIfAborted();
+      temp = await mkdtemp(join(root, '.import-'));
       await writeImportFiles(temp, files, signal);
       const discovered = await discover(temp, signal);
       if (!discovered.models.length) throw Error(discovered.problems[0]?.reason ?? 'No supported Live2D model or Coo figure package was found');
       signal.throwIfAborted();
       await rename(temp, target);
       return target;
+    } catch (error) {
+      if (['ENOSPC', 'EDQUOT'].includes((error as NodeJS.ErrnoException)?.code ?? '')) throw Error(noSpace, { cause: error });
+      throw error;
     } finally {
-      if (resolve(temp).startsWith(root + sep)) await rm(temp, { recursive: true, force: true });
+      if (temp && resolve(temp).startsWith(root + sep)) await rm(temp, { recursive: true, force: true });
     }
   }
 

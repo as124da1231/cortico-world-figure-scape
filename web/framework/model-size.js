@@ -12,6 +12,11 @@ export function sceneScale(mode, value) {
   return Math.max(min, Math.min(max, Number.isFinite(value) ? value : 1));
 }
 
+export function sceneSizePosition(mode, scale) {
+  const {min,max} = SCENE_SIZE_LIMITS[mode];
+  return Math.log(sceneScale(mode, scale) / min) / Math.log(max / min);
+}
+
 export function sceneScales(desktop, saved, legacy = desktop) {
   return {
     desktop: sceneScale('desktop', desktop),
@@ -52,7 +57,6 @@ export function createModelSizeControl({ doc, text, mode, label, read, preview, 
   let draft = null, inFlight = null;
   const queue = new Map();
   const listen = signal ? {signal} : undefined;
-  const positionOf = (scale, {min,max}) => Math.log(scale / min) / Math.log(max / min);
   const scaleAt = (position, {min,max}) => min * (max / min) ** position;
   const currentSize = scene => sceneScale(scene, (draft?.mode === scene ? draft.scale : undefined)
     ?? queue.get(scene) ?? (inFlight?.mode === scene ? inFlight.scale : undefined) ?? read(scene));
@@ -66,7 +70,7 @@ export function createModelSizeControl({ doc, text, mode, label, read, preview, 
     if (readout.textContent !== percentage) readout.textContent = percentage;
     slider.setAttribute('aria-valuetext', percentage);
     reset.setAttribute('aria-label', text('恢复默认大小', 'Reset character size') + ' · ' + labelText);
-    slider.value = String(positionOf(scale, limits));
+    slider.value = String(sceneSizePosition(scene, scale));
     slider.style.setProperty('--size-fill', slider.valueAsNumber * 100 + '%');
     reset.disabled = Math.abs(scale - 1) < .0001;
     smaller.disabled = scale <= limits.min;

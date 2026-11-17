@@ -17,7 +17,7 @@
   display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2;
   overflow:hidden; width:100%; font-size:inherit; line-height:inherit; overflow-wrap:anywhere;
 }
-.control-app-grid > .control-app-tile > :is(.control-phone-entry-arrow,.control-phone-switch,.m-state) { display:none; }
+.control-app-grid > .control-app-tile > :is(.control-phone-entry-arrow,.control-toggle,.m-state) { display:none; }
 .control-app-grid > .control-app-tile:not(.layout-piece):is([aria-checked=true],[aria-pressed=true],.waiting)::before {
   content:""; position:absolute; right:6px; top:6px; width:6px; height:6px; border-radius:50%;
   background:var(--control-app-accent);

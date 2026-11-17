@@ -1,0 +1,713 @@
+{
+  "manifest": 2,
+  "api": 2,
+  "id": "coo-dungeon",
+  "version": "1.4.2",
+  "name": {
+    "zh": "Coo · 重刀断岳",
+    "en": "Coo · Heavy Blade"
+  },
+  "about": {
+    "zh": "《新宿对决》的重甲剑兵 Coo。发光耳机、悬空光环与双环目镜，手持带光刃的重刀。",
+    "en": "The heavy swordsman Coo from Shinjuku Showdown, with a floating halo, twin-ring visor and luminous greatblade."
+  },
+  "entry": "figure.js",
+  "export": "createHeavyBlade",
+  "model": "model.json",
+  "thumb": "art/thumb-mint.png",
+  "axes": [
+    {
+      "id": "palette",
+      "name": {
+        "zh": "配色",
+        "en": "Palette"
+      },
+      "options": [
+        {
+          "id": "mint",
+          "name": {
+            "zh": "原版薄荷",
+            "en": "Original Mint"
+          },
+          "thumb": "art/thumb-mint.png",
+          "accent": "#23d6a9"
+        },
+        {
+          "id": "red",
+          "name": {
+            "zh": "绯红",
+            "en": "Crimson"
+          },
+          "thumb": "art/thumb-red.png",
+          "accent": "#ed5965"
+        },
+        {
+          "id": "blue",
+          "name": {
+            "zh": "冰蓝",
+            "en": "Glacier"
+          },
+          "thumb": "art/thumb-blue.png",
+          "accent": "#5d9df8"
+        },
+        {
+          "id": "sunleaf",
+          "name": {
+            "zh": "金叶",
+            "en": "Sunleaf"
+          },
+          "thumb": "art/thumb-sunleaf.png",
+          "accent": "#edbb36"
+        }
+      ]
+    },
+    {
+      "id": "blade",
+      "name": {
+        "zh": "重刀",
+        "en": "Blade"
+      },
+      "options": [
+        {
+          "id": "mint",
+          "name": {
+            "zh": "原版重刀",
+            "en": "Original Blade"
+          },
+          "thumb": "art/weapon-mint.png"
+        },
+        {
+          "id": "red",
+          "name": {
+            "zh": "绯红刃",
+            "en": "Crimson Edge"
+          },
+          "thumb": "art/weapon-red.png"
+        },
+        {
+          "id": "blue",
+          "name": {
+            "zh": "霜蓝刃",
+            "en": "Glacier Edge"
+          },
+          "thumb": "art/weapon-blue.png"
+        },
+        {
+          "id": "steel",
+          "name": {
+            "zh": "冷钢刃",
+            "en": "Cold Steel"
+          },
+          "thumb": "art/weapon-steel.png"
+        },
+        {
+          "id": "rune",
+          "name": {
+            "zh": "鎏金符文刃",
+            "en": "Gilded Rune Blade"
+          },
+          "thumb": "art/weapon-rune.png"
+        },
+        {
+          "id": "sunleaf",
+          "name": {
+            "zh": "金叶刃",
+            "en": "Sunleaf Blade"
+          },
+          "thumb": "art/weapon-sunleaf.png"
+        }
+      ]
+    },
+    {
+      "id": "halo",
+      "name": {
+        "zh": "光圈样式",
+        "en": "Halo shape"
+      },
+      "options": [
+        {
+          "id": "single",
+          "name": {
+            "zh": "原版单圈",
+            "en": "Single Halo"
+          },
+          "thumb": "art/ring-mint.png"
+        },
+        {
+          "id": "twin",
+          "name": {
+            "zh": "双光圈",
+            "en": "Twin Halo"
+          },
+          "thumb": "art/ring-twin.png"
+        },
+        {
+          "id": "none",
+          "name": {
+            "zh": "无光圈",
+            "en": "No Halo"
+          },
+          "thumb": "art/ring-none.png"
+        }
+      ]
+    },
+    {
+      "id": "halotint",
+      "name": {
+        "zh": "光圈配色",
+        "en": "Halo colour"
+      },
+      "options": [
+        {
+          "id": "mint",
+          "name": {
+            "zh": "原版薄荷光圈",
+            "en": "Original Mint Halo"
+          },
+          "thumb": "art/ring-mint.png"
+        },
+        {
+          "id": "red",
+          "name": {
+            "zh": "绯红光圈",
+            "en": "Crimson Halo"
+          },
+          "thumb": "art/ring-red.png"
+        },
+        {
+          "id": "blue",
+          "name": {
+            "zh": "冰蓝光圈",
+            "en": "Glacier Halo"
+          },
+          "thumb": "art/ring-blue.png"
+        },
+        {
+          "id": "sunleaf",
+          "name": {
+            "zh": "金叶光圈",
+            "en": "Sunleaf Halo"
+          },
+          "thumb": "art/ring-sunleaf.png"
+        }
+      ]
+    }
+  ],
+  "presets": [
+    {
+      "id": "mint-mint-single-mint",
+      "name": {
+        "zh": "原版薄荷",
+        "en": "Original Mint"
+      },
+      "pick": {
+        "palette": "mint",
+        "blade": "mint",
+        "halo": "single",
+        "halotint": "mint"
+      },
+      "accent": "#23d6a9"
+    },
+    {
+      "id": "red-red-single-red",
+      "name": {
+        "zh": "绯红",
+        "en": "Crimson"
+      },
+      "pick": {
+        "palette": "red",
+        "blade": "red",
+        "halo": "single",
+        "halotint": "red"
+      },
+      "accent": "#ed5965"
+    },
+    {
+      "id": "blue-blue-single-blue",
+      "name": {
+        "zh": "冰蓝",
+        "en": "Glacier"
+      },
+      "pick": {
+        "palette": "blue",
+        "blade": "blue",
+        "halo": "single",
+        "halotint": "blue"
+      },
+      "accent": "#5d9df8"
+    },
+    {
+      "id": "sunleaf-sunleaf-single-sunleaf",
+      "name": {
+        "zh": "金叶",
+        "en": "Sunleaf"
+      },
+      "pick": {
+        "palette": "sunleaf",
+        "blade": "sunleaf",
+        "halo": "single",
+        "halotint": "sunleaf"
+      },
+      "accent": "#edbb36"
+    }
+  ],
+  "vocab": [
+    {
+      "id": "neutral",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "平静"
+        ],
+        "en": [
+          "Neutral"
+        ]
+      },
+      "about": {
+        "zh": "双环目镜自然睁开。",
+        "en": "Neutral"
+      },
+      "seconds": 0.4
+    },
+    {
+      "id": "happy",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "开心",
+          "高兴"
+        ],
+        "en": [
+          "Happy"
+        ]
+      },
+      "about": {
+        "zh": "两只眼睛弯成向上的笑弧。",
+        "en": "Happy"
+      },
+      "seconds": 1.28
+    },
+    {
+      "id": "wink",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "眨眼",
+          "眨一只眼"
+        ],
+        "en": [
+          "Wink"
+        ]
+      },
+      "about": {
+        "zh": "闭上一只眼，另一只保持圆环。",
+        "en": "Wink"
+      },
+      "seconds": 0.77
+    },
+    {
+      "id": "love",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "喜欢",
+          "爱心"
+        ],
+        "en": [
+          "Love"
+        ]
+      },
+      "about": {
+        "zh": "两只目镜亮起心形。",
+        "en": "Love"
+      },
+      "seconds": 1.28
+    },
+    {
+      "id": "shy",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "害羞"
+        ],
+        "en": [
+          "Shy"
+        ]
+      },
+      "about": {
+        "zh": "目光下移，脸颊泛起一小点红。",
+        "en": "Shy"
+      },
+      "seconds": 1.09
+    },
+    {
+      "id": "surprised",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "惊讶",
+          "吃惊"
+        ],
+        "en": [
+          "Surprised"
+        ]
+      },
+      "about": {
+        "zh": "双环突然睁大。",
+        "en": "Surprised"
+      },
+      "seconds": 1.03
+    },
+    {
+      "id": "angry",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "生气"
+        ],
+        "en": [
+          "Angry"
+        ]
+      },
+      "about": {
+        "zh": "目镜向内压斜，像皱紧了眉。",
+        "en": "Angry"
+      },
+      "seconds": 1.32
+    },
+    {
+      "id": "sad",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "难过",
+          "伤心"
+        ],
+        "en": [
+          "Sad"
+        ]
+      },
+      "about": {
+        "zh": "眼角无力地垂下来。",
+        "en": "Sad"
+      },
+      "seconds": 1.25
+    },
+    {
+      "id": "sleepy",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "犯困",
+          "困"
+        ],
+        "en": [
+          "Sleepy"
+        ]
+      },
+      "about": {
+        "zh": "沉下眼皮，双眼只留半条亮缝。",
+        "en": "Sleepy"
+      },
+      "seconds": 1.37
+    },
+    {
+      "id": "thinking",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "思考",
+          "想想"
+        ],
+        "en": [
+          "Thinking"
+        ]
+      },
+      "about": {
+        "zh": "两只眼睛一起往斜上方看。",
+        "en": "Thinking"
+      },
+      "seconds": 1.395
+    },
+    {
+      "id": "smug",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "得意",
+          "嘚瑟"
+        ],
+        "en": [
+          "Smug"
+        ]
+      },
+      "about": {
+        "zh": "眯眼斜看，眼尾往下折。",
+        "en": "Smug"
+      },
+      "seconds": 1.125
+    },
+    {
+      "id": "pout",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "嘟嘴",
+          "哼"
+        ],
+        "en": [
+          "Pout"
+        ]
+      },
+      "about": {
+        "zh": "赌气把视线移开，脸颊微红。",
+        "en": "Pout"
+      },
+      "seconds": 1.11
+    },
+    {
+      "id": "worried",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "担心",
+          "着急"
+        ],
+        "en": [
+          "Worried"
+        ]
+      },
+      "about": {
+        "zh": "眉梢向内抬起，眼睛仍睁着。",
+        "en": "Worried"
+      },
+      "seconds": 1.105
+    },
+    {
+      "id": "determined",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "认真",
+          "坚定"
+        ],
+        "en": [
+          "Determined"
+        ]
+      },
+      "about": {
+        "zh": "压低眼睑，稳稳盯着前方。",
+        "en": "Determined"
+      },
+      "seconds": 1.27
+    },
+    {
+      "id": "flustered",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "慌张",
+          "窘"
+        ],
+        "en": [
+          "Flustered"
+        ]
+      },
+      "about": {
+        "zh": "眼睛紧张地向内挤，脸颊发红。",
+        "en": "Flustered"
+      },
+      "seconds": 1.045
+    },
+    {
+      "id": "scared",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "害怕",
+          "吓到"
+        ],
+        "en": [
+          "Scared"
+        ]
+      },
+      "about": {
+        "zh": "睁大眼睛，瞳孔缩紧。",
+        "en": "Scared"
+      },
+      "seconds": 1.08
+    },
+    {
+      "id": "excited",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "期待",
+          "星星眼"
+        ],
+        "en": [
+          "Excited"
+        ]
+      },
+      "about": {
+        "zh": "双眼变成像素星光。",
+        "en": "Excited"
+      },
+      "seconds": 1.35
+    },
+    {
+      "id": "cry",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "大哭",
+          "哭",
+          "哭泣"
+        ],
+        "en": [
+          "Cry"
+        ]
+      },
+      "about": {
+        "zh": "挤紧双眼，眼下留下短短的泪痕。",
+        "en": "Cry"
+      },
+      "seconds": 1.53
+    },
+    {
+      "id": "confused",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "疑惑",
+          "问号"
+        ],
+        "en": [
+          "Confused"
+        ]
+      },
+      "about": {
+        "zh": "一只眼睁大，另一只微微眯起。",
+        "en": "Confused"
+      },
+      "seconds": 1.035
+    },
+    {
+      "id": "heavy-slash",
+      "kind": "expression",
+      "names": {
+        "zh": [
+          "重刀断岳",
+          "挥刀"
+        ],
+        "en": [
+          "Cleaver"
+        ]
+      },
+      "about": {
+        "zh": "压身举刀后下劈。六把刀各有不同的刀光和余势。",
+        "en": "Wind up and cleave. Each blade has its own slash and follow-through."
+      },
+      "seconds": 0.7
+    },
+    {
+      "id": "stand",
+      "kind": "motion",
+      "names": {
+        "zh": [
+          "站好"
+        ],
+        "en": [
+          "Stand"
+        ]
+      },
+      "about": {
+        "zh": "站好",
+        "en": "Stand"
+      },
+      "seconds": 0.4
+    },
+    {
+      "id": "walk",
+      "kind": "motion",
+      "names": {
+        "zh": [
+          "散步"
+        ],
+        "en": [
+          "Walk"
+        ]
+      },
+      "about": {
+        "zh": "散步",
+        "en": "Walk"
+      },
+      "seconds": 2.5
+    },
+    {
+      "id": "run",
+      "kind": "motion",
+      "names": {
+        "zh": [
+          "快跑"
+        ],
+        "en": [
+          "Run"
+        ]
+      },
+      "about": {
+        "zh": "快跑",
+        "en": "Run"
+      },
+      "seconds": 1.8
+    },
+    {
+      "id": "jump",
+      "kind": "motion",
+      "names": {
+        "zh": [
+          "跳跃"
+        ],
+        "en": [
+          "Jump"
+        ]
+      },
+      "about": {
+        "zh": "跳跃",
+        "en": "Jump"
+      },
+      "seconds": 0.8
+    },
+    {
+      "id": "sleep",
+      "kind": "motion",
+      "names": {
+        "zh": [
+          "睡觉"
+        ],
+        "en": [
+          "Sleep"
+        ]
+      },
+      "about": {
+        "zh": "睡觉",
+        "en": "Sleep"
+      },
+      "seconds": 1.8
+    }
+  ],
+  "sounds": {
+    "heavyimpact": {
+      "file": "slash.wav",
+      "kind": "move",
+      "volume": 0.33,
+      "repeat": "finish"
+    }
+  },
+  "can": {
+    "walk": true
+  },
+  "effects": {
+    "reach": 0.2
+  }
+}

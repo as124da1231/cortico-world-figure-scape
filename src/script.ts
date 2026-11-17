@@ -9,6 +9,7 @@
  * `INLINE_TAG_MAX` or spanning a line is text.
  */
 import type { ModelLanguage } from './model-text.ts';
+import { speechBubbleHold } from '../web/framework/bubble-timing.js';
 
 /** One word of a body's vocabulary. */
 export interface VocabWord {
@@ -113,16 +114,14 @@ export function parseScript(script: string, vocab: readonly VocabWord[]): Parsed
 }
 
 /**
- * Seconds a script stays on screen: typing at ~20 × `speed` chars/s, plus reading time per bubble divided by `speed`
- * (`window.bubbleSpeed`). `steps` gives each character's typing steps (1/20 s) when they are not one each (the pet's
- * speech, src/speech).
+ * Estimate text-only playback and the configured hold after the last bubble.
  */
-export function estimateSeconds(beats: readonly Beat[], speed: number, steps?: (ch: string) => number): number {
+export function estimateSeconds(beats: readonly Beat[], speed: number, steps?: (ch: string) => number, replySeconds?: number): number {
   let s = 0;
-  for (const b of beats) {
+  for (const [i,b] of beats.entries()) {
     if (b.actions.length) s += .5;
     const typed = steps ? [...b.text].reduce((n, ch) => n + steps(ch), 0) : b.text.length;
-    if (b.text) s += (typed / 20 + 1.6 + b.text.length * .07) / speed;
+    s += typed / 20 / speed + speechBubbleHold(b.text.length, speed, i === beats.length - 1, replySeconds);
   }
   return Math.round(s * 10) / 10;
 }

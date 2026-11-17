@@ -31,6 +31,7 @@ const { createOverlaySource } = require('./overlay.cjs');
 const { createWindowSource, ledgesFrom, windowsFrom } = require('./windows.cjs');
 const { createAppStoreRule } = require('./app-store.cjs');
 const { captureProtection } = require('./capture-protection.cjs');
+const { createCaptureWindowReader } = require('./capture-window.cjs');
 
 /** The pages' text table of `code`, falling back as web/i18n.js does. */
 async function pageText(code) {
@@ -346,8 +347,9 @@ function runPetHost({ url, parentPid = 0, tray: withTray = true, hideFromCapture
   /** The settings, and whether the first is what hid the window. */
   let hideWhenFullscreen = false, autoHidden = false, passWhenFullscreen = false;
   /** Every click passes through while the tray says so or the second setting meets a fullscreen window. */
-  let trayThrough = false, fullscreenThrough = false;
-  const lockMouse = () => mouse.lock(trayThrough || fullscreenThrough);
+  let trayThrough = false, fullscreenThrough = false, capturing = false;
+  const captureWindow = createCaptureWindowReader();
+  const lockMouse = () => mouse.lock(trayThrough || fullscreenThrough || capturing);
   // the other windows, read only while the page asks (its body's pack needs them) and sent when they change:
   // their tops, and the whole windows with their ids, order and foreground flag
   const windows = createWindowSource({ screen });
@@ -447,7 +449,7 @@ function runPetHost({ url, parentPid = 0, tray: withTray = true, hideFromCapture
     // a page loaded afresh asks for the windows again once its body is on
     win.webContents.on('did-finish-load', () => {
       win.webContents.setZoomLevel(0); overlay.pageLoaded(); watchWindows(false); tellFloor(areaFor(display()));
-      win.webContents.send('pet:fullscreenThrough', fullscreenThrough);
+      win.webContents.send('pet:fullscreenThrough', fullscreenThrough || capturing);
       if (shape) win.webContents.send('pet:inputShape', true);
     });
     // The page learns where the cursor is even when the click-through window misses its moves, and
@@ -470,17 +472,31 @@ function runPetHost({ url, parentPid = 0, tray: withTray = true, hideFromCapture
     // the foreground (a borderless full screen game) goes over the pet. The pet asserts topmost again each
     // time another window takes the foreground, and on the first tick it is shown. While the foreground
     // window fills the pet's monitor: hidden with the first setting on, shown again once that ends; with the
-    // second, every click passes through and the page is told so.
+    // second, every click passes through and the page is told so. Capture
+    // overlays borrow the native topmost band until their selection UI closes.
     let lastForeground = null;
+    let lastCapture = -Infinity;
     const foregroundTimer = foreground && setInterval(() => {
       if (!win) return;
       const own = hwndOf(win), cur = foreground.current();
-      const covered = (hideWhenFullscreen || passWhenFullscreen) && !!fullscreen?.(cur, own);
-      if (covered && hideWhenFullscreen && !autoHidden && win.isVisible()) { autoHidden = true; win.hide(); }
-      else if (!(covered && hideWhenFullscreen) && autoHidden) { autoHidden = false; win.showInactive(); }
-      const through = covered && passWhenFullscreen;
-      if (through !== fullscreenThrough) { fullscreenThrough = through; lockMouse(); win.webContents.send('pet:fullscreenThrough', through); }
-      if (!win.isVisible()) { lastForeground = null; return; }
+      const before = fullscreenThrough || capturing;
+      const now = Date.now();
+      if (captureWindow(own,cur)) lastCapture = now;
+      const captureNow = now - lastCapture < 550;
+      if (captureNow !== capturing) {
+        capturing = captureNow;
+        win.setAlwaysOnTop(!capturing, level);
+        lastForeground = null;
+      }
+      if (!capturing) {
+        const covered = (hideWhenFullscreen || passWhenFullscreen) && !!fullscreen?.(cur, own);
+        if (covered && hideWhenFullscreen && !autoHidden && win.isVisible()) { autoHidden = true; win.hide(); }
+        else if (!(covered && hideWhenFullscreen) && autoHidden) { autoHidden = false; win.showInactive(); }
+        fullscreenThrough = covered && passWhenFullscreen;
+      }
+      const through = fullscreenThrough || capturing;
+      if (through !== before) { lockMouse(); win.webContents.send('pet:fullscreenThrough', through); }
+      if (capturing || !win.isVisible()) { lastForeground = null; return; }
       if (cur === lastForeground) return;
       lastForeground = cur;
       if (cur !== own) win.setAlwaysOnTop(true, level);
@@ -500,7 +516,7 @@ function runPetHost({ url, parentPid = 0, tray: withTray = true, hideFromCapture
   onPet('pet:interactive', (_e, on) => { if (!shape) mouse.ask(on); });
   onPet('pet:inputRects', (_e, rects) => { if (shape && Array.isArray(rects)) mouse.ask(rects); });
   onPet('pet:focus', () => {
-    if (!win) return;
+    if (!win || capturing) return;
     // Explicit text input activates this menu-bar process as well as its window.
     if (process.platform === 'darwin') app.focus({ steal: true });
     win.focus();

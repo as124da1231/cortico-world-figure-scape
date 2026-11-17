@@ -1,6 +1,7 @@
 import { encodeChunk, filePayload, localClipboardPaths, selectedFiles, readTransferredFiles } from './import-files-ui.ts';
 import type { PageContext } from '../../base/page.ts';
 import type { ModelOperation } from '../../../../framework/model-domain.ts';
+import { workspaceHref } from '../../../../framework/workspace.ts';
 import { errorText, studioControls, studioText as t } from './controls.ts';
 import { resourceLibrary } from './resources.ts';
 import type { NotificationKind } from './notifications.ts';
@@ -16,6 +17,7 @@ export function modelLibrary(
   ctx: PageContext, editor: { confirmDiscard(): Promise<boolean>; refresh(): Promise<void>; dirty?(): boolean },
   refresh: () => Promise<void>, notify: (value: string, kind?: NotificationKind) => void, edit: (id: string) => void, activeActions: HTMLElement,
   openRuntimeComponents: () => void,
+  phoneEntry: HTMLElement,
 ) {
   const c = studioControls(ctx), win = c.doc.defaultView!;
   const element = c.node('div', '', 'studio-workbench');
@@ -49,7 +51,18 @@ export function modelLibrary(
     zipInput.value = '';
     zipInput.click();
   });
-  menuItems.append(zipChoice);
+  const cabinImport = c.dialog(t('从小屋世界导入角色', 'Import a Cabin World character'), 'studio-editor-form');
+  const cabinList = c.node('div', '', 'studio-resource-list');
+  const cabinStatus = c.status();
+  const cabinSetup = c.node('a', t('连接小屋世界', 'Connect Cabin World'), 'studio-link');
+  cabinSetup.href = workspaceHref('desktop', 'cabin');
+  cabinSetup.hidden = true;
+  cabinImport.body.append(cabinStatus, cabinSetup, cabinList);
+  const cabinChoice = c.button(t('从小屋世界导入', 'Import from Cabin World'), () => {
+    importMenu.open = false;
+    if (cabinImport.open(menuTrigger)) void readCabin();
+  });
+  menuItems.append(zipChoice, cabinChoice);
   c.doc.addEventListener('click', event => {
     if (importMenu.open && event.target instanceof win.Node && !importMenu.contains(event.target)) importMenu.open = false;
   }, { signal: ctx.signal });
@@ -82,7 +95,9 @@ export function modelLibrary(
   toolbar.setAttribute('aria-label', t('模型导入区，可拖入或粘贴文件', 'Model import area. Drop or paste files.'));
   activity.append(progress, feedbackSlot, cancel, retry);
   toolbar.append(dropTarget, activity, folderInput, zipInput);
-  element.append(toolbar);
+  const entries = c.node('div', '', 'studio-workbench-entries');
+  entries.append(toolbar, phoneEntry);
+  element.append(entries);
 
   const candidates = c.dialog(t('选择要导入的模型', 'Choose a model to import'), 'studio-candidates-dialog');
   const foundList = c.node('div', '', 'studio-resource-list');
@@ -155,7 +170,7 @@ export function modelLibrary(
 
   function sync() {
     const locked = !!stage || state?.canOpenLive2d === false || !!state?.framework.model?.busy;
-    for (const control of [choose, zipChoice, folderInput, zipInput, adaptationButton]) control.disabled = locked;
+    for (const control of [choose, zipChoice, cabinChoice, folderInput, zipInput, adaptationButton]) control.disabled = locked;
     menuTrigger.tabIndex = locked ? -1 : 0;
     menuTrigger.setAttribute('aria-disabled', String(locked));
     if (locked) importMenu.open = false;
@@ -178,6 +193,56 @@ export function modelLibrary(
   });
   library.toolbar.append(maintenance);
   element.append(library.element);
+
+  let readingCabin = false, importingCabin = false;
+  async function readCabin() {
+    if (readingCabin || importingCabin) return;
+    readingCabin = true;
+    cabinSetup.hidden = true;
+    cabinList.replaceChildren();
+    cabinStatus.textContent = t('正在读取原版角色…', 'Reading original characters…');
+    try {
+      const state = await c.call<{configured: boolean}>('cabin.state');
+      if (ctx.signal.aborted || !cabinImport.element.open) return;
+      if (!state.configured) {
+        cabinStatus.textContent = t('先连接小屋世界的安装目录。', 'Connect your Cabin World installation first.');
+        cabinSetup.hidden = false;
+        return;
+      }
+      const figures = await c.call<Array<{key:string;name:string}>>('cabin.figures');
+      if (ctx.signal.aborted || !cabinImport.element.open) return;
+      cabinStatus.textContent = figures.length ? '' : t('这个安装里没有可导入的角色素材。', 'No importable characters were found.');
+      for (const figure of figures) {
+        const item = c.node('div', '', 'studio-cabin-import-row');
+        const add = c.button(t('导入', 'Import'), () => void importCabin(figure), true);
+        add.setAttribute('aria-label', t('导入 ', 'Import ') + figure.name);
+        item.append(c.node('strong', figure.name), add);
+        cabinList.append(item);
+      }
+    } catch (error) { if (!ctx.signal.aborted) cabinStatus.textContent = errorText(error); }
+    finally { readingCabin = false; }
+  }
+
+  async function importCabin(figure: {key:string;name:string}) {
+    if (importingCabin) return;
+    importingCabin = true;
+    const buttons = cabinList.querySelectorAll('button');
+    buttons.forEach(button => { button.disabled = true; });
+    cabinStatus.textContent = t('正在导入 ', 'Importing ') + figure.name;
+    try {
+      const {imported} = await c.call<{imported: string}>('cabin.importFigure', [figure.key]);
+      if (ctx.signal.aborted) return;
+      if (cabinImport.element.open) cabinImport.element.close();
+      await library.refresh();
+      library.reveal(imported);
+      notify(t('已加入角色库。', 'Added to your character library.'), 'success');
+    } catch (error) {
+      if (!ctx.signal.aborted) cabinStatus.textContent = errorText(error);
+    } finally {
+      importingCabin = false;
+      buttons.forEach(button => { button.disabled = false; });
+    }
+  }
 
   async function updateAdaptation(save: boolean) {
     const controls = [strategy, saveAdaptation];

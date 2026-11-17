@@ -107,7 +107,7 @@ describe('engine api', () => {
 
     holdSpeech(page, sentence());
     await expect.poll(() => host.events.length, { timeout: 5000 }).toBe(1);
-    expect(host.events[0]).toMatchObject({ type: 'desktop-live2d-pet.speech', text: '[Live2D] [voice] 伙伴:今天天气怎么样' });
+    expect(host.events[0]).toMatchObject({ type: 'desktop-live2d-pet.speech', text: expect.stringContaining('[voice] 伙伴:今天天气怎么样') });
     const [req] = seen;
     expect(req).toMatchObject({ method: 'POST', path: '/v1/audio/transcriptions', auth: 'Bearer test-key', fields: { model: 'test-model', language: 'zh', response_format: 'json' } });
     expect(req!.file!.type).toBe('audio/wav');

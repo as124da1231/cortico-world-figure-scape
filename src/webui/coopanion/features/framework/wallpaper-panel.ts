@@ -3,8 +3,10 @@ import type { PageContext } from '../../base/page.ts';
 import { WORKSPACE_PROVIDER } from '../../../../framework/workspace.ts';
 import { createWallpaperPlacementControl, type WallpaperComposition } from '../../../../../web/framework/wallpaper-placement-control.js';
 import type { WallpaperOptions } from '../../../../framework/wallpaper-library.ts';
+import { visibleScene, type RuntimeState } from './runtime.ts';
 import { errorText, studioControls, studioText as t } from './controls.ts';
 import { encodeChunk, filePayload, readTransferredFiles, selectedFiles } from './import-files-ui.ts';
+import type { sceneWorkspace } from './scene-workspace.ts';
 
 type Item = { id: string; title: string; kind: 'image' | 'video' | 'scene' | 'web'; cover: boolean; composition: WallpaperComposition };
 type Catalog = { items: Item[]; selected: string | null; options: WallpaperOptions };
@@ -22,22 +24,24 @@ const message = (error: unknown) => {
   } as Record<string, string>)[raw] ?? raw;
 };
 
-export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<void>) {
+export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<void>, workspace: ReturnType<typeof sceneWorkspace>) {
   const c = studioControls(ctx), win = c.doc.defaultView!;
   let state: Catalog | undefined, busy = false;
   let removal: Item | undefined, operation: string | undefined, upload: string | undefined;
   let cancelled = false, currentRender = 0, page = 0;
+  let wallpaperMode = false, wallpaperError = false, activeWallpaper: string | undefined;
+  let catalogKey = '';
   const covers = new Map<string, Promise<string>>();
   const section = c.section(t('壁纸', 'Wallpaper'));
-  section.classList.add('studio-wallpaper-settings');
+  section.classList.add('studio-wallpaper-settings', 'studio-scene-settings');
   const title = section.querySelector('h2')!;
+  title.textContent = t('背景与构图', 'Background and composition');
   const header = c.node('header', '', 'studio-wallpaper-header');
   const current = c.node('p', '', 'studio-help');
   const openLibrary = c.button(t('壁纸库', 'Wallpaper library'), () => open(openLibrary));
   const heading = c.node('div');
   heading.append(title, current);
   const compositionButton = c.button(t('角色构图', 'Character composition'), () => void openComposition());
-  for (const trigger of [openLibrary,compositionButton]) trigger.setAttribute('aria-haspopup','dialog');
   const headerActions = c.node('div','','studio-inline');
   headerActions.append(compositionButton,openLibrary);
   header.append(heading,headerActions);
@@ -54,7 +58,7 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
   controls.append(
     c.field(t('画面适应', 'Fit'), fit),
     c.field(t('背景缩放', 'Background scale'), scaleRange.element),
-    c.field(t('壁纸音量', 'Wallpaper volume'), volumeRange.element, t('只调整背景声音。', 'Adjusts background audio.')),
+    c.field(t('壁纸音量', 'Wallpaper volume'), volumeRange.element, t('仅影响壁纸本身的声音，0% 为静音。', 'Wallpaper audio only. 0% mutes it.')),
     c.field(t('暂停动态壁纸', 'Pause animated wallpaper'), paused),
     c.field(t('壁纸响应鼠标', 'Wallpaper reacts to the pointer'), interactive,
       t('适用于支持鼠标互动的实时壁纸。', 'Available for live wallpapers with pointer interactions.')),
@@ -66,7 +70,8 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
   paused.addEventListener('change', () => void update({paused:paused.checked}), {signal:ctx.signal});
   interactive.addEventListener('change', () => void update({interactive:interactive.checked}), {signal:ctx.signal});
 
-  const compositionDialog = c.dialog(t('角色构图', 'Character composition'), 'studio-wallpaper-composition');
+  const compositionBody = c.node('div', '', 'studio-wallpaper-composition');
+  const compositionPage = {title: t('角色构图', 'Character composition'), body: compositionBody, close: releaseArt};
   const loadingArt = c.status();
   let artURLs: string[] = [], artRequest = 0;
   const composition = createWallpaperPlacementControl({
@@ -84,7 +89,7 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
       return saved;
     },
   });
-  compositionDialog.body.append(composition.element,loadingArt);
+  compositionBody.append(composition.element,loadingArt);
   function releaseArt() {
     artRequest++;
     composition.deactivate();
@@ -92,12 +97,12 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
     for (const url of artURLs) win.URL.revokeObjectURL(url);
     artURLs = [];
   }
-  compositionDialog.element.addEventListener('close',releaseArt,{signal:ctx.signal});
   ctx.lifecycle.add(releaseArt);
 
   async function openComposition() {
     const item = state?.items.find(row => row.id === state?.selected);
-    if (!item || !compositionDialog.open(compositionButton)) return;
+    if (!item || workspace.showing(compositionPage)) return;
+    workspace.open(compositionPage, compositionButton);
     const ticket = ++artRequest;
     composition.sync(item,true);
     composition.setArt();
@@ -108,7 +113,7 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
       item.cover ? binary('wallpaper.cover',item.id).catch(() => undefined) : undefined,
       runtime.then(value => value?.skin?.figure ? binary('resources.cover',value.skin.figure).catch(() => undefined) : undefined),
     ]);
-    if (ticket !== artRequest || !compositionDialog.element.open || ctx.signal.aborted) return;
+    if (ticket !== artRequest || !workspace.showing(compositionPage) || ctx.signal.aborted) return;
     const current = await runtime;
     const url = (blob?: Blob) => {
       if (!blob) return;
@@ -123,8 +128,9 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
       : !wallpaper ? t('此壁纸暂无封面。','This wallpaper has no cover.') : '';
   }
 
-  const dialog = c.dialog(t('壁纸库', 'Wallpaper library'), 'studio-wallpaper-dialog');
   const body = c.node('div', '', 'studio-wallpaper-library');
+  const libraryPage = {title: t('壁纸库', 'Wallpaper library'), body, close: closeLibrary};
+  const libraryOpen = () => workspace.showing(libraryPage);
   const toolbar = c.node('div', '', 'studio-wallpaper-toolbar');
   const files = c.node('input'); files.type = 'file'; files.hidden = true;
   files.accept = '.png,.jpg,.jpeg,.webp,.avif,.gif,.mp4,.webm,.pkg,.zip';
@@ -147,8 +153,8 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
   toolbar.append(choose, chooseFolder, steam, search);
   const grid = c.node('div', '', 'studio-wallpaper-grid');
   const pages = c.node('div', '', 'studio-wallpaper-pages');
-  const previous = c.button(t('上一页', 'Previous'), () => { page--; buildCards(); });
-  const next = c.button(t('下一页', 'Next'), () => { page++; buildCards(); });
+  const previous = c.button(t('上一页', 'Previous'), () => { page--; buildCards(); workspace.viewport.scrollTop = 0; });
+  const next = c.button(t('下一页', 'Next'), () => { page++; buildCards(); workspace.viewport.scrollTop = 0; });
   const pageLabel = c.node('span', '', 'studio-help');
   pages.append(previous, pageLabel, next);
   const dialogStatus = c.status();
@@ -159,8 +165,7 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
   confirmation.hidden = true;
   statusBar.append(dialogStatus, cancel);
   body.append(toolbar, files, folder, grid, pages, confirmation, statusBar);
-  dialog.body.append(body);
-  search.addEventListener('input', () => { page = 0; buildCards(); }, {signal:ctx.signal});
+  search.addEventListener('input', () => { page = 0; buildCards(); workspace.viewport.scrollTop = 0; }, {signal:ctx.signal});
   for (const input of [files, folder]) input.addEventListener('change', () => {
     if (input.files?.length) void uploadFiles(() => selectedFiles(input.files!));
   }, {signal:ctx.signal});
@@ -179,12 +184,12 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
     const transfer = event.dataTransfer;
     void uploadFiles(() => readTransferredFiles(transfer));
   }, {signal:ctx.signal});
-  dialog.element.addEventListener('close', () => {
+  function closeLibrary() {
     removal = undefined;
     if (operation || upload) void cancelWork();
     for (const cover of covers.values()) void cover.then(url => win.URL.revokeObjectURL(url), () => {});
     covers.clear();
-  }, {signal:ctx.signal});
+  }
   ctx.lifecycle.add(() => {
     if (upload) c.keepalive('wallpaper.cancelUpload', [upload]);
     if (operation) c.keepalive('operation.cancel', [operation]);
@@ -193,9 +198,12 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
 
   function sync() {
     const item = state?.items.find(row => row.id === state?.selected);
-    current.textContent = item?.title ?? t('从壁纸库选择背景。', 'Choose a background from your wallpaper library.');
+    current.textContent = item
+      ? (activeWallpaper === item.id ? t('当前背景 · ', 'Current background · ') : t('已选背景 · ', 'Selected background · ')) + item.title
+      : t('从壁纸库选择背景。', 'Choose a background from your wallpaper library.');
     controls.hidden = !item;
     compositionButton.disabled = busy || !item;
+    openLibrary.textContent = wallpaperMode ? t('更换壁纸', 'Change wallpaper') : t('壁纸库', 'Wallpaper library');
     if (state) {
       const options = state.options;
       fit.value = options.fit;
@@ -210,6 +218,13 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
     interactive.disabled ||= item?.kind === 'image' || item?.kind === 'video';
     for (const button of [choose, chooseFolder, scan, ...grid.querySelectorAll('button')]) {
       button.disabled = busy || !!removal;
+      const id = button.dataset.wallpaperChoice;
+      if (!id) continue;
+      const selected = id === state?.selected, active = id === activeWallpaper, retry = selected && wallpaperError;
+      button.textContent = retry ? t('重新加载', 'Reload') : active ? t('使用中', 'In use') : selected ? t('已选定', 'Selected')
+        : wallpaperMode ? t('切换到这张', 'Switch to this') : t('设为背景', 'Set as background');
+      button.classList.toggle('is-primary', retry || !selected && !active);
+      button.disabled ||= !retry && (active || selected);
     }
     search.disabled = busy || !!removal;
     for (const button of confirmation.querySelectorAll('button')) button.disabled = busy;
@@ -228,6 +243,7 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
 
   function buildCards() {
     const token = ++currentRender;
+    const scroll = workspace.viewport.scrollTop;
     const query = search.value.trim().toLocaleLowerCase();
     const list = (state?.items ?? []).filter(item => (item.title + ' ' + kindLabel[item.kind]).toLocaleLowerCase().includes(query));
     grid.replaceChildren();
@@ -244,6 +260,8 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
     pageLabel.textContent = (page + 1) + ' / ' + total;
     for (const item of list.slice(page * size, (page + 1) * size)) {
       const card = c.node('article', '', 'studio-wallpaper-card');
+      card.dataset.wallpaperItem = item.id;
+      card.tabIndex = -1;
       const thumbnail = c.node('div', '', 'studio-wallpaper-cover');
       const kind = c.node('span', kindLabel[item.kind], 'studio-wallpaper-kind');
       const placeholder = c.node('span', t('暂无封面', 'No cover'), 'studio-wallpaper-no-cover');
@@ -252,7 +270,7 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
         const img = c.node('img'); img.alt = ''; img.loading = 'lazy';
         thumbnail.prepend(img);
         void cover(item).then(url => {
-          if (token === currentRender && dialog.element.open) img.src = url;
+          if (token === currentRender && libraryOpen()) img.src = url;
         }, () => img.remove());
         img.addEventListener('load', () => { placeholder.hidden = true; }, {once:true,signal:ctx.signal});
         img.addEventListener('error', () => img.remove(), {once:true,signal:ctx.signal});
@@ -260,15 +278,15 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
       const name = c.node('h3', item.title);
       name.title = item.title;
       const actions = c.node('div', '', 'studio-inline');
-      const selected = item.id === state?.selected;
-      const use = c.button(selected ? t('进入场景', 'Open scene') : t('使用', 'Use'), () => void activate(item), !selected);
+      const use = c.button('', () => void activate(item));
+      use.dataset.wallpaperChoice = item.id;
       const remove = c.button(t('移除', 'Remove'), () => askRemoval(item, remove));
       actions.append(use, remove);
-      if (selected) actions.append(c.node('span', t('已选定', 'Selected'), 'studio-wallpaper-selected'));
       card.append(thumbnail, name, actions);
       grid.append(card);
     }
     sync();
+    workspace.viewport.scrollTop = scroll;
   }
 
   function askRemoval(item: Item, opener?: HTMLButtonElement) {
@@ -305,11 +323,14 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
 
   async function refresh() {
     state = await c.call<Catalog>('wallpaper.state');
-    if (dialog.element.open) buildCards(); else sync();
+    const key = JSON.stringify(state.items.map(({id,title,kind,cover}) => [id,title,kind,cover]));
+    if (libraryOpen() && key !== catalogKey) buildCards(); else sync();
+    catalogKey = key;
   }
 
   function open(opener?: HTMLElement) {
-    if (!dialog.open(opener)) return;
+    if (libraryOpen()) return;
+    workspace.open(libraryPage, opener);
     clearRemoval();
     search.value = ''; page = 0;
     dialogStatus.textContent = '';
@@ -335,7 +356,7 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
       const path = await ctx.pickPath?.(options);
       if (!path) return;
       await c.call('wallpaper.import', [path]);
-      dialogStatus.textContent = t('已添加。选择「使用」进入壁纸场景。', 'Added. Select Use to open the wallpaper scene.');
+      dialogStatus.textContent = t('壁纸已添加到库。', 'Wallpaper added to the library.');
     });
   }
 
@@ -353,43 +374,56 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
     await run(async () => {
       dialogStatus.textContent = t('正在读取壁纸文件…', 'Reading wallpaper files…');
       const payload = filePayload(await read());
-      if (cancelled || !dialog.element.open || ctx.signal.aborted) return;
+      if (cancelled || !libraryOpen() || ctx.signal.aborted) return;
       const {id} = await c.call<{id:string}>('wallpaper.beginUpload', [payload.kind, payload.blob.size]);
       upload = id; sync();
       try {
         for (let offset = 0; offset < payload.blob.size; offset += 1_000_000) {
-          if (cancelled || ctx.signal.aborted || !dialog.element.open) return;
+          if (cancelled || ctx.signal.aborted || !libraryOpen()) return;
           const chunk = await encodeChunk(payload.blob.slice(offset, offset + 1_000_000));
           const receipt = await c.call<{done:number;total:number}>('wallpaper.appendUpload', [id, offset, chunk]);
           if (!cancelled) dialogStatus.textContent = t('正在导入壁纸… ', 'Importing wallpaper… ') + Math.floor(receipt.done / receipt.total * 100) + '%';
         }
-        if (cancelled || ctx.signal.aborted || !dialog.element.open) return;
+        if (cancelled || ctx.signal.aborted || !libraryOpen()) return;
         await c.call('wallpaper.finishUpload', [id]);
-        dialogStatus.textContent = t('已添加。选择「使用」进入壁纸场景。', 'Added. Select Use to open the wallpaper scene.');
+        dialogStatus.textContent = t('壁纸已添加到库。', 'Wallpaper added to the library.');
       } finally { c.keepalive('wallpaper.cancelUpload', [id]); upload = undefined; }
     });
   }
 
   async function activate(item: Item) {
     await run(async () => {
-      operation = win.crypto.randomUUID(); sync();
-      dialogStatus.textContent = t('正在准备壁纸，当前画面仍可用…', 'Preparing the wallpaper. The current scene stays active…');
+      const request = win.crypto.randomUUID();
+      operation = wallpaperMode ? request : undefined;
+      sync();
+      dialogStatus.textContent = operation
+        ? t('正在加载新壁纸…', 'Loading the new wallpaper…') : t('正在保存背景选择…', 'Saving the selected background…');
       try {
-        const result = await c.call<{phase:string;applied:boolean;error?:string}>('wallpaper.select', [item.id, operation]);
+        const result = await c.call<{phase:string;applied:boolean;selectionOnly?:boolean;error?:string}>('wallpaper.choose', [item.id, request]);
         if (result.phase === 'failed') throw Error(result.error ?? 'wallpaper-first-frame-failed');
         if (result.phase !== 'completed') return;
-        await refreshRuntime();
-        feedback.textContent = result.applied ? '' : t('已选定。显示桌宠后加载这张壁纸。', 'Selected. The wallpaper will load when the pet is shown.');
-        if (dialog.element.open) dialog.element.close();
+        dialogStatus.textContent = result.applied ? t('壁纸已切换。', 'Wallpaper switched.')
+          : result.selectionOnly ? t('已设为壁纸场景的背景。', 'Background saved for wallpaper mode.')
+            : t('已选定。显示桌宠后加载这张壁纸。', 'Selected. The wallpaper will load when the pet is shown.');
       } finally { operation = undefined; }
     });
+    await refreshRuntime();
+    if (libraryOpen() && !body.contains(c.doc.activeElement)) {
+      grid.querySelector<HTMLElement>(`[data-wallpaper-item="${item.id}"]`)?.focus({preventScroll:true});
+    }
   }
 
   async function cancelWork() {
     cancelled = true;
     cancel.disabled = true;
     try {
-      if (operation) await c.call('operation.cancel', [operation]);
+      if (operation) {
+        const receipt = await c.call<{phase?:string} | null>('operation.cancel', [operation]);
+        if (receipt?.phase === 'committing' || receipt?.phase === 'completed') {
+          cancelled = false;
+          return;
+        }
+      }
       if (upload) await c.call('wallpaper.cancelUpload', [upload]);
       dialogStatus.textContent = t('操作已取消。', 'Operation cancelled.');
     } catch (error) { if (!ctx.signal.aborted) dialogStatus.textContent = message(error); }
@@ -397,6 +431,20 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
   }
 
   sync();
-  return { section, openLibrary, open, refresh, hasSelection: () => !!state?.selected };
+  function renderRuntime(next: RuntimeState) {
+    const inCabin = ['connecting','active','leaving'].includes(next.cabinWorld?.phase ?? '');
+    const selected = !inCabin && next.presentation?.desired === 'wallpaper';
+    const error = !!(selected && (next.presentation?.details?.wallpaper?.kind === 'failed'
+      || next.presentation?.applied !== 'wallpaper' && next.presentation?.error));
+    const inUse = visibleScene(next) === 'wallpaper';
+    const active = inUse && !error ? next.presentation?.details?.wallpaper?.id : undefined;
+    if (wallpaperMode === inUse && activeWallpaper === active && wallpaperError === error) return;
+    wallpaperMode = inUse;
+    wallpaperError = error;
+    activeWallpaper = active;
+    sync();
+  }
+
+  return { section, openLibrary, open, refresh, renderRuntime, hasSelection: () => !!state?.selected };
 }
 

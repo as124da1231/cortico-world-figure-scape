@@ -6,3 +6,5 @@ web/dist/
 .cortico/
 /.codex/
 /web/whale/
+/cabin-runtime/
+/src/phone-link/client/*.apk

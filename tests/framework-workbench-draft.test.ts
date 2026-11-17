@@ -49,16 +49,49 @@ it('retains one draft across module and model-section navigation without rereadi
  back.controller.abort();
  window.dispatchEvent(new PageTransitionEvent('pagehide'));
 });
-it('retains a failed draft and blocks saving it to a different model',async()=>{
- api.invokePanel.mockImplementation(async(_p,_panel,method)=>{if(method==='modelEditor')return structuredClone(contract);if(method==='saveModel')throw Error('Load failed');return{model:{phase:'failed',saved:true,applied:false}};});
+it('retains a failed draft even when the latest global operation belongs to a different model',async()=>{
+ api.invokePanel.mockImplementation(async(_p,_panel,method)=>{if(method==='modelEditor')return structuredClone(contract);if(method==='saveModel')throw Error('Load failed');if(method==='operation.get')return null;return{model:{phase:'failed',saved:true,applied:false}};});
  const f=context(),editor=modelEditor(f.ctx);f.root.append(editor.element);await editor.refresh();
  const zoom=f.root.querySelector('[data-field="fit.zoom"]') as HTMLInputElement;zoom.value='1.4';zoom.dispatchEvent(new Event('input',{bubbles:true}));
  const save=Array.from(f.root.querySelectorAll('button')).find(b=>b.textContent==='保存并应用')!;save.click();
- await vi.waitFor(()=>expect(f.root.textContent).toContain('配置已保存，但应用失败'));
+ await vi.waitFor(()=>expect(f.root.textContent).toContain('保存未完成，当前修改已保留'));
  expect((f.root.querySelector('[data-field="fit.zoom"]') as HTMLInputElement).value).toBe('1.4');
  expect(api.invokePanel.mock.calls.filter(c=>c[2]==='modelEditor')).toHaveLength(1);
  editor.modelChanged('another');expect(save.disabled).toBe(true);save.click();
  expect(api.invokePanel.mock.calls.filter(c=>c[2]==='saveModel')).toHaveLength(1);f.controller.abort();
+});
+
+it('keeps the save receipt on task changes and reapplies its exact revision without writing new settings',async()=>{
+ const f=context();
+ let requestId:unknown, revision='r1';
+ const invoke=vi.fn(async(method:string,args:unknown[]=[])=>{
+  if(method==='modelEditor')return {...structuredClone(contract),editor:{...structuredClone(contract.editor),revision}};
+  if(method==='saveLibraryModel'){
+   requestId=args[4];revision='r2';
+   throw Error('Body disconnected');
+  }
+  if(method==='operation.get'&&args[0]===requestId)return {saved:true,applied:false,revision,phase:'failed',error:'Body disconnected'};
+  if(method==='applySavedModel')return {saved:true,applied:true,revision};
+  throw Error(method);
+ });
+ const editor=modelEditor(f.ctx,{invoke:invoke as never,onDraft:()=>{}});
+ f.root.append(editor.element);
+ await editor.ensureLoaded('raw');
+ const command=(label:string)=>[...f.root.querySelectorAll('button')].find(b=>b.textContent===label)!;
+ const save=command('保存并应用');
+ expect(save.disabled).toBe(true);
+ const zoom=f.root.querySelector<HTMLInputElement>('[data-field="fit.zoom"]')!;
+ zoom.value='1.8';zoom.dispatchEvent(new Event('input',{bubbles:true}));
+ save.click();
+ const retry=command('重新应用已保存版本');
+ await vi.waitFor(()=>expect(retry.hidden).toBe(false));
+ editor.selectSection('behavior');
+ expect(f.root.querySelector('.studio-editor-save-notice')?.textContent).toContain('已保存，应用失败');
+ retry.click();
+ await vi.waitFor(()=>expect(retry.hidden).toBe(true));
+ expect(invoke).toHaveBeenCalledWith('applySavedModel',['raw','r2'],{signal:f.controller.signal});
+ expect(invoke.mock.calls.filter(([method])=>method==='saveLibraryModel')).toHaveLength(1);
+ f.controller.abort();
 });
 it('asks before discarding edits and cancellation leaves the draft intact',async()=>{
  api.invokePanel.mockResolvedValue(structuredClone(contract));const f=context(),editor=modelEditor(f.ctx);f.root.append(editor.element);await editor.refresh();

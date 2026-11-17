@@ -1,3 +1,19 @@
+/* Coopanion Desktop Pet palette, from its pet.css in Coopanion 0.2.21. */
+:root {
+  --coo-bg:light-dark(#F3F2F6,#0D1117);
+  --coo-surface:light-dark(#FFFFFF,#151A22);
+  --coo-text:light-dark(#1B1626,#E9EDF2);
+  --coo-muted:light-dark(#6A6577,#8C95A3);
+  --coo-line:light-dark(#E2DFE8,#252C37);
+  --coo-control-line:light-dark(#D0D2D0,#566170);
+  --coo-accent:light-dark(#00A870,#2FD59B);
+  --coo-accent-ink:light-dark(#008257,#2FD59B);
+  --coo-tint:color-mix(in srgb,var(--coo-accent) 13%,var(--coo-surface));
+  --coo-said-bg:light-dark(#E6E9E7,#2C3230);
+  --coo-said-ink:light-dark(#1F2221,#E6EAE8);
+  --coo-shadow:light-dark(rgba(27,22,38,.12),rgba(0,0,0,.32));
+  --coo-warning:light-dark(#96743B,#C4A372);
+}
 :is(.pet-studio, .studio-workspace-chrome, .live2d-preview, .live2d-surface) {
   color-scheme: light dark;
   --studio-bg: light-dark(#F7F3EF, #221C22);

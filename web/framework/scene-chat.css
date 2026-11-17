@@ -3,7 +3,7 @@
   --landscape-conversation-width:440px;
   position:fixed; z-index:4; display:flex; flex-direction:column; justify-content:flex-end;
   gap:6px; padding:12px 52px 11px 12px; overflow:hidden; border-radius:14px; pointer-events:none;
-  box-sizing:border-box; color:var(--studio-text); font-family:var(--studio-font);
+  box-sizing:border-box; color:var(--coo-text);
 }
 .landscape-chat[hidden], .landscape-chat [hidden] { display:none!important; }
 .landscape-chat-rail, .landscape-chat-dock {
@@ -44,23 +44,25 @@
 .landscape-chat-form button {
   display:inline-flex; align-items:center; justify-content:center; gap:6px;
   min-block-size:33px; padding:4px 9px; font:inherit; font-size:12px;
-  color:inherit; background:var(--studio-surface); border:1px solid var(--studio-control-line);
+  color:var(--coo-muted); background:var(--coo-surface); border:1.5px solid var(--coo-line);
   border-radius:8px; cursor:pointer;
 }
-.landscape-chat :is(button,textarea):focus-visible { outline:2px solid var(--studio-focus); outline-offset:1px; }
+.landscape-chat :is(button,textarea):focus-visible { outline:2px solid var(--coo-accent); outline-offset:1px; }
 .landscape-chat button:disabled { opacity:.55; cursor:default; }
 .landscape-chat button svg { inline-size:16px; block-size:16px; }
 .landscape-chat-form {
   display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:5px;
   inline-size:100%; min-inline-size:0; padding:5px;
-  background:var(--studio-surface); border:1px solid var(--studio-line); border-radius:12px;
-  box-shadow:var(--studio-shadow); box-sizing:border-box;
+  background:var(--coo-surface); border:1.5px solid var(--coo-line); border-radius:11px;
+  box-shadow:0 6px 16px var(--coo-shadow); box-sizing:border-box;
 }
 .landscape-chat-form textarea {
   display:block; min-inline-size:0; inline-size:100%; min-block-size:33px; max-block-size:56px;
   padding:7px; resize:none; font:inherit; font-size:13px; line-height:18px;
-  color:inherit; background:var(--studio-sunken); border:0; border-radius:7px; box-sizing:border-box;
+  color:inherit; background:var(--coo-bg); border:0; border-radius:7px; box-sizing:border-box;
 }
+.landscape-chat-form .landscape-chat-send { background:var(--coo-text); color:var(--coo-surface); border-color:transparent; }
+.landscape-chat-form .landscape-chat-mic:is(.on,.holding,.live) { color:var(--coo-accent); }
 .landscape-chat-form .landscape-chat-mic { padding:0; inline-size:33px; }
 
 .landscape-chat-feedback {
@@ -68,63 +70,12 @@
 }
 .landscape-chat-feedback:empty { display:none; }
 
-/* Room conversation stays low and still while the character moves among the furniture. */
-.landscape-chat[data-landscape-chat=room] .landscape-chat-reply .bubble {
-  background:light-dark(#fffaf2,#2a2224); color:var(--studio-text);
-  border:1px solid light-dark(#e8d7c5,#63505a); border-radius:12px 12px 12px 4px;
-  box-shadow:0 4px 18px #2b1c2f30;
-}
-.landscape-chat[data-landscape-chat=room] .landscape-chat-spoken .bubble {
-  background:light-dark(#f4e3eb,#432e38); color:var(--studio-text);
-  border:1px solid var(--studio-line); border-radius:12px 12px 4px 12px;
-}
-
-.landscape-chat[data-landscape-chat=room] .landscape-chat-form {
-  --studio-surface:light-dark(#fff9ef,#35282a);
-  --studio-sunken:light-dark(#f2e4d8,#463538);
-  --studio-line:light-dark(#dfcaba,#775a60);
-  border-color:var(--studio-line); color:light-dark(#3b2928,#fff1de);
-}
-.landscape-chat[data-landscape-chat=room] .landscape-chat-input::placeholder { color:light-dark(#77544c,#dcc0ad); }
-.landscape-chat[data-landscape-chat=room] .landscape-chat-send {
-  color:light-dark(#672f24,#251613); background:light-dark(#f3d5bf,#deb59f); border-color:transparent;
-}
-.landscape-chat[data-landscape-chat=room] .landscape-chat-mic {
-  color:light-dark(#773c30,#f9decc); background:var(--studio-sunken); border-color:var(--studio-line);
-}
-.landscape-chat[data-landscape-chat=room] :is(textarea,button):focus-visible { outline-color:light-dark(#915b51,#ecc5aa); }
-
-/* Wallpaper dialogue uses dimmed subtitles and a low-contrast frame around the always visible composer. */
-.landscape-chat[data-landscape-chat=wallpaper] { --subtitle-bg:#221922e8; padding-inline:44px; }
+/* Wallpaper dialogue stays centered over the scene. */
+.landscape-chat[data-landscape-chat=wallpaper] { padding-inline:44px; }
 .landscape-chat[data-landscape-chat=wallpaper] :is(.landscape-chat-rail,.landscape-chat-dock) { align-self:center; }
 .landscape-chat[data-landscape-chat=wallpaper] .landscape-chat-reply { justify-content:center; }
-.landscape-chat[data-landscape-chat=wallpaper] .landscape-chat-reply .bubble {
-  background:var(--subtitle-bg); color:#fff8f6;
-  border:1px solid #fff5f83d; border-radius:9px; box-shadow:0 4px 16px #110c1470;
-}
 .landscape-chat[data-landscape-chat=wallpaper] .landscape-chat-reply .bubble.say {
   text-align:center; padding:8px 14px;
-}
-.landscape-chat[data-landscape-chat=wallpaper] .landscape-chat-spoken .bubble {
-  background:#281f2bd9; color:#fff0f4; border:1px solid #f6e4ea4d; border-radius:12px 12px 4px 12px;
-}
-.landscape-chat[data-landscape-chat=wallpaper] .landscape-chat-form {
-  background:#211b25ed; color:#faf1f7; border-color:#ebd6e54d; border-radius:14px; box-shadow:0 4px 16px #100b1480;
-}
-.landscape-chat[data-landscape-chat=wallpaper] .landscape-chat-input { background:#37303de8; }
-.landscape-chat[data-landscape-chat=wallpaper] .landscape-chat-input::placeholder { color:#d4c1d6; }
-.landscape-chat[data-landscape-chat=wallpaper] .landscape-chat-send {
-  color:#231b28; background:#e8d6ed; border-color:transparent;
-}
-.landscape-chat[data-landscape-chat=wallpaper] .landscape-chat-mic {
-  color:#f5e8fa; background:#3e3347; border-color:#dbc3e64d;
-}
-.landscape-chat[data-landscape-chat=wallpaper] .landscape-chat-feedback { color:#ffbcca; }
-.landscape-chat[data-landscape-chat=wallpaper] :is(textarea,button):focus-visible { outline-color:#e4c9f1; }
-.landscape-chat[data-landscape-chat=wallpaper] .bubble a { color:#ffd1df; }
-.landscape-chat[data-landscape-chat=wallpaper] .bubble :is(.b-hint,.status-text,.interim) { color:#edceda; }
-.landscape-chat[data-landscape-chat=wallpaper] .bubble :is(.b-opt,.b-own button,.b-close,.b-expand,.b-cancel,.d-pill,.d-form button) {
-  background:#442f3f; color:#fff8f6; border-color:#e8c4d251;
 }
 
 .live2d-surface .pet-space.pet-space-phone {
@@ -136,22 +87,6 @@
 }
 .pet-space-room .scene-exit button:hover:not(:disabled) { background:#fff8f1; }
 .pet-space-room .scene-exit button:focus-visible { outline-color:#d29980; }
-.live2d-surface .pet-phone-chat {
-  --phone-panel:light-dark(#fbfafff5,#292836f2);
-  --phone-paper:light-dark(#f0edf9ef,#242331ef);
-  --phone-tint:light-dark(#e9e2f7,#433955);
-  --phone-ink:light-dark(#28243a,#f7f2fd);
-  --phone-soft:light-dark(#5f5577,#cabddc);
-  --phone-line:light-dark(#d9cfe8,#594b6e);
-  --phone-accent:light-dark(#674788,#dfc6fa);
-}
-.pet-phone-chat .phone-chat-message[data-side=user] { border-color:color-mix(in srgb,var(--phone-line) 75%,var(--phone-accent)); }
 .pet-phone-chat .phone-chat-message:not([hidden]) { font-size:calc(13px * var(--bubble-font, 1)); }
 .pet-phone-chat .phone-chat-dock .phone-chat-input::placeholder { color:var(--phone-soft); }
-
-/* Short desktop speech keeps its head anchor and gets a distinct incoming and outgoing silhouette. */
-:root[data-scene=desktop] #bubble.say {
-  border-radius:calc(14px * var(--bubble-size, 1)) calc(14px * var(--bubble-size, 1)) calc(12px * var(--bubble-size, 1)) calc(8px * var(--bubble-size, 1));
-}
-:root[data-scene=desktop] .bubble.said.settled { border-radius:calc(13px * var(--bubble-size, 1)) calc(13px * var(--bubble-size, 1)) calc(5px * var(--bubble-size, 1)) calc(13px * var(--bubble-size, 1)); }
 

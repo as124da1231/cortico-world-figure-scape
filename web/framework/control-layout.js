@@ -21,7 +21,7 @@ export const CONTROL_COMPONENTS = {
   workbench: { label: ['打开工作台', 'Open workbench'], icon: 'settings', rail: true },
   through: { label: ['鼠标穿透', 'Click-through'], icon: 'cursor', rail: true },
   hide: { label: ['隐藏桌宠', 'Hide pet'], icon: 'eyeOff', rail: true },
-  close: { label: ['关闭 Live2D', 'Close Live2D'], icon: 'power', rail: true },
+  close: { label: ['关闭窗口', 'Close window'], icon: 'power', rail: true },
   menu: { label: ['打开操作台', 'Open controls'], icon: 'apps', rail: true, railOnly: true },
   worlds: { label: ['打开 World', 'Open Worlds'], icon: 'boxes', rail: true, railOnly: true },
 };

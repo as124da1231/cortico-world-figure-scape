@@ -156,6 +156,7 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
     clip.appendChild(frame);
     let haloAt = '';
     let ready = false, presented = false, gone = false, seq = 0, size = bounds;
+    let editorTickPending = false, editorElapsed = 0;
     let layout = null, z = null, words = null, bodyWords = [];
     let effectSeq = 0, effectTimer = null, requestedEffects = {};
     let effectStatus = { status: 'unknown', ...readEffectReport(null) };
@@ -238,7 +239,18 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
       /** Whether stage point `p` is on the body. */
       hit: (p) => onBody(layout, p),
       /** Advances the body `dt` seconds; with `draw` false (the pet window is hidden) it need not draw. */
-      tick(dt, draw = true) { if (ready) post({ t: 'tick', dt, draw, frameScope }); },
+      tick(dt, draw = true) {
+        if (!ready) return;
+        if (editorPreview) {
+          // Slow model frames must leave room for interactive commands on the same channel.
+          editorElapsed = Math.min(.05, editorElapsed + dt);
+          if (editorTickPending) return;
+          editorTickPending = true;
+          dt = editorElapsed;
+          editorElapsed = 0;
+        }
+        post({ t: 'tick', dt, draw, frameScope });
+      },
       do: (word) => post({ t: 'do', word }),
       previewWord(word, id) {
         if (!editorPreview || pack.kind !== 'figure-pack' || gone || !ready ||
@@ -355,6 +367,7 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
       } else if (m.t === 'scene-drop' && ready) {
         if (Number.isSafeInteger(m.id)) onEvent?.('scene-drop', { id: m.id, dropped: m.dropped === true });
       } else if (m.t === 'frame' && ready) {
+        editorTickPending = false;
         frameRevision++;
         reportedFrameScope = m.frameScope ?? 0;
         if (m.framing) framingReceipts.refresh(m.framing);

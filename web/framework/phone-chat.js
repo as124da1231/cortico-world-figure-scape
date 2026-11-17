@@ -44,6 +44,7 @@ export function createPhoneChat({ doc, bubble, text, send, toggleControls, close
   const live = node('div', 'phone-chat-live');
   log.append(history, live);
   const dock = node('footer', 'phone-chat-dock');
+  const voice = node('div', 'phone-chat-voice');
   const feedback = node('p', 'phone-chat-feedback');
   feedback.setAttribute('role', 'status');
 
@@ -64,7 +65,7 @@ export function createPhoneChat({ doc, bubble, text, send, toggleControls, close
   const resize = createSceneGrip(doc, 'resize', text('缩放手机', 'Resize phone'),
     text('拖动或按方向键缩放手机', 'Drag or use the arrow keys to resize the phone'));
   form.append(input, submit, mic);
-  dock.append(feedback, form, resize);
+  dock.append(voice, feedback, form, resize);
 
   surface.append(header, log, dock);
   frame.append(surface);
@@ -74,7 +75,7 @@ export function createPhoneChat({ doc, bubble, text, send, toggleControls, close
   bubble.before(original);
   const seen = new Map();
   let connected = false, lastGeometry = '', lastLanguage = '';
-  let nearEnd = true, listeningBubble = null, historyRequested = false;
+  let nearEnd = true, historyReady = false, historyRequestedAt = -Infinity;
   let liveKeys = new Set(), liveKey = '';
   log.addEventListener('scroll', () => { nearEnd = log.scrollHeight - log.clientHeight - log.scrollTop < 28; }, { passive: true });
   const follow = () => { if (!frame.hidden && nearEnd) log.scrollTop = log.scrollHeight; };
@@ -101,8 +102,7 @@ export function createPhoneChat({ doc, bubble, text, send, toggleControls, close
     const speaker = node('span', 'phone-visually-hidden');
     speaker.textContent = side === 'user' ? text('我：', 'You: ') : text('角色：', 'Character: ');
     row.append(speaker, linked(value, value.length, doc));
-    if (listeningBubble?.parentElement === history) history.insertBefore(row, listeningBubble);
-    else history.append(row);
+    history.append(row);
     if (key) seen.set(key, row);
     if (history.childElementCount > 80) {
       const oldest = history.querySelector('.phone-chat-message');
@@ -119,10 +119,10 @@ export function createPhoneChat({ doc, bubble, text, send, toggleControls, close
         frame.hidden = !active;
         if (active) { live.append(bubble); follow(); }
         else {
-          historyRequested = false;
+          historyReady = false;
+          historyRequestedAt = -Infinity;
           original.after(bubble);
-          if (listeningBubble?.parentElement === history) doc.body.append(listeningBubble);
-          listeningBubble = null;
+          for (const element of [...voice.children]) doc.body.append(element);
         }
       }
       if (!active) return;
@@ -160,10 +160,13 @@ export function createPhoneChat({ doc, bubble, text, send, toggleControls, close
       composer.setBlocked(switching);
       if (online !== connected) {
         connected = online;
-        if (!online) historyRequested = false;
+        if (!online) { historyReady = false; historyRequestedAt = -Infinity; }
         composer.setOnline(online);
       }
-      if (online && !historyRequested) historyRequested = send({ t: 'phone-history' });
+      if (online && !switching && !historyReady && Date.now() - historyRequestedAt >= 1000) {
+        historyRequestedAt = Date.now();
+        send({ t: 'phone-history' });
+      }
       const locale = doc.documentElement.lang;
       if (locale !== lastLanguage) {
         lastLanguage = locale;
@@ -179,6 +182,7 @@ export function createPhoneChat({ doc, bubble, text, send, toggleControls, close
     message, remove, failed:composer.failed, feedback:composer.note,
     history({ messages, withdrawn, replace }) {
       if (replace) {
+        historyReady = true;
         for (const row of history.querySelectorAll('.phone-chat-message')) row.remove();
         seen.clear();
       }
@@ -191,7 +195,13 @@ export function createPhoneChat({ doc, bubble, text, send, toggleControls, close
       }
       follow();
     },
-    attachListening(element) { listeningBubble = element; history.append(element); follow(); },
+    attachListening(element) {
+      element.hidden = false;
+      if (element.parentElement !== voice) {
+        voice.replaceChildren(element);
+        follow();
+      }
+    },
     receipt:composer.receipt,
     focusInput() { input.focus({ preventScroll: true }); },
     focusControls() { controls.focus({ preventScroll: true }); },

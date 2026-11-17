@@ -16,19 +16,27 @@ import { errorText, studioControls, studioText as t } from './controls.ts';
 import { modelLibrary } from './model-library.ts';
 import { runtimeComponents } from './runtime-components.ts';
 import { wallpaperPanel } from './wallpaper-panel.ts';
-import { runtimeControls, type RuntimeState } from './runtime.ts';
+import { modeLabel, runtimeControls, type RuntimeState } from './runtime.ts';
 import { modelServicesPanel } from './model-services.ts';
 import { controlLayoutPanel } from './control-layout-panel.ts';
+import { phoneLinkPanel } from './phone-link.ts';
 import { SELF_DEFAULT, SELF_KEYS } from '../../../../framework/body-preferences.ts';
 import './control-layout.css';
 import '../../../../../web/framework/control-apps.css';
+import '../../../../../web/framework/control-toggle.css';
 import '../../../../../web/framework/floating-controls.css';
 import './tokens.css';
 import './studio.css';
 import './workspace-layout.css';
 import './wallpaper-panel.css';
+import './scene-workspace.css';
+import './runtime-details.css';
+import './phone-link.css';
 import '../../../../../web/framework/wallpaper-placement.css';
 import '../../../../../web/framework/scene-size.css';
+import { cabinPanel } from './cabin-panel.ts';
+import { sceneDetails, sceneWorkspace } from './scene-workspace.ts';
+import { mountConversation } from './conversation-panel.ts';
 
 type Section = { id: string; nodes: Node[]; read?: () => void | Promise<unknown> };
 const scrollPositions = new WeakMap<Document, Map<WorkspacePanel, number>>();
@@ -53,6 +61,10 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
 
   root.classList.add('pet-studio');
   root.dataset.workspacePanel = panel;
+  if (panel === 'framework' && query.get('task') === 'conversation') {
+    mountConversation(ctx);
+    return;
+  }
   const components = runtimeComponents(ctx, packageVersion);
   const surface = c.node('main', '', 'studio-surface');
   surface.setAttribute('aria-label', label);
@@ -79,7 +91,10 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
     }).finally(() => { reading = undefined; });
     return reading;
   }
-  const runtime = runtimeControls(ctx, refresh, notify);
+  const runtime = runtimeControls(ctx, async () => {
+    await reading;
+    await refresh();
+  }, notify);
   const version = c.button('v' + packageVersion, runtime.openDetails);
   version.classList.add('studio-version');
   version.setAttribute('aria-haspopup', 'dialog');
@@ -116,16 +131,22 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
   }
   root.append(surface);
   const prefs = preferences(ctx, notify);
-  const diagnostics = c.node('div');
+  const startup = c.node('details', '', 'studio-runtime-startup');
+  const startupTitle = c.node('summary', t('高级启动设置', 'Advanced startup settings'));
+  const diagnostics = c.node('div', '', 'studio-runtime-config');
+  startup.append(startupTitle, diagnostics);
+  startup.addEventListener('toggle', () => {
+    if (startup.open) void preferenceBody('runtime', diagnostics);
+  }, {signal});
   const componentLink = c.button(t('Live2D 组件与许可', 'Live2D components and licenses'), () => {
     runtime.detail.element.close();
     version.focus({ preventScroll: true });
-    void components.open(runtime.openDetails);
+    void components.open(() => runtime.openDetails(version));
   });
   componentLink.setAttribute('aria-haspopup', 'dialog');
-  componentLink.classList.add('studio-runtime-components-entry');
-  runtime.detailBody.append(diagnostics, componentLink);
-  runtime.onDetails(() => { void prefs.view('runtime').then(node => diagnostics.replaceChildren(node)).catch(error => notify(errorText(error))); });
+  componentLink.classList.add('studio-runtime-link');
+  runtime.detailLinks.prepend(componentLink);
+  runtime.detailBody.append(startup, runtime.detailLinks);
 
   type SettingsView = ReturnType<typeof c.dialog>;
   const settingsTasks = new Map<string, () => void>();
@@ -345,9 +366,11 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
           if (!result?.open && Object.hasOwn(editorTasks,task)) await openEditor(task,id);
         } catch(error) { notify(errorText(error)); }
       }
-      const library = modelLibrary(ctx, editor, refresh, notify, id => void openBrowserEditor('framing', id), currentTools, () => void components.open());
+      const phone = phoneLinkPanel(ctx);
+      const library = modelLibrary(ctx, editor, refresh, notify, id => void openBrowserEditor('framing', id), currentTools, () => void components.open(), phone.element);
       observers.push(next => { editor.modelChanged(next.skin.figure ?? ''); library.render(next); presets.lock(); });
       sections.push({ id: 'library', nodes: [library.element], read: library.refresh });
+      void phone.update();
       openTask = id => {
         if (id === 'appearance') { if (currentAppearance.open()) void Promise.all([appearance.refresh(), presets.read()]); }
         else if (id === 'play') { if (playback.open()) void actions.refresh(); }
@@ -433,16 +456,45 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
       break;
     }
     case 'desktop': {
-      const wallpaper = wallpaperPanel(ctx, refresh);
+      const workspace = sceneWorkspace(ctx);
+      const wallpaper = wallpaperPanel(ctx, refresh, workspace);
+      const cabin = cabinPanel(ctx, refresh, () => workspace.open(cabinPage, cabin.card));
+      const cabinView = sceneDetails(ctx, 'cabin', cabin.hint, cabin.section);
+      const cabinPage = {title: cabin.title, body: cabinView.detail, action: cabin.action, open: () => void cabin.refresh()};
+      const openApps = new Map<string, () => void>();
+      const desktop = inlinePreferences('desktop', t('桌面活动', 'Desktop activity'));
+      (desktop.nodes[0] as HTMLElement).classList.add('studio-scene-settings');
+      runtime.scene.classList.add('studio-scene-settings');
+      for (const [mode, app] of runtime.sceneApps) {
+        const extras = mode === 'desktop' ? desktop.nodes as HTMLElement[]
+          : mode === 'room' ? [runtime.scene] : mode === 'wallpaper' ? [wallpaper.section] : [];
+        const {detail, content} = sceneDetails(ctx, mode, app.hint, app.settings, ...extras);
+        const page = {
+          title: modeLabel(mode), body: detail, action: app.enter,
+          open: () => runtime.showScene(mode, content), close: () => runtime.closeScene(mode),
+        };
+        const open = () => workspace.open(page, app.button);
+        openApps.set(mode, open);
+        settingsTasks.set(mode, open);
+        if (mode === 'wallpaper') {
+          settingsTasks.set('wallpaper', () => { open(); wallpaper.open(wallpaper.openLibrary); });
+          settingsTasks.set('wallpaper-enter', () => {
+            open();
+            if (!wallpaper.hasSelection()) wallpaper.open(app.enter);
+          });
+        }
+        workspace.grid.append(app.button);
+      }
+      runtime.onSceneOpen(mode => openApps.get(mode)?.());
       runtime.onWallpaper(wallpaper.open, wallpaper.hasSelection);
-      settingsTasks.set('wallpaper', () => wallpaper.open(wallpaper.openLibrary));
-      sections.push(
-        { id: 'space', nodes: [runtime.presentation] },
-        inlinePreferences('desktop', t('桌面活动', 'Desktop activity')),
-        { id: 'room', nodes: [runtime.scene] },
-        { id: 'wallpaper', nodes: [wallpaper.section], read: wallpaper.refresh },
-      );
-      poll = runtime.refreshScene;
+      workspace.grid.append(cabin.card);
+      observers.push(wallpaper.renderRuntime);
+      settingsTasks.set('cabin', () => workspace.open(cabinPage, cabin.card));
+      sections.push({id: 'space', nodes: [workspace.element], read: async () => {
+        await Promise.all([desktop.read?.(), cabin.refresh(), wallpaper.refresh()]);
+        if (state && !signal.aborted) runtime.render(state);
+      }});
+      poll = () => { runtime.refreshScene(); void cabin.refresh(); };
       break;
     }
     case 'interaction': {
@@ -483,6 +535,7 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
     }
     case 'controls': {
       const editor = controlLayoutPanel(ctx, notify);
+      observers.push(editor.reflectRuntime);
       sections.push({ id: 'layout', nodes: [editor.element], read: editor.read });
       break;
     }
@@ -490,12 +543,15 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
       const sample = c.node('aside', '', 'studio-preview-sample');
       sample.append(c.node('h3', t('气泡预览', 'Bubble preview')));
       const bubble = c.node('p', t('嘿，今天想做点什么？', 'Hey, what are we doing today?'), 'studio-display-sample');
-      sample.append(bubble);
+      const voice = c.node('p', t('去小屋吧', 'Let’s go to the room'), 'studio-display-sample is-voice');
+      voice.setAttribute('aria-label', t('语音转写示例', 'Voice transcript example'));
+      bubble.setAttribute('aria-label', t('角色发言示例', 'Character reply example'));
+      sample.append(voice,bubble);
       function syncBubble(next = state) {
         if (!next) return;
-        bubble.dataset.theme = next.theme ?? 'light';
-        bubble.style.setProperty('--sample-text', (next.fontSize ?? 1) * 14 + 'px');
-        bubble.style.setProperty('--sample-width', Math.min(100, (next.bubbleSize ?? 1) * 65) + '%');
+        sample.dataset.theme = next.theme ?? 'light';
+        sample.style.setProperty('--sample-text', (next.fontSize ?? 1) * 14.5 + 'px');
+        sample.style.setProperty('--sample-width', Math.min(100, (next.bubbleSize ?? 1) * 78) + '%');
       }
       const rate = c.node('p', '', 'studio-fps-summary');
       rate.setAttribute('role', 'status');
@@ -511,7 +567,7 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
       performance.nodes[0].appendChild(rate);
       const bubbles = preferenceRow('bubbles', t('气泡', 'Bubbles'), t('气泡设置', 'Bubble settings'),
         () => displaySummary(prefs.value('statusBubble') === true ? t('显示状态气泡', 'Status bubbles on') : t('状态气泡关闭', 'Status bubbles off'),
-          prefs.value('saidBubbles') === true ? t('显示输入气泡', 'Input bubbles on') : t('输入气泡关闭', 'Input bubbles off')));
+          prefs.value('saidBubbles') === true ? t('显示文字发送气泡', 'Sent text bubbles on') : t('文字发送气泡关闭', 'Sent text bubbles off')));
       bubbles.nodes[0].appendChild(sample);
       const fullscreen = inlinePreferences('fullscreen', t('全屏与直播', 'Fullscreen and streaming'));
       const captureFeedback = c.status('studio-help');
@@ -664,9 +720,12 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
     if (!task) { surface.scrollTop = savedScroll; return; }
     const target = ({ recognition: 'listening', tts: 'speech', planner: 'speech', chat: 'identity', editor: 'library', 'desktop-settings': 'desktop' } as Record<string,string>)[task] ?? task;
     if (openTask && (Object.hasOwn(editorTasks, target) || ['appearance', 'play', 'preview'].includes(target))) openTask(target);
-    else if (anchors.has(target)) {
-      surface.scrollTop = anchors.get(target)!.offsetTop - body.offsetTop;
-      settingsTasks.get(target)?.();
+    else {
+      const anchor = anchors.get(target) ?? (panel === 'desktop' && settingsTasks.has(target) ? anchors.get('space') : undefined);
+      if (anchor) {
+        surface.scrollTop = anchor.offsetTop - body.offsetTop;
+        settingsTasks.get(target)?.();
+      }
     }
   });
   ctx.lifecycle.interval(() => { void refresh(); void components.poll(); poll?.(); }, 1500);

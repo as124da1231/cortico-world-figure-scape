@@ -241,6 +241,7 @@ export default {
       'pet.dress': 'live2d_pet_set 能选的形象与打扮',
       'pet.self': '「自主配置权限」：哪些设置直接修改、哪些先征得同意，或都不能修改',
       'pet.chat': '应用提供对话页时，对它的说明；没有时为空',
+      'pet.cabin': 'Cabin World 场景的可用状态和操作回执说明',
       'pet.reply': '应用语言既不是简体中文也不是英文时，让 bot 用那种语言说话的一句；否则为空',
       'pet.cua': '电脑操作一节：截图坐标、何时先询问使用者、让位规则；电脑操作关闭时为空',
     } as Record<string, string>,

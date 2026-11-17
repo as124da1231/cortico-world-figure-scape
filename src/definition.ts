@@ -4,6 +4,7 @@ import { createFigureLibrary } from './framework/figure-library.ts';
 import { createModelIntake } from './live2d/model-intake.ts';
 import { createModelResources } from './framework/assembly.ts';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Language } from 'cortico/core/language.ts';
 import { runtimesRoot, modelsRoot } from 'cortico/paths.ts';
 import { describeTools, type WorldDefinition, type WorldDescribe } from 'cortico/world.ts';
@@ -12,19 +13,27 @@ import { DesktopPetWorld, modelsDirFor, type PetBotControls } from './world.ts';
 import type { DescribeTool } from './status.ts';
 import type { ModelLanguage } from './model-text.ts';
 import { MODEL_TOOL_DECLS, petToolDecls } from './tools.ts';
+import { CABIN_TOOLS } from './framework/cabin-tools.ts';
 import { SELF_TYPE } from './chat.ts';
 import { petText } from './i18n/index.ts';
 import { HOST_ENV } from './window-host.ts';
+import { workspaceHref } from './framework/workspace.ts';
+import { createPhoneConnection } from './phone-link/service.ts';
 
-/** Public tools and events of the Live2D body. */
+const BUILTIN_FIGURE = {
+  id: 'figure-dab2862c640e3986ab094857',
+  directory: fileURLToPath(new URL('../figures/coo-dungeon', import.meta.url)),
+};
+
+/** Public tools and events of the Figure Scape body. */
 const DESCRIBE: WorldDescribe = {
-  tools: describeTools([...petToolDecls(), ...MODEL_TOOL_DECLS], {
+  tools: describeTools([...petToolDecls(), ...MODEL_TOOL_DECLS, ...CABIN_TOOLS], {
     live2d_pet_models: { zh: '识别本机 Live2D 原始模型', en: 'Discovers original Live2D models.' },
     live2d_pet_model_actions: { zh: '读取模型的原生动作和表情', en: 'Inspects a model’s native actions and expressions.' },
     live2d_pet_prepare_model: { zh: '准备模型动作适配方案', en: 'Prepares a model action adaptation proposal.' },
     live2d_pet_save_model_adaptation: { zh: '保存确认后的原始模型动作绑定', en: 'Saves approved bindings to the original model profile.' },
-    live2d_pet_status: { zh: '查看 Live2D 身体是否可见且就绪。', en: 'Checks whether the Live2D body is visible and ready.' },
-    live2d_pet_say: { zh: '把回复写入 Coo 对话。有可用的 Live2D 窗口时同步播放气泡、声音和动作。', en: 'Saves a reply to the Coo conversation and plays bubbles, audio and motions when the Live2D window is available.' },
+    live2d_pet_status: { zh: '查看梦境身体是否可见、就绪，以及已确认的角色和装扮。', en: 'Checks Figure Scape visibility and readiness, including the confirmed character and outfit.' },
+    live2d_pet_say: { zh: '把梦境入口的回复写入 Coo 对话，并在梦境窗口可用时播放气泡、声音和动作。', en: 'Saves a reply to the Figure Scape input in the Coo conversation and plays bubbles, audio, and motions when its window is available.' },
     live2d_pet_ask: { zh: '弹出带至多 3 个选项的提问气泡,回答之后作为事件送回。', en: 'Asks a question in a bubble with up to 3 options; the answer comes back later as an event.' },
     live2d_pet_move_to: { zh: '沿屏幕底边走到或跑到某个位置。', en: "Walks or runs along the bottom edge of the screen to a position." },
     live2d_pet_set: { zh: '修改桌宠自己的外观与习惯;按使用者的设置直接生效,或先在气泡里询问。', en: "Changes the pet's own looks and habits, at once or after asking in a bubble, as the person's settings say." },
@@ -33,8 +42,13 @@ const DESCRIBE: WorldDescribe = {
   }),
   events: [
     {
+      type: 'desktop-live2d-pet.scene',
+      description: { zh:'进入或离开 Cabin World，随下轮对话告知 Coo。', en:'Entering or leaving Cabin World, reported on the next conversation turn.' },
+      trigger:'piggyback',
+    },
+    {
       type: 'desktop-live2d-pet.availability',
-      description: { zh: 'Live2D 身体就绪或离开桌面，随下轮对话投递。', en: 'The Live2D body became ready or unavailable, delivered with the next turn.' },
+      description: { zh: '梦境身体就绪或离开桌面，随下轮对话投递。', en: 'The Figure Scape body became ready or unavailable, delivered with the next turn.' },
       trigger: 'piggyback',
     },
     {
@@ -44,7 +58,7 @@ const DESCRIBE: WorldDescribe = {
     },
     {
       type: 'desktop-live2d-pet.speech',
-      description: { zh: '使用者按住 Live2D 的麦克风按钮说的话，松手后转写并投递。', en: 'Transcribed speech captured while holding Live2D’s microphone button, delivered on release.' },
+      description: { zh: '使用者按住梦境的麦克风按钮说的话，松手后转写并投递。', en: 'Transcribed speech captured while holding Figure Scape’s microphone button, delivered on release.' },
       trigger: 'interrupt',
     },
     {
@@ -96,7 +110,11 @@ export function desktopPetDefinition(assembly: DesktopPetAssembly = {}): WorldDe
     id: DESKTOP_PET_ID,
     // read when Core assembles the Worlds, in the app language of that moment
     get label() { return petText(assembly.language?.()).console.label; },
-    defaults: () => structuredClone(DESKTOP_PET_DEFAULTS),
+    defaults: () => {
+      const config = structuredClone(DESKTOP_PET_DEFAULTS);
+      config.skin.figure = BUILTIN_FIGURE.id;
+      return config;
+    },
     // ctx.cfg is the live `worlds.desktop-live2d-pet` section: hot keys are read at use
     create: (ctx) => {
       const openInCoo = process.send && process.env[HOST_ENV]
@@ -107,9 +125,16 @@ export function desktopPetDefinition(assembly: DesktopPetAssembly = {}): WorldDe
         cfg: ctx.cfg,
         modelService: createModelResources({ dataDir: ctx.dataDir, sdk: sdkService }),
         coverRenderer: modelCoverRenderer(join(ctx.dataDir, DESKTOP_PET_ID, 'cover-work')),
-        figureLibrary: createFigureLibrary(join(ctx.dataDir, DESKTOP_PET_ID, 'figure-library')),
+        figureLibrary: createFigureLibrary(join(ctx.dataDir, DESKTOP_PET_ID, 'figure-library'), BUILTIN_FIGURE),
         modelIntake: createModelIntake(join(ctx.dataDir, DESKTOP_PET_ID, 'imported-sources')),
         sdkService,
+        phone: createPhoneConnection({
+          dataDir: ctx.dataDir,
+          botDir: ctx.botDir,
+          secret: name => ctx.secret(name),
+          enabled: () => ctx.cfg.phoneLinkEnabled === true,
+          persist: phoneLinkEnabled => ctx.persist({ phoneLinkEnabled }),
+        }),
         timezone: ctx.timezone,
         persist: (patch) => {
           ctx.persist(patch);
@@ -120,6 +145,10 @@ export function desktopPetDefinition(assembly: DesktopPetAssembly = {}): WorldDe
         windowProfile: join(ctx.dataDir, DESKTOP_PET_ID, 'window-profile'),
         modelsDir: () => modelsDirFor(modelsRoot()),
         wallpaperDir: join(ctx.dataDir, DESKTOP_PET_ID, 'wallpapers'),
+        cabinRuntime: process.platform === 'win32' && process.arch === 'x64' ? {
+          root: fileURLToPath(new URL('../cabin-runtime', import.meta.url)),
+          dataDir: join(ctx.dataDir, DESKTOP_PET_ID, 'cabin-world'),
+        } : undefined,
         asrApiKey: () => ctx.secret(DESKTOP_PET_SECRETS.asrApiKey),
         storeAsrApiKey: (key) => ctx.storeSecret(DESKTOP_PET_SECRETS.asrApiKey, key),
         serviceSecrets: {
@@ -138,11 +167,12 @@ export function desktopPetDefinition(assembly: DesktopPetAssembly = {}): WorldDe
         botName: () => assembly.botName?.() ?? ctx.botName,
         controls: assembly.controls ?? (openInCoo ? {
           openSettings: () => openInCoo('#/provider/world%3Adesktop-live2d-pet/framework'),
-          openChat: () => openInCoo('#/chat'),
+          openChat: () => openInCoo(workspaceHref('framework', 'conversation')),
           openDress: () => openInCoo('#/provider/world%3Adesktop-live2d-pet/framework?task=appearance'),
           openVoiceSettings: () => openInCoo('#/provider/world%3Adesktop-live2d-pet/sound?task=listening'),
           openScenes: () => openInCoo('#/provider/world%3Adesktop-live2d-pet/desktop'),
-          openWallpapers: () => openInCoo('#/provider/world%3Adesktop-live2d-pet/desktop?task=wallpaper'),
+          openWallpapers: enter => openInCoo('#/provider/world%3Adesktop-live2d-pet/desktop?task=' + (enter ? 'wallpaper-enter' : 'wallpaper')),
+          openCabin: () => openInCoo('#/provider/world%3Adesktop-live2d-pet/desktop?task=cabin'),
         } : undefined),
         onBotChange: () => assembly.onBotChange?.(),
         onDesktopChange: (on) => assembly.onDesktopChange?.(on),

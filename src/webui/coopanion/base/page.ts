@@ -5,6 +5,7 @@ export interface PageContext {
   readonly signal: AbortSignal;
   readonly pickPath?: WebUiPanelContext['pickPath'];
   readonly ui: WebUiPanelContext['ui'];
+  readonly stream?: WebUiPanelContext['stream'];
   readonly lifecycle: {
     interval: WebUiPanelContext['interval'];
     add(cleanup: () => void): void;
@@ -22,7 +23,7 @@ export function mountConsolePage(page: Page, ctx: WebUiPanelContext): void | Pro
   const root = ctx.ui.h('div', 'desktop-live2d-native-page');
   ctx.root.append(root);
   return page.mount({
-    root, ui: ctx.ui, signal: ctx.signal, pickPath: options => ctx.pickPath(options),
+    root, ui: ctx.ui, signal: ctx.signal, pickPath: options => ctx.pickPath(options), stream: handlers => ctx.stream(handlers),
     lifecycle: {
       interval: (fn, ms) => ctx.interval(fn, ms),
       add: dispose => { ctx.own({ dispose }); },

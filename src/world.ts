@@ -1,6 +1,10 @@
 import { SCENE_SIZE_LIMITS, sceneScales } from '../web/framework/model-size.js';
 import { createPresentationService, presentationMode, scenePosition, type PresentationMode } from './framework/presentation-service.ts';
 import { createWallpaperLibrary } from './framework/wallpaper-library.ts';
+import { createCabinWorld, type CabinRuntime, type CabinState } from './framework/cabin-world.ts';
+import { cabinFigureSources, writeCabinFigure } from './framework/cabin-figures.ts';
+import { createHash } from 'node:crypto';
+import { CABIN_TOOLS } from './framework/cabin-tools.ts';
 import { createImportUpload } from './live2d/import-upload.ts';
 // @ts-expect-error Shared plain-data runtime configuration boundary.
 import {modelConfiguration} from '../web/model-configuration-contract.js';
@@ -75,6 +79,7 @@ import { Packer, Segmenter, type SegmentSink, type Utterance } from './asr/segme
 import { joinSpeech, looksHallucinated } from './asr/result.ts';
 import { toSimplified } from './asr/simplify.ts';
 import { estimateSeconds, parseActions, parseScript, vocabChange, vocabTable, type VocabWord } from './script.ts';
+import { replyBubbleSeconds } from '../web/framework/bubble-timing.js';
 import { ActivityGroup, ChatReplyFallback, ChatSockets, DESKTOP_CHAT_SOURCE, SELF_TYPE, chatItem, chatPage, chatRefs, isDesktopChatEvent, type ChatFigure } from './chat.ts';
 import { readWindowCompatibility, type WindowCompatibility } from './framework/window-compatibility.ts';
 import { ASK_OPTION_MAX, MODEL_TOOL_DECLS, petToolDecls } from './tools.ts';
@@ -148,7 +153,8 @@ export interface PetBotControls {
   /** Shows the embedding app's own dress page; the menu's 「装扮」 then opens it instead of the pet's dress window. */
   openDress?(): void;
   openScenes?(): void;
-  openWallpapers?(): void;
+  openWallpapers?(enter?: boolean): void;
+  openCabin?(): void;
   openVoiceSettings?(): void;
   /** Shows the embedding app's list of its Worlds; the hover button 「我的 World」 shows only when this is lent. */
   openWorlds?(): void;
@@ -241,6 +247,8 @@ export interface DesktopPetWorldOptions {
   figureLibrary?: ReturnType<typeof createFigureLibrary>;
   modelsDir: () => string;
   wallpaperDir?: string;
+  cabinRuntime?: CabinRuntime;
+  phone?: ReturnType<typeof import('./phone-link/service.ts').createPhoneConnection>;
   /** Downloads; tests pass a local stand-in. */
   fetchImpl?: typeof fetch;
   /** Loads sherpa-onnx; tests pass a fake recognizer. */
@@ -385,7 +393,7 @@ export class DesktopPetWorld implements World {
   /** The tray's "click through": every click passes through the pet window. Not saved: it lasts until the Core stops. */
   private clickThrough = false;
   private readonly frameworkAppearance: ReturnType<typeof createAppearanceDomain>;
-  private readonly phoneMessages = new Map<string, Promise<EventEnvelope | null>>();
+  private readonly sceneMessages = new Map<string, Promise<EventEnvelope | null>>();
   private readonly frameworkActions: ReturnType<typeof createActionDomain<VocabWord>>;
   private readonly frameworkModel: ReturnType<typeof createModelDomain<PageMessage, SkinSelection>>;
   private readonly frameworkConfiguration: ReturnType<typeof createFrameworkConfiguration>;
@@ -475,6 +483,11 @@ export class DesktopPetWorld implements World {
   private readonly invokeResources: ReturnType<typeof createResourceConsole>;
 
   private readonly wallpapers: ReturnType<typeof createWallpaperLibrary>;
+  private readonly cabinWorld: ReturnType<typeof createCabinWorld>;
+  private cabinFigureImport?: Promise<string>;
+  private cabinRestoreBody = false;
+  private cabinHideTimer: NodeJS.Timeout | undefined;
+  private cabinSceneReported = false;
   private readonly wallpaperUpload: ReturnType<typeof createImportUpload>;
 
   private readonly legacyPresentationScale: number;
@@ -483,6 +496,16 @@ export class DesktopPetWorld implements World {
     this.wallpapers = createWallpaperLibrary(() => opts.wallpaperDir ?? join(opts.modelsDir(), '.wallpapers'));
     this.wallpaperUpload = createImportUpload({ importUpload:this.wallpapers.importUpload, cancel:() => false }, 'wallpaper');
     this.cfg = opts.cfg;
+    this.cabinWorld = createCabinWorld({
+      config:() => this.cfg.cabinWorld,
+      persist:cabinWorld => opts.persist({ cabinWorld }),
+      bundled:opts.cabinRuntime,
+      changed:active => this.cabinVisibility(active),
+      presented:() => this.reportCabinScene(true),
+      conversation:() => this.cabinConversation(),
+      sendMessage:(id,text) => this.sendCabinMessage(id,text),
+      prepareBody:(signal,model) => this.prepareCabinBody(signal,model),
+    });
     this.legacyPresentationScale = opts.cfg.window.scale;
     this.tts = opts.tts ? createTtsService({ ...opts.tts, selected: () => this.windowVisible(), activeService: () => this.modelServices?.resolve('tts') }) : null;
     this.speechPlanner = opts.planner ? createSpeechPlanner({
@@ -627,11 +650,12 @@ export class DesktopPetWorld implements World {
         return this.libraryPacks().map(pack => ({
           id: pack.id, name: nameIn(pack.manifest.name, this.appLanguage),
           kind: pack.rawModel ? 'live2d-model' : 'figure-pack', active: pack.id === selected,
+          ...(pack.builtin ? { builtin:true } : {}),
           ready: pack.id === selected && this.bodyReady(), failed: pack.id === this.figureFailed,
           ...(pack.id === this.figureFailed && this.bodyMissing ? { failure: this.bodyMissing } : {}),
           loading: pack.id === selected && !this.bodyReady() && !this.figureFailed && this.windowHost?.state().phase === 'running',
           wardrobe: pack.manifest.axes.length > 0 || pack.manifest.presets.length > 0,
-          sourceId: pack.rawModel?.sourceId, source: pack.rawModel?.sourceLabel,
+          sourceId: pack.rawModel?.sourceId, source: pack.rawModel?.sourceLabel, origin: pack.manifest.source,
           sourceActive: !!activeSource && activeSource === pack.rawModel?.sourceId,
           coverJob: pack.rawModel && !pack.rawModel.cover && !pack.rawModel.generatedCover ? this.modelCovers?.state(pack.id) : undefined,
           cover: pack.rawModel?.cover || pack.rawModel?.generatedCover
@@ -680,9 +704,17 @@ export class DesktopPetWorld implements World {
       port: () => this.cfg.port,
       webDir: WEB_DIR,
       snapshot: () => this.snapshot(),
-      onPetMessage: (msg) => this.onPage(msg),
+      onPetMessage: (msg, reply) => this.onPage(msg, reply),
       onAudio: (frame) => this.onAudio(frame),
-      onPetConnect: () => { this.frameworkRuntime = null; this.bodyEffectsFeedback = null; this.windowCompatibility = null; this.petHidden = false; this.bodyMissing = null; this.log?.info('桌宠页面已连接'); this.tellDesktop(); if (this.windowVisible() && this.cfg.asr.enabled) void this.startVoiceBackend(); },
+      onPetConnect: () => {
+        this.frameworkRuntime = this.bodyEffectsFeedback = this.windowCompatibility = null;
+        this.petHidden = this.cabinWorld.state().phase === 'active';
+        this.bodyMissing = null;
+        if (this.petHidden) this.server.sendPet({t:'hide'});
+        this.log?.info('桌宠页面已连接');
+        this.tellDesktop();
+        if (this.windowVisible() && this.cfg.asr.enabled) void this.startVoiceBackend();
+      },
       onPetDisconnect: () => this.onPageGone(),
       onSkin: (skin) => this.applySkin(skin),
       onPrefs: (prefs) => this.savePrefs(prefs),
@@ -942,6 +974,7 @@ export class DesktopPetWorld implements World {
       ]).catch(error => host.log.warn('模型服务配置读取失败: ' + (error instanceof Error ? error.message : String(error))));
     }
     await this.server.start();
+    await this.opts.phone?.start(this.server.origin, code => host.log.warn('Figure Pet 连接服务异常', { code }));
     if (this.modelCovers) this.modelCovers.start(this.libraryPacks().filter(pack => pack.rawModel).map(pack => pack.id));
     this.windowHost = new WindowHost(host.log);
     const sherpa = (engine: SherpaEngine, kind: SherpaModelKind) => new SherpaAsr({
@@ -979,7 +1012,10 @@ export class DesktopPetWorld implements World {
   }
 
   async stop(): Promise<void> {
-
+    await this.opts.phone?.stop();
+    clearTimeout(this.cabinHideTimer);
+    this.cabinHideTimer = undefined;
+    await this.cabinWorld.leave(null,false);
     this.tts?.stopAll();
     this.editService.release();
     this.opts.modelIntake?.cancel();
@@ -1093,13 +1129,13 @@ export class DesktopPetWorld implements World {
    * when none). `init` and `older` carry `refs`: the `withdrawn` and `delivered` records in that
    * stretch of history about messages before it, which the page applies to the pages it loads later.
    */
-  private async onChat(msg: Record<string, unknown>, socket: WorldStreamSocket, language: Language): Promise<void> {
+  private async onChat(msg: Record<string, unknown>, socket: WorldStreamSocket, language: Language, view: 'timeline' | 'conversation' = 'timeline'): Promise<void> {
     const host = this.host;
     const s = petText(language).chat;
     switch (msg.t) {
       case 'hello': {
         this.syncConversation();
-        const page = host ? chatPage(host.store, this.id, CHAT_PAGE_EVENTS) : { items: [], more: false };
+        const page = host ? chatPage(host.store, this.id, CHAT_PAGE_EVENTS, undefined, view) : { items: [], more: false };
         if (host) this.desktopChatCursor = host.store.latestCursor();
         this.chat.send(socket, {
           t: 'init', ...page, pending: [...this.pendingChat],
@@ -1113,7 +1149,7 @@ export class DesktopPetWorld implements World {
       }
       case 'more': {
         if (!host || typeof msg.before !== 'number' || !Number.isSafeInteger(msg.before) || msg.before < 1) return;
-        this.chat.send(socket, { t: 'older', ...chatPage(host.store, this.id, CHAT_PAGE_EVENTS, msg.before) });
+        this.chat.send(socket, { t: 'older', ...chatPage(host.store, this.id, CHAT_PAGE_EVENTS, msg.before, view) });
         return;
       }
       case 'send': {
@@ -1125,11 +1161,14 @@ export class DesktopPetWorld implements World {
         if (!host || !socket.open) {
           this.chat.send(socket, { t: 'rejected', id, reason: s.offline }); return;
         }
-        const e = await this.push('desktop-live2d-pet.message', 'desktop-live2d-pet.chat', this.t.typed(this.userName, text), 'preempt',
-          { meta: { via: 'chat', text }, ...(images.blobs.length ? { blobs: images.blobs } : {}) });
+        const key = typeof id === 'string' && /^[\w-]{1,80}$/.test(id) ? 'chat:' + id : undefined;
+        const e = await this.commitChatMessage(key, async () => {
+          const sent = await this.push('desktop-live2d-pet.message', 'desktop-live2d-pet.chat', this.t.typed(this.userName, text), 'preempt',
+            { meta: { via: 'chat', text }, ...(images.blobs.length ? { blobs: images.blobs } : {}) });
+          if (sent) this.server.sendPet({ t: 'said', via: 'chat', text, images: images.blobs.length, cursor: sent.cursor });
+          return sent;
+        });
         this.chat.send(socket, e ? { t: 'sent', id, cursor: e.cursor } : { t: 'rejected', id, reason: s.notSent });
-        // the pet shows it beside Coo, as it shows what is typed or said there
-        if (e) this.server.sendPet({ t: 'said', via: 'chat', text, images: images.blobs.length, cursor: e.cursor });
         return;
       }
       case 'now': {
@@ -1190,14 +1229,16 @@ export class DesktopPetWorld implements World {
     const messages = items.flatMap(item => item.kind === 'user'
       ? [{ cursor: item.cursor, side: 'user', text: item.text, images: item.images?.length ?? 0 }]
       : item.kind === 'say' ? [{ cursor: item.cursor, side: 'pet', text: item.beats.map(beat => beat.text).join('\n'), images: item.images?.length ?? 0 }] : []);
-    if (replace || messages.length || withdrawn.length) this.server.sendPet({ t: 'phone-history', replace, messages, withdrawn });
+    if (replace || messages.length || withdrawn.length) {
+      this.server.sendPet({ t: 'phone-history', replace, messages, withdrawn });
+    }
   }
 
   private openPhoneHistory(): void {
     const store = this.host?.store;
     if (!store || !this.windowVisible() || this.presentationService.mode() !== 'phone') return;
     this.phoneHistoryCursor = store.latestCursor();
-    const page = chatPage(store, this.id, CHAT_PAGE_EVENTS);
+    const page = chatPage(store, this.id, CHAT_PAGE_EVENTS, undefined, 'conversation');
     this.sendPhoneHistory(page.items, [], true);
   }
 
@@ -1400,6 +1441,7 @@ export class DesktopPetWorld implements World {
       bubbleSize: this.cfg.window.bubbleSize,
       fontSize: this.cfg.window.fontSize,
       bubbleSpeed: this.cfg.window.bubbleSpeed,
+      replyBubbleSeconds: replyBubbleSeconds(this.cfg.window.replyBubbleSeconds),
       glow: this.cfg.window.glow,
       frameRate: this.cfg.window.frameRate,
       lockFrameRate: this.cfg.window.lockFrameRate,
@@ -1452,24 +1494,72 @@ export class DesktopPetWorld implements World {
     return this.server.petInWindow && !this.petHidden;
   }
 
+  private activeScene(applied: PresentationMode | null, cabin: CabinState, bodyReady: boolean) {
+    if (cabin.phase === 'active' && cabin.presented !== false) return 'cabin-world';
+    return bodyReady ? applied : null;
+  }
+
   private availability() {
+    const ready = this.bodyReady();
+    const pack = ready ? this.currentPack() : null;
+    const scheme = this.appearanceReceipt?.scheme ?? '';
+    const preset = pack?.manifest.presets.find(entry => entry.id === scheme);
+    const picks = scheme.split('-');
+    const outfit = preset ? modelName(preset.name, preset.id, this.language) : pack?.manifest.axes.map((axis, i) => {
+      const option = axis.options.find(entry => entry.id === picks[i]) ?? axis.options[0];
+      return option ? modelName(option.name, option.id, this.language) : '';
+    }).filter(Boolean).join(this.language === 'zh' ? '、' : ', ');
+    const cabin = this.cabinWorld.state();
+    const activeScene = this.activeScene(this.presentationService.state().applied, cabin, ready);
     return {
       visible: this.windowVisible(),
-      ready: this.bodyReady(),
+      ready,
       presentation: this.presentationService.mode(),
-      model: this.bodyReady() ? this.selectedModel() : null,
+      activeScene,
+      model: ready ? this.selectedModel() : null,
+      modelName: pack ? modelName(pack.manifest.name, pack.id, this.language) : null,
+      outfit: outfit || null,
+      ...(activeScene === 'cabin-world' ? { cabinWorld: {actor:cabin.actor, name:cabin.residents?.find(row => row.key === cabin.actor)?.name ?? null} } : {}),
     };
+  }
+
+  private inputBody(scene?: string) {
+    const live = this.availability();
+    const mode = scene ?? live.activeScene ?? live.presentation;
+    if (mode === 'cabin-world') {
+      return { scene: mode, name: live.cabinWorld?.name ?? null, actor: live.cabinWorld?.actor ?? null };
+    }
+    return { scene: mode, name: live.modelName, figure: live.model, outfit: live.outfit };
+  }
+
+  private inputBodyReport?: { key: string; sent: Promise<EventEnvelope | null> };
+
+  private async reportInputBody(body: ReturnType<DesktopPetWorld['inputBody']>): Promise<void> {
+    if (!body.name && !this.inputBodyReport) return;
+    const key = JSON.stringify(body);
+    if (this.inputBodyReport?.key === key) { await this.inputBodyReport.sent; return; }
+    const zh = this.language === 'zh';
+    const scenes = { desktop: ['桌面', 'desktop'], room: ['小屋', 'room'], phone: ['竖屏', 'portrait'], wallpaper: ['壁纸', 'wallpaper'], 'cabin-world': ['小屋世界', 'Cabin World'] };
+    const scene = scenes[body.scene as keyof typeof scenes]?.[zh ? 0 : 1] ?? (zh ? '对话页' : 'conversation');
+    const label = (value: string | null) => value?.replace(/[\r\n\[\];；]/g, ' ').trim().slice(0, 120);
+    const name = label(body.name);
+    const outfit = 'outfit' in body ? label(body.outfit ?? null) : undefined;
+    const text = zh ? `梦境当前场景为${scene}。${name ? `当前角色是${name}。` : '暂无已确认的角色。'}${outfit ? `装扮为${outfit}。` : ''}`
+      : `Figure Scape is in ${scene}. ${name ? `The current character is ${name}.` : 'No character is confirmed.'}${outfit ? ` Outfit: ${outfit}.` : ''}`;
+    const sent = this.push(`${this.id}.availability`, `${this.id}.availability`, text, 'piggyback', { meta: { body } });
+    const report = this.inputBodyReport = { key, sent };
+    if (!await sent && this.inputBodyReport === report) this.inputBodyReport = undefined;
   }
 
   private readinessTold = false;
 
   private publishReadiness(): void {
-    const ready = this.bodyReady();
+    const { ready, modelName: name } = this.availability();
     if (ready === this.readinessTold) return;
     this.readinessTold = ready;
     const text = this.language === 'zh'
-      ? ready ? 'Live2D 身体现在可见且就绪。' : 'Live2D 身体现已隐藏、关闭或暂未就绪。'
-      : ready ? 'The Live2D body is visible and ready.' : 'The Live2D body is now hidden, closed or unavailable.';
+      ? ready ? `梦境角色现在可见且就绪：${name}。` : '梦境角色现已隐藏、关闭或暂未就绪。'
+      : ready ? `Figure Scape is visible and ready as ${name}.` : 'Figure Scape is now hidden, closed or unavailable.';
     void this.push('desktop-live2d-pet.availability', 'desktop-live2d-pet.availability', text, 'piggyback', { meta: { ready } });
   }
 
@@ -1626,7 +1716,7 @@ export class DesktopPetWorld implements World {
     }
   }
 
-  private onPage(msg: PageMessage): void {
+  private onPage(msg: PageMessage, reply?: (msg: PageMessage) => void): void {
     switch (msg.t) {
       case 'window-compatibility': {
         if (!this.server.petInWindow) return;
@@ -1635,6 +1725,9 @@ export class DesktopPetWorld implements World {
         return;
       }
       case 'speech-media': return this.tts?.report(msg);
+      case 'speech-visible':
+        if (Number.isSafeInteger(msg.cursor)) this.log?.debug('发言气泡已打开', { cursor: msg.cursor });
+        return;
       case 'draft-action-result': return this.draftAction.receive(msg);
       case 'model-configuration': {
         if(typeof msg.request==='string')this.modelApplication.receive(msg);
@@ -1705,6 +1798,10 @@ export class DesktopPetWorld implements World {
         return;
       }
       case 'visibility': {
+        if (msg.hidden === false && this.cabinWorld.state().phase === 'active') {
+          this.server.sendPet({t:'hide'});
+          return;
+        }
         const hiding = !this.petHidden && msg.hidden === true;
         const showing = this.petHidden && msg.hidden === false;
         this.petHidden = msg.hidden === true;
@@ -1714,19 +1811,13 @@ export class DesktopPetWorld implements World {
         }
         this.tellDesktop();
         if (hiding) this.releaseDesktopOperations();
+        if (msg.hidden === true) this.revealCabin();
         return;
       }
       case 'phone-message': return void this.handlePhoneMessage(msg);
       case 'phone-history': return this.openPhoneHistory();
       case 'phone-control': return void this.handlePhoneControl(msg);
-      case 'text': {
-        const text = typeof msg.text === 'string' ? msg.text.trim().slice(0, 500) : '';
-        const images = parseChatImages(msg.images, this.userName, petText(this.appLanguage).chat, this.t);
-        if (!images.ok) { this.log?.warn(`打字框发来的图片没有收下:${images.reason}`); return; }
-        if ((!text && images.blobs.length === 0) || this.petHidden) return;
-        void this.deliverPetText(text, images.blobs);
-        return;
-      }
+      case 'text': return void this.handlePetText(msg, reply);
       case 'expand': {
         const text = typeof msg.text === 'string' ? msg.text.slice(0, CHAT_TEXT_MAX) : '';
         const images = draftImages(msg.images);
@@ -1787,10 +1878,7 @@ export class DesktopPetWorld implements World {
       case 'control':
         if (msg.action === 'desktop-presentation' && typeof msg.request === 'string' && this.server.petInWindow) {
           const request = msg.request;
-          const switching = msg.mode === 'wallpaper'
-            ? this.wallpapers.prepare().then(payload => this.presentationService.select('wallpaper', request, {payload}))
-            : Promise.resolve().then(() => this.presentationService.select(msg.mode, request));
-          void switching.then(result => {
+          void this.selectScene(msg.mode, request).then(result => {
             this.server.sendPet({t:'desktop-presentation-result', request, ok:result.applied, reason:result.error});
           }, (error: unknown) => {
             this.server.sendPet({t:'desktop-presentation-result', request, ok:false, reason:String(error instanceof Error ? error.message : error)});
@@ -1822,6 +1910,22 @@ export class DesktopPetWorld implements World {
       { meta: { via: 'bubble', text }, ...(blobs.length ? { blobs } : {}) });
   }
 
+  private async handlePetText(msg: PageMessage, reply?: (msg: PageMessage) => void) {
+    const request = typeof msg.request === 'string' && /^[\w-]{1,80}$/.test(msg.request) ? msg.request : undefined;
+    const language = petText(this.appLanguage).chat;
+    const text = typeof msg.text === 'string' ? msg.text.trim().slice(0, 500) : '';
+    const images = parseChatImages(msg.images, this.userName, language, this.t);
+    const respond = (value: Record<string, unknown>) => {
+      if (request) reply?.({ t: 'text-result', request, ...value });
+    };
+    if (!images.ok || (!text && !images.blobs.length) || this.petHidden) {
+      respond({ ok: false, reason: images.ok ? language.notSent : images.reason });
+      return;
+    }
+    const sent = await this.commitChatMessage(request && 'bubble:' + request, () => this.deliverPetText(text, images.blobs));
+    respond(sent ? { ok: true, cursor: sent.cursor } : { ok: false, reason: language.notSent });
+  }
+
   private async handlePhoneMessage(msg: PageMessage): Promise<void> {
     const request = msg.request;
     if (typeof request !== 'string' || !/^[\w-]{1,80}$/.test(request) || !this.server.petInWindow) return;
@@ -1832,15 +1936,64 @@ export class DesktopPetWorld implements World {
       respond({ ok: false, reason: 'unavailable' });
       return;
     }
-    let task = this.phoneMessages.get(request);
+    const result = await this.deliverSceneText(scene, request, text);
+    respond(result ? { ok: true, cursor: result.cursor } : { ok: false, reason: 'delivery-failed' });
+  }
+
+  private async deliverSceneText(scene: string, request: string, text: string, actor?: string) {
+    return this.commitChatMessage(scene + ':' + (actor ?? '') + ':' + request, () =>
+      this.push('desktop-live2d-pet.message', 'desktop-live2d-pet.text', this.t.typed(this.userName, text), 'preempt',
+        { meta: { via:'bubble', text, scene, ...(actor ? {actor} : {}) } }));
+  }
+
+  private async commitChatMessage(key: string | undefined, deliver: () => Promise<EventEnvelope | null>) {
+    if (!key) return deliver();
+    let task = this.sceneMessages.get(key);
     if (!task) {
-      task = this.deliverPetText(text);
-      this.phoneMessages.set(request, task);
-      if (this.phoneMessages.size > 64) this.phoneMessages.delete(this.phoneMessages.keys().next().value!);
+      task = deliver();
+      this.sceneMessages.set(key, task);
+      if (this.sceneMessages.size > 64) this.sceneMessages.delete(this.sceneMessages.keys().next().value!);
     }
     const result = await task;
-    if (!result) this.phoneMessages.delete(request);
-    respond(result ? { ok: true, cursor: result.cursor } : { ok: false, reason: 'delivery-failed' });
+    if (!result && this.sceneMessages.get(key) === task) this.sceneMessages.delete(key);
+    return result;
+  }
+
+  private replyInput(): EventEnvelope | undefined {
+    const turn = this.chatReply.turn(), store = this.host?.store;
+    if (!turn || !store) return undefined;
+    let cursor = turn.input;
+    for (const settled of store.range({ source: DESKTOP_CHAT_SOURCE, fromCursor: turn.after + 1 })) {
+      if (settled.type !== 'desktop-pet.self' || settled.meta?.kind !== 'delivered' || !Array.isArray(settled.meta.cursors)) continue;
+      for (const id of settled.meta.cursors) {
+        if (typeof id !== 'number' || id <= cursor) continue;
+        const input = store.get(id);
+        if (input?.source === DESKTOP_CHAT_SOURCE && chatItem(input)?.kind === 'user') cursor = id;
+      }
+    }
+    return cursor ? store.get(cursor) : undefined;
+  }
+
+  private async sendCabinMessage(request: unknown, value: unknown) {
+    const state = this.cabinWorld.state();
+    if (state.phase !== 'active' || state.presented === false || !state.actor) throw Error('小屋世界尚未就绪，输入已保留。');
+    const text = typeof value === 'string' ? value.trim().slice(0, 500) : '';
+    if (typeof request !== 'string' || !/^[\w-]{1,80}$/.test(request) || !text) throw Error('请输入消息后发送。');
+    const sent = await this.deliverSceneText('cabin-world',request,text,state.actor);
+    if (!sent) throw Error('Coo 未收到这条消息，请重试。');
+    return { cursor:sent.cursor };
+  }
+
+  private cabinConversation() {
+    const store = this.host?.store;
+    const items = store ? chatPage(store,this.id,CHAT_PAGE_EVENTS,undefined,'conversation').items : [];
+    return { phase:this.phase?.state ?? 'idle', messages:items.flatMap(item => {
+      if (item.kind !== 'user' && item.kind !== 'say') return [];
+      const text = item.kind === 'user' ? item.text : item.beats.map(beat => beat.text).join('\n');
+      const count = item.images?.length ?? 0;
+      const attachment = count ? this.language === 'zh' ? `[${count} 张图片]` : `[${count} image(s)]` : '';
+      return [{cursor:item.cursor,side:item.kind === 'user' ? 'user' : 'pet',text:[text,attachment].filter(Boolean).join('\n')}];
+    }).filter(item => item.text).slice(-8) };
   }
 
   private async saveWallpaperComposition(id: unknown, input: unknown, revision: unknown) {
@@ -1957,7 +2110,15 @@ export class DesktopPetWorld implements World {
     else if (action === 'settings') c.openSettings?.();
     else if (action === 'dress') c.openDress?.();
     else if (action === 'desktop-scene') c.openScenes?.();
-    else if (action === 'desktop-wallpapers') c.openWallpapers?.();
+    else if (action === 'desktop-wallpapers' || action === 'desktop-wallpaper-enter') c.openWallpapers?.(action === 'desktop-wallpaper-enter');
+    else if (action === 'desktop-cabin-settings') c.openCabin?.();
+    else if (action === 'desktop-cabin') {
+      if (!this.cabinWorld.state().configured) c.openCabin?.();
+      else {
+        try { this.enterCabin(undefined,true); }
+        catch { c.openCabin?.(); }
+      }
+    }
     else if (action === 'desktop-voice-settings') c.openVoiceSettings?.();
     else if (action === 'worlds') c.openWorlds?.();
     else if (action === 'quit') c.quit?.();
@@ -1976,6 +2137,85 @@ export class DesktopPetWorld implements World {
       this.releaseDesktopOperations();
     }
     await this.windowHost?.stop();
+  }
+
+  private revealCabin(): void {
+    clearTimeout(this.cabinHideTimer);
+    this.cabinHideTimer = undefined;
+    this.cabinWorld.reveal();
+  }
+
+  private cabinVisibility(active: boolean): void {
+    if (active) {
+      this.cabinRestoreBody = this.windowVisible();
+      if (this.cabinRestoreBody) {
+        this.petHidden = true;
+        this.releaseDesktopOperations();
+        const sent = this.server.sendPet({ t:'hide' });
+        if (!sent) this.revealCabin();
+        else if (this.cabinWorld.state().presented === false) {
+          this.cabinHideTimer = setTimeout(() => void this.cabinWorld.leave('原场景未确认隐藏，已取消切换。'),4000);
+        }
+        this.tellDesktop();
+      } else this.revealCabin();
+    } else {
+      clearTimeout(this.cabinHideTimer);
+      this.cabinHideTimer = undefined;
+      if (this.cabinRestoreBody) this.server.sendPet({ t:'show' });
+      this.cabinRestoreBody = false;
+    }
+    if (!active || this.cabinWorld.state().presented === undefined) this.reportCabinScene(active);
+  }
+
+  private reportCabinScene(active: boolean): void {
+    if (active === this.cabinSceneReported) return;
+    this.cabinSceneReported = active;
+    const text = this.language === 'zh'
+      ? active ? '已进入小屋世界。使用 cabin_status 或 cabin_look 查看住户和场景。' : '已离开小屋世界。继续在原会话中对话。'
+      : active ? 'Cabin World is active. Use cabin_status or cabin_look to inspect the resident and scene.' : 'Cabin World is no longer active. Continue in the same conversation.';
+    void this.push('desktop-live2d-pet.scene','desktop-live2d-pet.scene',text,'piggyback',{meta:{scene:'cabin-world',active}});
+  }
+
+  private async prepareCabinBody(signal: AbortSignal, model?: string) {
+    const pack = model ? this.packs().find(candidate => candidate.id === model) : this.currentPack();
+    if (!pack) throw Error('请先在梦境工作台选一个角色。');
+    if (pack.manifest.source === 'cabin-world') return undefined;
+    if (pack.rawModel) await this.opts.sdkService?.prepare();
+    signal.throwIfAborted();
+    const url = new URL('/model-preview',this.server.origin);
+    const scheme = pack.id === this.selectedModel() ? lookOf(this.cfg.skin)
+      : this.opts.figureLibrary?.settings(pack.rawModel?.sourceId ?? pack.id).scheme ?? '';
+    url.search = new URLSearchParams({ model:pack.id, cabin:'1', scheme }).toString();
+    const runtime = resolveHostCommand(url.href,this.cfg.window.electronFile,this.store.electron.executable());
+    if ('missing' in runtime || !runtime.args[0]?.endsWith('electron-main.cjs')) throw Error('请先在梦境运行详情中安装 Electron 运行组件。');
+    return {
+      key:'figure-scape-'+createHash('sha256').update(pack.rawModel?.sourceId ?? pack.id).digest('hex').slice(0,24),
+      name:(pack.manifest.name.zh || pack.manifest.name.en || '梦境角色').slice(0,32),
+      url:url.href,
+      electron:runtime.command,
+    };
+  }
+
+  private enterCabin(model?: unknown, fromDesktop = false) {
+    if (model !== undefined && (typeof model !== 'string' || !this.packs().some(pack => pack.id === model))) {
+      throw Error('请选择角色库里已有的角色。');
+    }
+    const current = this.cabinWorld.state();
+    if (current.phase === 'connecting' || current.phase === 'active' || current.phase === 'leaving') return current;
+    if (this.presentationService.busy() || this.frameworkModel.snapshot().busy) throw Error('Wait for the current scene or model change');
+    const release = this.bodyTransaction.reserve('presentation');
+    void this.cabinWorld.enter(model).then(next => {
+      if (fromDesktop && next.phase === 'error') this.opts.controls?.openCabin?.();
+    }).finally(release);
+    return this.cabinWorld.state();
+  }
+
+  private async selectScene(mode: unknown, request?: unknown) {
+    if (!presentationMode(mode)) throw Error('Invalid presentation mode');
+    if (this.frameworkModel.operation(request)) throw Error('Operation ID already belongs to a model request');
+    const wallpaper = mode === 'wallpaper' ? await this.wallpapers.prepare() : null;
+    if (this.cabinWorld.state().phase === 'active') await this.cabinWorld.leave();
+    return this.presentationService.select(mode, request, wallpaper ? {payload:wallpaper} : undefined);
   }
 
   /** Ends the wait with 'timeout' after `ms`, and takes the confirmation off the page, queued or shown. */
@@ -2051,6 +2291,7 @@ export class DesktopPetWorld implements World {
   }
 
   private onPageGone(): void {
+    this.revealCabin();
     this.windowCompatibility = null;
     this.phoneHistoryCursor = null;
     this.bodyTouch = undefined;
@@ -2207,8 +2448,11 @@ export class DesktopPetWorld implements World {
     if (!host) return null;
     try {
       const bodyInput = ['message', 'speech', 'answer', 'touch'].some(kind => type === `${this.id}.${kind}`);
+      const sourceScene = typeof extra.meta?.scene === 'string' ? extra.meta.scene : undefined;
+      if (bodyInput) await this.reportInputBody(this.inputBody(sourceScene));
+      const prefix = this.language === 'zh' ? '[梦境] ' : '[Figure Scape] ';
       const e = await host.pushEvent({ type, source: this.id, senderKey, ts: nowIso(this.opts.timezone),
-        text: this.stamp() + (bodyInput ? '[Live2D] ' : '') + text, ...extra }, { trigger });
+        text: this.stamp() + (bodyInput ? prefix : '') + text, ...extra }, { trigger });
       const item = chatItem(e);
       if (!item) return e;
       const pending = item.kind === 'user' && e.contextDelivery === 'deliver';
@@ -2229,6 +2473,7 @@ export class DesktopPetWorld implements World {
       const e = await host.pushEvent({ type: SELF_TYPE, source: this.id, senderKey: SELF_TYPE, ts: nowIso(this.opts.timezone), text, meta, ...(blobs.length ? { blobs } : {}) }, { deliver: false });
       const item = chatItem(e);
       if (item) this.chat.broadcast({ t: 'item', item });
+      if (item?.kind === 'say') this.cabinWorld.conversationChanged();
       return e.cursor;
     } catch (err) {
       this.log?.warn(`对话记录没能保存:${(err as Error).message}`);
@@ -2503,7 +2748,15 @@ export class DesktopPetWorld implements World {
   tools(): ToolDef[] {
     const handlers: Record<string, ToolDef['handler']> = {
       live2d_pet_status: async () => ({ text: JSON.stringify(this.availability()) }),
-      live2d_pet_say: (args) => this.say(args),
+      live2d_pet_say: (args, ctx) => {
+        const input = ctx.round === undefined ? undefined : this.replyInput();
+        if (input?.source === DESKTOP_CHAT_SOURCE && (input.meta?.via === 'bubble' || input.type === 'desktop-pet.speech')) {
+          return Promise.resolve({ text: this.language === 'zh'
+            ? '这条消息来自原版桌宠。请用 pet_say 回复这个入口。'
+            : 'This message came from Desktop Pet. Use pet_say to answer there.', failed: true });
+        }
+        return this.say(args);
+      },
       live2d_pet_ask: (args) => this.askUser(args),
       live2d_pet_move_to: (args, ctx) => this.moveTo(args, ctx),
       live2d_pet_act: (args) => this.act(args),
@@ -2518,6 +2771,17 @@ export class DesktopPetWorld implements World {
     }));
     if (this.adaptation) own.push(...MODEL_TOOL_DECLS.map((decl): ToolDef => ({
       ...decl, handler: (args, ctx) => this.invokeModelTool(decl.name, args, ctx.signal),
+    })));
+    own.push(...CABIN_TOOLS.map((decl): ToolDef => ({
+      ...decl,
+      handler: async (args, ctx) => {
+        try {
+          const receipt = await this.cabinWorld.run(decl.name,args,ctx.signal);
+          return { text:JSON.stringify(receipt), ...(receipt.ok === false || receipt.status === 'failed' ? {failed:true as const} : {}) };
+        } catch (error) {
+          return { text:error instanceof Error ? error.message : 'Cabin World is unavailable', failed:true };
+        }
+      },
     })));
     return own;
   }
@@ -2628,7 +2892,7 @@ export class DesktopPetWorld implements World {
       return unavailable();
     }
     const now = Date.now();
-    const selfSec = estimateSeconds(beats, this.cfg.window.bubbleSpeed);
+    const selfSec = estimateSeconds(beats, this.cfg.window.bubbleSpeed, undefined, this.cfg.window.replyBubbleSeconds);
     const waitSec = Math.max(0, (this.busyUntil - now) / 1000);
     this.busyUntil = Math.max(now, this.busyUntil) + selfSec * 1000;
     const replaced = this.ask?.question ?? null;
@@ -2827,6 +3091,10 @@ export class DesktopPetWorld implements World {
       'pet.self': this.selfText(),
       'pet.chat': this.opts.controls?.openChat ? t.chatPage(user) : '',
       'pet.reply': reply ? t.reply(user, reply) : '',
+      'pet.cabin': this.cabinWorld.state().phase === 'active'
+        ? language === 'zh' ? '当前身体在 Cabin World。行动前先用 cabin_status 或 cabin_look 看状态。cabin_task 的 done 才确认任务完成。对话回复继续写入 Coo 会话。'
+          : 'Your body is in Cabin World. Use cabin_status or cabin_look first. A cabin_task result of done confirms completion. Continue replying in the same Coo conversation.'
+        : language === 'zh' ? '小屋世界的 cabin_* 工具在使用者从场景页进入后可用。' : 'Cabin World tools act only after the person enters it from the scene page.',
     };
   }
 
@@ -2871,11 +3139,11 @@ export class DesktopPetWorld implements World {
       panels: desktopPetPanelDecls(language),
       invoke: (panel, method, args) => this.invoke(panel, method, args),
       stream: (panel, socket) => {
-        // `chat` has no panel: the embedding app draws its chat page from this stream
         if (panel === 'chat') { this.chat.add(socket, (msg, s) => void this.onChat(msg, s, language)); return; }
         if (panel !== 'framework' && panel !== 'voice') { socket.close('no stream'); return; }
         this.voiceSockets.add(socket);
         socket.onClose(() => this.voiceSockets.delete(socket));
+        if (panel === 'framework') this.chat.add(socket, (msg, s) => void this.onChat(msg, s, language, 'conversation'), true);
       },
       links: this.server.port ? [{ label: c.viewInBrowser, href: this.petUrl }] : [],
       config: desktopPetConfigGroups(language),
@@ -2884,8 +3152,8 @@ export class DesktopPetWorld implements World {
         ...c.envPrompt,
         path: this.envPromptFile(),
         role: 'envPrompt',
-        vars: ['pet.user', 'pet.vocab', 'pet.moves', 'pet.voice', 'pet.body', 'pet.dress', 'pet.self', 'pet.chat', 'pet.reply']
-          .map((name) => ({ name, description: c.vars[name] ?? name, ...(name === 'pet.vocab' || name === 'pet.moves' || name === 'pet.dress' ? { multiline: true } : {}) })),
+        vars: ['pet.user', 'pet.vocab', 'pet.moves', 'pet.voice', 'pet.body', 'pet.dress', 'pet.self', 'pet.chat', 'pet.reply', 'pet.cabin']
+          .map((name) => ({ name, description: c.vars[name] ?? petText('en').console.vars[name] ?? name, ...(name === 'pet.vocab' || name === 'pet.moves' || name === 'pet.dress' ? { multiline: true } : {}) })),
       }],
     };
   }
@@ -2920,6 +3188,20 @@ export class DesktopPetWorld implements World {
     if (panel === 'framework') {
       const presentation = this.presentationService;
       switch (method) {
+        case 'phone.state': return this.opts.phone?.status();
+        case 'phone.setEnabled': {
+          if (!this.opts.phone || typeof args[0] !== 'boolean') throw Error('Invalid Figure Pet setting');
+          return this.opts.phone.setEnabled(args[0]);
+        }
+        case 'phone.pair': {
+          if (!this.opts.phone || typeof args[0] !== 'string') throw Error('Invalid Figure Pet address');
+          return this.opts.phone.pair(args[0]);
+        }
+        case 'phone.revoke': {
+          if (!this.opts.phone || typeof args[0] !== 'string') throw Error('Invalid Figure Pet device');
+          return this.opts.phone.revoke(args[0]);
+        }
+        case 'phone.apk': return this.opts.phone?.apk();
         case 'controls.state': {
           const layout = readControlLayout(this.cfg.controlPages, this.cfg.hoverButtons, this.cfg.hoverButtonsVisible, this.cfg.controlPanelSize);
           return { layout, revision: JSON.stringify(layout) };
@@ -2973,17 +3255,47 @@ export class DesktopPetWorld implements World {
           const mime = ({'.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.gif':'image/gif','.avif':'image/avif'} as Record<string,string>)[cover.extension] ?? 'image/png';
           return {$binary:{mime,base64:(await readFile(cover.file)).toString('base64')}};
         }
+        case 'wallpaper.choose':
         case 'wallpaper.select': {
           const wallpaper = await this.wallpapers.prepare(args[0]);
           if (this.frameworkModel.operation(args[1])) throw Error('Operation ID already belongs to a model request');
+          if (method === 'wallpaper.choose') {
+            if (presentation.busy()) throw Error('Wait for the scene to finish switching');
+            const cabin = this.cabinWorld.state().phase;
+            if (['connecting','active','leaving'].includes(cabin) || presentation.state().desired !== 'wallpaper') {
+              const release = this.bodyTransaction.reserve('presentation');
+              try {
+                await this.wallpapers.select(wallpaper.id);
+                return {phase:'completed', applied:false, selectionOnly:true};
+              } finally { release(); }
+            }
+          }
+          if (this.cabinWorld.state().phase === 'active') await this.cabinWorld.leave();
           return this.presentationService.select('wallpaper', args[1], {
             payload:wallpaper, replace:true, commit:() => this.wallpapers.select(wallpaper.id),
           });
         }
-        case 'presentation.select':
-          if (this.frameworkModel.operation(args[1])) throw Error('Operation ID already belongs to a model request');
-          if (args[0] === 'wallpaper') return presentation.select(args[0], args[1], {payload:await this.wallpapers.prepare()});
-          return presentation.select(args[0], args[1]);
+        case 'presentation.select': return this.selectScene(args[0],args[1]);
+        case 'cabin.state': return this.cabinWorld.state();
+        case 'cabin.conversation': return this.cabinConversation();
+        case 'cabin.sendMessage': return this.sendCabinMessage(args[0],args[1]);
+        case 'cabin.figures': return cabinFigureSources(this.cabinWorld.installationRoot());
+        case 'cabin.importFigure': {
+          const library = this.opts.figureLibrary;
+          if (!library) throw Error('角色库暂不可用。');
+          if (this.cabinFigureImport) throw Error('正在导入小屋角色。');
+          const root = this.cabinWorld.installationRoot();
+          const task = library.importGenerated((directory, signal) => writeCabinFigure(root, args[0], directory, signal));
+          this.cabinFigureImport = task;
+          try { return { imported:await task }; }
+          finally { this.cabinFigureImport = undefined; }
+        }
+        case 'cabin.configure': return this.cabinWorld.configure(args[0]);
+        case 'cabin.enter': return this.enterCabin(args[0]);
+        case 'cabin.leave': return this.cabinWorld.leave();
+        case 'cabin.actor': return this.cabinWorld.setActor(args[0]);
+        case 'cabin.residents': return this.cabinWorld.refreshResidents();
+        case 'cabin.tool': return this.cabinWorld.run(String(args[0]),args[1] && typeof args[1] === 'object' ? args[1] as Record<string,unknown> : {});
         case 'runtime.openPreview': return this.openModelPreview(args[0]);
         case 'runtime.openEditor': return this.openModelEditor(args[0], args[1]);
         case 'runtime.editorState': return { mode: 'browser', available: this.server.port > 0 };
@@ -3048,6 +3360,7 @@ export class DesktopPetWorld implements World {
         case 'saveModelProfile': return this.frameworkConsole.invoke('saveModel', args);
         case 'openDesktopModel': return this.openDesktopModel(args[0]);
         case 'openWindow':
+          if (this.cabinWorld.state().phase === 'active') await this.cabinWorld.leave();
           await this.prepareWindowRuntime();
           this.openWindow(typeof args[0] === 'number' ? args[0] : undefined);
           return this.petState();
@@ -3155,6 +3468,9 @@ export class DesktopPetWorld implements World {
   petState(): Record<string, unknown> {
     const pack = this.currentPack();
     const window = this.windowHost?.state() ?? null;
+    const presentation = this.presentationService.state();
+    const cabinWorld = this.cabinWorld.state();
+    const bodyReady = this.bodyReady();
     const hideFromCapture = this.cfg.window.hideFromCapture === true;
     const reported = this.windowCompatibility;
     const windowCompatibility: WindowCompatibility = this.server.petInWindow && reported?.hideFromCapture === hideFromCapture
@@ -3162,9 +3478,11 @@ export class DesktopPetWorld implements World {
       ? reported : { hideFromCapture, capture: this.server.petInWindow ? 'pending' : 'offline', overTaskbar: null };
     return {
       framework: this.frameworkState(),
-      presentation: this.presentationService.state(),
+      presentation,
+      cabinWorld,
+      activeScene: this.activeScene(presentation.applied, cabinWorld, bodyReady),
       connected: this.server.petConnected,
-      bodyReady: this.bodyReady(),
+      bodyReady,
       bodyEffects: bodyEffectsFor(this.cfg.bodyEffects),
       bodyEffectsFeedback: this.currentBodyEffectsFeedback(),
       modelProvider: this.opts.modelService?.provider ?? 'unavailable',
@@ -3172,7 +3490,8 @@ export class DesktopPetWorld implements World {
       previousModelUnavailable: !!this.cfg.skin.figure && this.cfg.skin.figure !== 'coo' && !this.selectedModel(),
       clickThrough: this.clickThrough,
       theme: this.cfg.theme,
-      scale: this.presentationSizes()[this.presentationService.state().applied ?? this.presentationService.state().desired],
+      sound: this.quiet?.sound ?? this.cfg.sound,
+      scale: this.presentationSizes()[presentation.applied ?? presentation.desired],
       presentationScales: this.presentationSizes(),
       fontSize: this.cfg.window.fontSize,
       bubbleSize: this.cfg.window.bubbleSize,

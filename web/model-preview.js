@@ -23,7 +23,10 @@ reset.textContent = text('复位', 'Reset');
 
 const query = new URLSearchParams(location.search);
 const model = query.get('model');
-const editing = query.get('edit') === '1';
+const cabin = query.get('cabin') === '1';
+if (cabin) document.body.classList.add('cabin-capture');
+const editing = !cabin && query.get('edit') === '1';
+if (editing) document.body.classList.add('preview-edit-mode');
 const touchOverlay = editing ? createTouchOverlay(layer) : null;
 let touchTool = null, touchProfile, touchPoints = [], touchStart = null, touchGesture = 'poke', touchEnd = null, touchReplacing = null, touchSelected = null, touchDraftShape;
 let modelPaused = false;
@@ -37,7 +40,7 @@ const cover = query.get('cover') === '1';
 const coverToken = cover ? new URLSearchParams(location.hash.slice(1)).get('capture') : null;
 let coverSaved = false;
 if (cover) document.body.classList.add('cover-capture');
-const standalone = parent === window && !cover;
+const standalone = parent === window && !cover && !cabin;
 let previewTitle, previewNotice, previewMessage, previewRetry;
 if (standalone) {
   document.body.classList.add('preview-page');
@@ -77,8 +80,10 @@ function scaleBy(factor) {
   transform();
 }
 function note(value, state) {
+  const changed = status.textContent !== value || status.dataset.state !== state;
   if (status.textContent !== value) { status.textContent = value; status.title = value; }
   if (status.dataset.state !== state) status.dataset.state = state;
+  if (editing && changed && state === 'error') reply({ type: 'live2d-editor:preview-error', message: value });
   if (previewNotice) {
     previewNotice.hidden = state === 'ready';
     previewRetry.hidden = state !== 'error';
@@ -221,7 +226,10 @@ if (editing) addEventListener('message', async event => {
     }
     respond(isCurrent()?{}:{cancelled:true});
   } catch (error) {
-    respond(isCurrent()?{error:String(error?.message ?? error)}:{cancelled:true});
+    const reason = error?.name === 'DraftActionTimeout'
+      ? text('预览未收到试播回执，请重试。', 'The preview did not acknowledge the action. Try again.')
+      : String(error?.message ?? error);
+    respond(isCurrent()?{error:reason}:{cancelled:true});
   }
 });
 const retained = new Promise((resolve, reject) => {
@@ -273,7 +281,7 @@ async function load() {
     }
     const area = bounds();
     const next = await loadBody({
-      layer, pack, start: { x: area.W / 2, y: area.floorY, facing: 1, scheme: pack.figureSettings?.scheme ?? '' }, theme,
+      layer, pack, start: { x: area.W / 2, y: area.floorY, facing: 1, scheme: (cabin ? query.get('scheme') : null) ?? pack.figureSettings?.scheme ?? '' }, theme,
       bounds: area, staged: true, signal, previewSize: size, editorPreview: editing,
       onCover: coverToken && !packaged ? png => void saveCover(png) : undefined,
       onError: error => {
@@ -287,7 +295,7 @@ async function load() {
     next.place(area.W / 2, 1, area.floorY);
     next.reveal();
     if (editing) reply({type:'live2d-editor:ready',behavior:next.modelBehavior,words:next.words});
-    if (packaged) note(text('形象包已就绪', 'Figure is ready'), 'ready');
+    if (packaged) note(editing ? '' : text('形象包已就绪', 'Figure is ready'), 'ready');
     else note(text('等待画质回执…', 'Waiting for render quality…'), 'loading');
     let previous = performance.now();
     let lastAction = '';

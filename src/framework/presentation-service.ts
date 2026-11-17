@@ -51,28 +51,29 @@ export function createPresentationService(ports: {
         ports.send({ t: 'presentation-cancel', request });
         finish('failed', 'presentation-timeout');
       }, mode === 'wallpaper' ? 24000 : 6000);
-      function finish(phase: Operation['phase'], reason?: string) {
+      function finish(phase: Operation['phase'], reason?: string, applied = false) {
         clearTimeout(timer);
         release?.();
         if (pending?.request === request) pending = undefined;
         operation.phase = phase;
-        operation.applied = phase === 'completed' && observed?.mode === mode;
+        operation.applied = phase === 'completed' && applied;
         if (reason) operation.error = reason;
         error = reason ?? null;
         resolve({ ...operation });
       }
-      async function commitSelection() {
+      async function commitSelection(applied: boolean) {
         clearTimeout(timer);
         try {
           if (wallpaper?.commit) await wallpaper.commit();
           ports.persist(targetMode);
-          finish('completed');
+          finish('completed', undefined, applied);
         }
         catch (e) { finish('failed', String(e instanceof Error ? e.message : e)); }
       }
-      if (!ports.connected() || ports.visible?.() === false || observed?.mode === mode && !wallpaper?.replace) { void commitSelection(); return; }
+      if (!ports.connected() || ports.visible?.() === false) { void commitSelection(false); return; }
+      if (observed?.mode === mode && !wallpaper?.replace) { void commitSelection(true); return; }
       pending = { operation, request, model, finish(phase, reason) {
-        if (phase === 'completed') void commitSelection(); else finish(phase, reason);
+        if (phase === 'completed') void commitSelection(true); else finish(phase, reason);
       } };
       try { if (!ports.send({ t: 'presentation-apply', request, mode, ...(wallpaper ? { wallpaper:wallpaper.payload, replace:wallpaper.replace } : {}) })) finish('failed', 'window-disconnected'); }
       catch (e) { finish('failed', String(e instanceof Error ? e.message : e)); }

@@ -130,6 +130,7 @@ const HITS = [[128, 128, 108]];
  * `figure.colors.z`, if present, colours the sleep z's (otherwise they take the `eye` class).
  * `figure.gestures`, if present, names the short gestures (nod, shake) the figure draws itself: the body then
  * leaves them out, and the frame's `gesture` ({ kind, k: 0..1 }, or null) says which one is playing and how far.
+ * `figure.directionalFrames` keeps the body and hit geometry at full width when the figure supplies distinct direction art.
  * `figure.anchors`, `figure.extent` ([x0, y0, x1, y1]) and `figure.hits` ([[x, y, r]]) are in logo units; each
  * is read every frame, so a getter may follow the skin. `figure.setSkin(skin)` hears each skin change.
  */
@@ -733,7 +734,8 @@ export function createPet(els, opts) {
     if (fc.shake) AX += Math.sin(T * 60) * 1.4;
     else if (pet.pulse?.kind === 'shiver') AX += Math.sin(T * 75) * 1.1 * envelope((T - pet.pulse.t0) / pet.pulse.dur, .08, .85);
     // a figure may keep tilt and lean off the whole group and bend its own parts instead
-    const kx = S * pet.faceVis * sx, ky = S * sy, lean = pet.lean * pet.faceVis;
+    const directional = custom?.directionalFrames === true;
+    const kx = S * (directional ? 1 : pet.faceVis) * sx, ky = S * sy, lean = pet.lean * pet.faceVis;
     const rot = custom?.groupTilt ? custom.groupTilt(pet.mode, pet.tilt, lean) : pet.tilt + lean;
     pet.xf = { AX, AY, ax, ay, kx, ky, rot };
     if (!draw) return fname;
@@ -750,7 +752,9 @@ export function createPet(els, opts) {
     const gesture = pet.pulse ? { kind: pet.pulse.kind, k: clamp((T - pet.pulse.t0) / pet.pulse.dur, 0, 1) } : null;
     custom.draw(petG, face, {
       look: pet.look, legs, low: pet.low, t: T, blink, eyeClose, acc: skin, swing: pet.swing,
-      face: fname, mode: pet.mode, modeT: pet.modeT, talk: pet.talkK, status: pet.status, drowse: pet.drowse, sit: pet.sitK, facing: pet.faceVis, tilt: pet.tilt, lean, groupRot: rot, gesture,
+      face: fname, mode: pet.mode, modeT: pet.modeT, talk: pet.talkK, status: pet.status, drowse: pet.drowse, sit: pet.sitK,
+      facing: directional ? pet.facing : pet.faceVis, tilt: pet.tilt, lean, groupRot: rot, gesture,
+      ...(directional ? {position:{x:pet.x,y:pet.gy}} : {}),
     });
 
     const footY = drag ? pet.dy + 220 * S * 1.09 : pet.fy;

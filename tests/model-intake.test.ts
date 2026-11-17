@@ -1,10 +1,16 @@
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, statfs, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { strToU8, zipSync } from 'fflate';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
+import { createImportUpload } from '../src/live2d/import-upload.ts';
 import { createModelIntake } from '../src/live2d/model-intake.ts';
 import { filesFromBundle, filesFromZip } from '../src/live2d/import-files.ts';
+
+vi.mock('node:fs/promises', async load => {
+  const fs = await load<typeof import('node:fs/promises')>();
+  return { ...fs, statfs: vi.fn(fs.statfs), writeFile: vi.fn(fs.writeFile) };
+});
 
 function bundle(files: Record<string, Uint8Array>): Uint8Array {
   const parts: Uint8Array[] = [];
@@ -61,4 +67,30 @@ it('rejects unsafe archive paths and corrupt folder bundles', async () => {
   const upload = bundle(original);
   expect(typeof filesFromBundle(upload.slice(0, -1))).toBe('string');
   await expect(intake.importUpload('bundle', bundle({ ...original, '../outside': strToU8('a') }))).rejects.toThrow();
+});
+
+it('reports disk space, removes partial writes, and accepts a new upload after failure', async () => {
+  const { intake, imports } = await fixture();
+  const bytes = Buffer.from(bundle(original));
+  const upload = createImportUpload(intake);
+  async function transfer() {
+    const response = await upload('resources.beginUpload', ['bundle', bytes.length]) as { id: string };
+    await upload('resources.appendUpload', [response.id, 0, bytes.toString('base64')]);
+    return upload('resources.finishUpload', [response.id]);
+  }
+  vi.mocked(writeFile).mockClear();
+  vi.mocked(statfs).mockResolvedValueOnce({ type: 0, bsize: 4096, blocks: 10, bfree: 1, bavail: 1, files: 10, ffree: 9 });
+  await expect(transfer()).rejects.toThrow(/空间不足.*当前可用/);
+  expect(vi.mocked(writeFile)).not.toHaveBeenCalled();
+  expect(await readdir(imports)).toEqual([]);
+
+  const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  vi.mocked(writeFile).mockImplementationOnce(async (path, data, options) => {
+    await fs.writeFile(path, data, options);
+    throw Object.assign(Error('write failed'), { code: 'ENOSPC' });
+  });
+  await expect(transfer()).rejects.toThrow(/空间不足.*重新导入/);
+  expect(await readdir(imports)).toEqual([]);
+  expect(intake.list()).toEqual([]);
+  await expect(transfer()).resolves.toMatchObject({ models: [expect.objectContaining({ kind: 'live2d' })] });
 });

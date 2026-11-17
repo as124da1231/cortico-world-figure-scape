@@ -80,7 +80,7 @@ export interface PetServerOptions {
   webDir: string;
   /** Snapshot sent to every new connection and served at `/api/state`. */
   snapshot(): Record<string, unknown>;
-  onPetMessage(msg: PageMessage): void;
+  onPetMessage(msg: PageMessage, reply?: (msg: PageMessage) => void): void;
   onAudio(frame: Int16Array): void;
   onPetConnect(): void;
   onPetDisconnect(): void;
@@ -274,6 +274,7 @@ export class PetServer {
     ws.send(JSON.stringify({ t: 'init', ...this.opts.snapshot() }));
     // the pet window outranks a browser tab: a tab opened while the window is connected only watches
     const watcher = params.get('role') !== 'pet' || (!fromWindow && this.petConnected && this.petIsWindow);
+    const reply = (msg: PageMessage) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg)); };
     if (!watcher) {
       const old = this.pet;
       this.pet = ws;
@@ -288,7 +289,7 @@ export class PetServer {
           return;
         }
         const msg = parse(data.toString());
-        if (msg) this.opts.onPetMessage(msg);
+        if (msg) this.opts.onPetMessage(msg, reply);
       });
       ws.on('close', () => {
         if (this.pet !== ws) return;
@@ -301,7 +302,7 @@ export class PetServer {
       ws.send(JSON.stringify({ t: 'watching' }));
       ws.on('message', (data, isBinary) => {
         const msg = isBinary ? null : parse(data.toString());
-        if (msg && WATCHER_MESSAGES.has(msg.t)) this.opts.onPetMessage(msg);
+        if (msg && WATCHER_MESSAGES.has(msg.t)) this.opts.onPetMessage(msg, reply);
       });
     }
     this.dressers.add(ws);

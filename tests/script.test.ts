@@ -55,8 +55,12 @@ describe('vocabulary', () => {
     expect(estimateSeconds(parseScript('短').beats, speed)).toBeLessThan(estimateSeconds(parseScript('这是一段明显更长的话,要多打一会儿字才能说完。').beats, speed));
   });
 
-  it('divides the typing and reading time of text by the bubble speed, as the page does', () => {
+  it('keeps the final bubble hold independent of typing speed', () => {
     const { beats } = parseScript('这是一段明显更长的话,要多打一会儿字才能说完,再多说几句让它停得久一些。');
-    expect(estimateSeconds(beats, DESKTOP_PET_DEFAULTS.window.bubbleSpeed) / estimateSeconds(beats, BUBBLE_SPEED_MAX)).toBeCloseTo(BUBBLE_SPEED_MAX / DESKTOP_PET_DEFAULTS.window.bubbleSpeed, 1);
+    const fast = estimateSeconds(beats,BUBBLE_SPEED_MAX,undefined,0);
+    expect(estimateSeconds(beats,BUBBLE_SPEED_MAX,undefined,6) - fast).toBeCloseTo(6);
+    expect(estimateSeconds(beats,1,undefined,6) - estimateSeconds(beats,1,undefined,0)).toBeCloseTo(6);
+    expect(fast).toBeLessThan(estimateSeconds(beats,1,undefined,0));
+    expect(estimateSeconds(beats,1)).toBe(estimateSeconds(beats,1,undefined,DESKTOP_PET_DEFAULTS.window.replyBubbleSeconds));
   });
 });

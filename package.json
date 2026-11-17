@@ -1,8 +1,8 @@
 {
   "name": "cortico-world-figure-scape",
-  "version": "0.1.0-dev.0",
+  "version": "0.1.0-dev.1",
   "type": "module",
-  "description": "直接载入 Live2D 模型与兼容 Coo 形象包，在桌面、小屋、竖屏和壁纸场景中与 Coo 对话。",
+  "description": "把自己的角色带进 Coo。导入 Live2D 模型或兼容形象包，调整动作、装扮和触碰反馈。从桌面切到小屋、竖屏或动态壁纸，继续同一段对话。内置小屋世界。",
   "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
@@ -53,15 +53,16 @@
     "displayName": "Figure Scape · 梦境",
     "locales": {
       "zh": {
-        "displayName": "Figure Scape · 梦境"
+        "displayName": "Figure Scape · 梦境",
+        "description": "把自己的角色带进 Coo。导入 Live2D 模型或兼容形象包，调整动作、装扮和触碰反馈。从桌面切到小屋、竖屏或动态壁纸，继续同一段对话。内置小屋世界。"
       },
       "en": {
         "displayName": "Figure Scape",
-        "description": "Import Live2D models and compatible Coo figure packs, then interact with Coo on your desktop, in a room, in portrait mode, or over a wallpaper."
+        "description": "Bring your own character into Coo. Import Live2D models or compatible figure packs, then customize motions, outfits, and touch reactions. Keep chatting across the desktop, a furnished room, portrait view, and animated wallpapers. Includes Cabin World."
       }
     },
-    "webUiClient": "dist/webui-RVM66M6A.js",
-    "webUiStyle": "dist/webui-ZXZG44CT.css",
+    "webUiClient": "dist/webui-BLR2STUW.js",
+    "webUiStyle": "dist/webui-SIZDYSPY.css",
     "describe": "describe.json",
     "tags": [
       "companion",
@@ -74,9 +75,11 @@
   },
   "files": [
     "src",
+    "figures/coo-dungeon",
     "web",
     "!web/whale",
     "host",
+    "cabin-runtime",
     "dist",
     "README.md",
     "LICENSE",
@@ -91,6 +94,8 @@
     "!web/speech.js",
     "!src/speech/data",
     "scripts/build-webui.mjs",
+    "scripts/prepare-cabin-runtime.py",
+    "scripts/check-cabin-runtime.mjs",
     "tsconfig.json",
     "!src/cua",
     "!**/live2dcubismcore.min.js",
@@ -101,15 +106,20 @@
   ],
   "scripts": {
     "build": "node scripts/build-webui.mjs",
+    "prepack": "node scripts/check-cabin-runtime.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "acorn": "8.15.0",
     "esbuild": "0.28.2",
     "fflate": "0.8.3",
     "jpeg-js": "^0.4.4",
     "koffi": "3.3.1",
+    "node-forge": "1.4.3",
     "opencc-js": "^1.4.1",
+    "pngjs": "7.0.0",
+    "qrcode": "1.5.4",
     "sherpa-onnx-node": "1.13.8",
     "webwallgl": "3.0.2",
     "ws": "^8.18.0"
@@ -117,6 +127,7 @@
   "devDependencies": {
     "@types/express": "^4.17.25",
     "@types/node": "^22.10.0",
+    "@types/pngjs": "6.0.5",
     "@types/ws": "^8.5.13",
     "electron": "44.4.4",
     "jsdom": "^30.0.1",
@@ -128,8 +139,8 @@
     "win32"
   ],
   "live2dEditor": {
-    "script": "dist/editor-PEHUN2QE.js",
-    "style": "dist/editor-IVSSHP3S.css"
+    "script": "dist/editor-EALIXFXB.js",
+    "style": "dist/editor-CK7KXOGL.css"
   },
   "live2dWallpaper": "dist/wallpaper-YJLN6PG7.js"
 }

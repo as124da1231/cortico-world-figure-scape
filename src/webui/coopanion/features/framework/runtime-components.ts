@@ -21,7 +21,7 @@ export function runtimeComponents(ctx: PageContext, version: string) {
   let previous: HTMLButtonElement | undefined;
   const back = c.button(t('返回须知', 'Back to notice'), () => {
     licenseReading++;
-    license.heading.textContent = t('须知', 'Notice');
+    license.heading.textContent = summaryTitle();
     license.body.replaceChildren(summaryPage);
     license.body.scrollTop = 0;
     previous?.focus({preventScroll:true});
@@ -40,6 +40,7 @@ export function runtimeComponents(ctx: PageContext, version: string) {
   licenseRow.append(sdkStatus, links);
   licenseSummary.append(c.node('strong', 'Live2D'), licenseRow);
   let onReturn: (() => void) | undefined;
+  const summaryTitle = () => onReturn ? t('组件与许可', 'Components and licenses') : t('须知', 'Notice');
   const goBack = c.button(t('返回运行详情', 'Back to runtime details'), () => {
     license.element.close();
     onReturn?.();
@@ -70,7 +71,7 @@ export function runtimeComponents(ctx: PageContext, version: string) {
     if (!license.open()) return;
     onReturn = backToDetails;
     goBack.hidden = !onReturn;
-    license.heading.textContent = t('须知', 'Notice');
+    license.heading.textContent = summaryTitle();
     license.body.replaceChildren(summaryPage);
     license.body.scrollTop = 0;
     previous = undefined;

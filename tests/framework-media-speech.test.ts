@@ -76,6 +76,34 @@ describe('desktop media speech', () => {
     expect(report).toHaveBeenLastCalledWith({ id: 'clip', status: 'cancelled', reason: 'body-changed' });
   });
 
+  it('releases the text fallback if the audio context stays suspended', async () => {
+    vi.useFakeTimers();
+    try {
+      const context = {
+        state: 'suspended',
+        decodeAudioData: async () => ({ duration: 2 }),
+        resume: vi.fn(() => new Promise<void>(() => {})),
+      };
+      const report = vi.fn();
+      const speech = createMediaSpeech({
+        audio: { speechOutput: () => ({ ctx: context, master: {} }) },
+        read: async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }),
+        sampler: async () => null,
+        report,
+      });
+      const clip = speech.play('clip');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(context.resume).toHaveBeenCalledOnce();
+      expect(clip.state).toBe('preparing');
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(clip.state).toBe('failed');
+      expect(clip.controller.signal.aborted).toBe(true);
+      expect(report).toHaveBeenLastCalledWith({ id: 'clip', status: 'failed', reason: 'Speech preparation timed out' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reuses the two-stage SoulLink planner and keeps mouth and wardrobe channels out of its plan', async () => {
     let config: SpeechPlannerConfig = {};
     const usage = vi.fn();

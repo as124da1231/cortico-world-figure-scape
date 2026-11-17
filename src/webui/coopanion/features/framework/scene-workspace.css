@@ -1,0 +1,160 @@
+.pet-studio .studio-scene-workspace {
+  container:scene-workspace / inline-size;
+  display:grid;
+  grid-template-rows:auto minmax(0,1fr);
+  block-size:clamp(500px,72dvh,720px);
+  min-inline-size:0;
+  overflow:hidden;
+  border:1px solid var(--studio-line);
+  border-radius:16px;
+  background:var(--studio-surface);
+}
+.pet-studio .studio-scene-bar {
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:12px;
+  min-block-size:64px;
+  padding:10px clamp(14px,2.4cqi,26px);
+  border-block-end:1px solid var(--studio-line);
+}
+.pet-studio .studio-scene-bar h2 {
+  flex:1;
+  min-inline-size:min(80px,100%);
+  margin:0;
+  font-size:20px;
+  font-weight:670;
+  line-height:28px;
+  overflow-wrap:anywhere;
+}
+.pet-studio .studio-scene-bar h2:focus { outline:none; }
+.pet-studio .studio-scene-back:not([hidden]) {
+  padding-inline:10px;
+  border-color:transparent;
+  background:var(--studio-sunken);
+  color:var(--studio-text);
+}
+.pet-studio .studio-scene-back:hover { background:var(--studio-hover); }
+.pet-studio .studio-scene-actions:empty { display:none; }
+.pet-studio .studio-scene-actions:has(.studio-inline):not(:has(button:not([hidden]))) { display:none; }
+.pet-studio .studio-scene-viewport {
+  min-inline-size:0;
+  min-block-size:0;
+  overflow:auto;
+  scrollbar-gutter:stable both-edges;
+  padding:clamp(12px,2.3cqi,26px);
+  background:color-mix(in srgb,var(--studio-bg) 65%,var(--studio-surface));
+}
+.pet-studio .studio-scene-apps {
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:clamp(10px,1.55cqi,20px);
+  align-content:start;
+}
+.pet-studio .studio-scene-apps > button.studio-scene-app {
+  grid-template-columns:minmax(0,1fr);
+  grid-template-rows:auto minmax(0,1fr);
+  min-inline-size:0;
+  overflow:hidden;
+  padding:0;
+  border-radius:12px;
+  background:var(--studio-surface);
+  transition:border-color 140ms ease,box-shadow 140ms ease;
+}
+.pet-studio .studio-scene-apps > button.studio-scene-app:hover {
+  border-color:var(--studio-accent);
+  box-shadow:0 3px 14px #341d2814;
+}
+.pet-studio .studio-scene-apps > button.studio-scene-app[data-current=true] { border-color:var(--studio-accent); }
+.pet-studio .studio-scene-apps > button.studio-scene-app:focus-visible { outline-offset:-3px; }
+.pet-studio .studio-scene-workspace .studio-mode-art {
+  min-block-size:0;
+  inline-size:100%;
+  block-size:clamp(120px,16cqi,176px);
+}
+.pet-studio .studio-scene-apps .studio-mode-copy {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-content:start;
+  padding:12px 14px 15px;
+  gap:5px 7px;
+}
+.pet-studio .studio-scene-apps .studio-mode-name {
+  grid-column:1 / -1;
+  flex-wrap:wrap;
+  font-size:16px;
+  line-height:23px;
+}
+.pet-studio .studio-scene-apps .studio-mode-copy small { font-size:12px; line-height:18px; }
+.pet-studio .studio-scene-apps .studio-mode-status:empty { display:none; }
+.pet-studio .studio-scene-chevron { align-self:end; color:var(--studio-muted); font-size:21px; line-height:18px; }
+.pet-studio .studio-scene-workspace [data-mode=room] .studio-mode-art {
+  background:#d4ad8e url('./scene-room.webp') center 53% / cover;
+}
+.pet-studio .studio-scene-workspace [data-mode=cabin] .studio-mode-art {
+  background:url('./scene-cabin.webp') center / auto 79% no-repeat,
+    radial-gradient(ellipse at 50% 75%,light-dark(#c9dfdd,#365254),light-dark(#dee8ed,#2e394b) 76%);
+}
+.pet-studio .studio-scene-workspace :is([data-mode=room],[data-mode=cabin]) .studio-mode-art::before,
+.pet-studio .studio-scene-workspace [data-mode=cabin] .studio-mode-art::after { content:none; }
+.pet-studio .studio-scene-detail {
+  display:grid;
+  grid-template-columns:minmax(0,1fr);
+  gap:clamp(12px,2.1cqi,26px);
+  align-items:start;
+}
+.pet-studio .studio-scene-cover {
+  overflow:hidden;
+  border:1px solid var(--studio-line);
+  border-radius:12px;
+  background:var(--studio-surface);
+}
+.pet-studio .studio-scene-cover .studio-mode-art { block-size:clamp(118px,22cqi,250px); }
+.pet-studio .studio-scene-cover p {
+  margin:0;
+  padding:12px 14px;
+  color:var(--studio-muted);
+  font-size:13px;
+  line-height:20px;
+  overflow-wrap:anywhere;
+}
+.pet-studio .studio-scene-content { display:grid; gap:14px; min-inline-size:0; }
+.pet-studio .studio-scene-workspace .studio-scene-settings {
+  min-inline-size:0;
+  margin:0;
+  padding:clamp(12px,1.75cqi,20px);
+  border:1px solid var(--studio-line);
+  border-radius:12px;
+  background:var(--studio-surface);
+}
+.pet-studio .studio-scene-settings .scene-size-control { inline-size:100%; }
+.pet-studio .studio-scene-settings .scene-size-track { grid-template-columns:40px minmax(0,1fr) 40px; }
+.pet-studio .studio-scene-settings .scene-size-step { min-block-size:40px; }
+.pet-studio .studio-scene-settings .studio-status:empty,
+.pet-studio .studio-scene-feedback:not(:has(.studio-status:not(:empty),button:not([hidden]))) { display:none; }
+.pet-studio .studio-scene-feedback {
+  display:grid;
+  gap:4px;
+  color:var(--studio-muted);
+  overflow-wrap:anywhere;
+}
+.pet-studio .studio-scene-feedback .studio-mode-feedback { margin:0; min-block-size:0; flex-wrap:wrap; }
+.pet-studio .studio-scene-feedback .studio-mode-feedback:not(:has(.studio-status:not(:empty),button:not([hidden]))) { display:none; }
+@container scene-workspace (min-width:640px) {
+  .pet-studio .studio-scene-apps { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .pet-studio .studio-scene-detail { grid-template-columns:minmax(200px,2fr) minmax(0,3fr); }
+}
+@container scene-workspace (min-width:1000px) {
+  .pet-studio .studio-scene-apps { grid-template-columns:repeat(5,minmax(0,1fr)); }
+  .pet-studio .studio-scene-detail { grid-template-columns:minmax(280px,2fr) minmax(0,3fr); }
+}
+@container scene-workspace (max-width:320px) {
+  .pet-studio .studio-scene-apps { grid-template-columns:minmax(0,1fr); }
+  .pet-studio .studio-scene-actions { flex:0 0 100%; }
+}
+@media (max-height:680px) {
+  .pet-studio .studio-scene-workspace { block-size:clamp(360px,73dvh,500px); }
+}
+@media (prefers-reduced-motion:reduce) {
+  .pet-studio .studio-scene-apps > button.studio-scene-app { transition:none; }
+}
