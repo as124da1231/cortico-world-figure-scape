@@ -11,21 +11,21 @@ importers:
       acorn:
         specifier: 8.15.0
         version: 8.15.0
-      cortico-world-figure-scape-cabin-1of3:
-        specifier: 0.1.0-dev.1
-        version: 0.1.0-dev.1
-      cortico-world-figure-scape-cabin-2of3:
-        specifier: 0.1.0-dev.1
-        version: 0.1.0-dev.1
-      cortico-world-figure-scape-cabin-3of3:
-        specifier: 0.1.0-dev.1
-        version: 0.1.0-dev.1
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
       fflate:
         specifier: 0.8.3
         version: 0.8.3
+      figure-scape-cabin-1of3:
+        specifier: 0.1.0-dev.2
+        version: 0.1.0-dev.2
+      figure-scape-cabin-2of3:
+        specifier: 0.1.0-dev.2
+        version: 0.1.0-dev.2
+      figure-scape-cabin-3of3:
+        specifier: 0.1.0-dev.2
+        version: 0.1.0-dev.2
       jpeg-js:
         specifier: ^0.4.4
         version: 0.4.4
@@ -643,24 +643,6 @@ packages:
   convert-source-map@2.0.0:
     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
 
-  cortico-world-figure-scape-cabin-1of3@0.1.0-dev.1:
-    resolution: {integrity: sha512-r/+qEAlB+Cz+7BIWtvLyVqu6WvnCTj/IpJfI/UTYQXln+j07g4xOIzPxVdV/6jI6kEbsGcGYiLfcYIYA04KKug==}
-    engines: {node: '>=22'}
-    cpu: [x64]
-    os: [win32]
-
-  cortico-world-figure-scape-cabin-2of3@0.1.0-dev.1:
-    resolution: {integrity: sha512-Xhfe3BckUvqAOy2iHkha2mdNEfMdjQ7LciUbcimmxhgMtF+EdX+SJL6d41SHx9eMLtZjC7wvPO8dXPx+xVZ6WA==}
-    engines: {node: '>=22'}
-    cpu: [x64]
-    os: [win32]
-
-  cortico-world-figure-scape-cabin-3of3@0.1.0-dev.1:
-    resolution: {integrity: sha512-Ct2uR1105lghIv6xsYWgZDCZntM1NiTZPYv84UFQSeTs0gHKfLS45ItqDDTG7XUL/P37aWc3w8+O+8C84CK4Mg==}
-    engines: {node: '>=22'}
-    cpu: [x64]
-    os: [win32]
-
   css-tree@3.2.1:
     resolution: {integrity: sha512-X7sjQzceUhu1u7Y/ylrRZFU2FS6LRiFVp6rKLPg23y3x3c3DOKAwuXGDp+PAGjh6CSnCjYeAul8pcT8bAl+lSA==}
     engines: {node: ^10 || ^12.20.0 || ^14.13.0 || >=15.0.0}
@@ -734,6 +716,24 @@ packages:
 
   fflate@0.8.3:
     resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
+
+  figure-scape-cabin-1of3@0.1.0-dev.2:
+    resolution: {integrity: sha512-av7xxbLga88GLLyIYLbE8gC7zUE2WBIjB4Zfhlest0qMqfp1aOfooAFJQZhQzVJklo3nzepnjGFzrhVHmZcvSw==}
+    engines: {node: '>=22'}
+    cpu: [x64]
+    os: [win32]
+
+  figure-scape-cabin-2of3@0.1.0-dev.2:
+    resolution: {integrity: sha512-x2uPHtKfzI87Ez+c4LjdTdse4oevvg3pZgHTqvipvRXa3oSJAY1bja7dorDzKAtse+ncwofCLBZPNOw0nlixug==}
+    engines: {node: '>=22'}
+    cpu: [x64]
+    os: [win32]
+
+  figure-scape-cabin-3of3@0.1.0-dev.2:
+    resolution: {integrity: sha512-9AF6IifGINSa2ug3aKTHReABfW7Y3oYDkJa43YZ0sjd4W+6puKJkds3gHya3Kd0lH2Xa/qiVJmEoiFbNcFsM3A==}
+    engines: {node: '>=22'}
+    cpu: [x64]
+    os: [win32]
 
   find-up@4.1.0:
     resolution: {integrity: sha512-PpOwAdQ/YlXQ2vj8a3h8IipDuYRi3wceVQQGYWxNINccq40Anw7BlsEXCMbt1Zt+OLA6Fq9suIpIWD0OsnISlw==}
@@ -1629,12 +1629,6 @@ snapshots:
 
   convert-source-map@2.0.0: {}
 
-  cortico-world-figure-scape-cabin-1of3@0.1.0-dev.1: {}
-
-  cortico-world-figure-scape-cabin-2of3@0.1.0-dev.1: {}
-
-  cortico-world-figure-scape-cabin-3of3@0.1.0-dev.1: {}
-
   css-tree@3.2.1:
     dependencies:
       mdn-data: 2.27.1
@@ -1715,6 +1709,12 @@ snapshots:
       picomatch: 4.0.7
 
   fflate@0.8.3: {}
+
+  figure-scape-cabin-1of3@0.1.0-dev.2: {}
+
+  figure-scape-cabin-2of3@0.1.0-dev.2: {}
+
+  figure-scape-cabin-3of3@0.1.0-dev.2: {}
 
   find-up@4.1.0:
     dependencies:
