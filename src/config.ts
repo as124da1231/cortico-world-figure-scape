@@ -4,6 +4,7 @@ import type { ControlPages, ControlPanelSize } from '../web/framework/control-la
 import { CONTROL_COMPONENTS, CONTROL_RAIL_LIMIT } from '../web/framework/control-layout.js';
 import type { PresentationMode, ScenePosition } from './framework/presentation-service.ts';
 import type { CabinConfig } from './framework/cabin-world.ts';
+import type { AppearancePreset } from './framework/appearance.ts';
 import { MAX_HOVER_BUTTONS, PET_ACTIONS, type PetAction } from './pet-actions.ts';
 export { MAX_HOVER_BUTTONS, PET_ACTIONS, type PetAction } from './pet-actions.ts';
 import { BODY_EFFECT_KEYS, DEFAULT_BODY_EFFECTS, type BodyEffects } from './body-effects.ts';
@@ -149,7 +150,10 @@ export type MicMode = 'hold' | 'toggle' | 'always';
 export type AsrEngine = 'funasr' | 'whisper' | 'system' | 'api';
 
 /** The deployment secrets this World reads, by what they are for. */
-export const DESKTOP_PET_SECRETS = { asrApiKey: 'DESKTOP_LIVE2D_PET_ASR_API_KEY' } as const;
+export const DESKTOP_PET_SECRETS = {
+  asrApiKey: 'DESKTOP_LIVE2D_PET_ASR_API_KEY',
+  phoneConsolePassword: 'DESKTOP_LIVE2D_PET_PHONE_CONSOLE_PASSWORD',
+} as const;
 
 /** Languages SenseVoiceSmall hears, by the app language that speaks them; it also takes `yue` and `auto`. */
 export const SENSEVOICE_LANGUAGES: Readonly<Record<string, string>> = { zh: 'zh', 'zh-Hant': 'zh', en: 'en', ja: 'ja', ko: 'ko' };
@@ -220,11 +224,14 @@ export interface DesktopPetConfigSection extends WorldSection {
   sounds: SoundSettings;
   speech: SpeechSettings;
   theme: PetTheme;
+  appearance?: AppearancePreset;
   /** Start each run where the pet stood when the World last stopped. */
   rememberPosition: boolean;
   presentationMode?: PresentationMode;
   /** The Android relay listens on the LAN only after the workbench enables it. */
   phoneLinkEnabled?: boolean;
+  /** The loopback console port used only by the optional Figure Pet connector. */
+  phoneLinkConsolePort?: number;
   cabinWorld?: CabinConfig;
   presentationScales?: Partial<Record<Exclude<PresentationMode, 'desktop'>, number>>;
   presentationPositions?: Partial<Record<Exclude<PresentationMode, 'desktop'>, ScenePosition>>;
@@ -315,6 +322,7 @@ export const DESKTOP_PET_DEFAULTS: DesktopPetConfigSection = {
   theme: 'dark',
   rememberPosition: false,
   phoneLinkEnabled: false,
+  phoneLinkConsolePort: 17788,
   petX: null,
   petY: null,
   hoverButtons: 'chat,voice',
@@ -342,7 +350,7 @@ export const DESKTOP_PET_DEFAULTS: DesktopPetConfigSection = {
     timeoutMs: 20_000,
     api: { baseUrl: '', model: '' },
     segment: { thresholdDb: -42, minSpeechMs: 180, dispatchSilenceMs: 250, silenceMs: 600, maxUtteranceMs: 15_000, preRollMs: 320, minUtteranceMs: 350 },
-    mic: { mode: 'hold', hotkey: DEFAULT_HOTKEY, deviceId: '', openOnPress: false },
+    mic: { mode: 'hold', hotkey: DEFAULT_HOTKEY, deviceId: '', openOnPress: true },
   },
 };
 
@@ -385,10 +393,10 @@ export function desktopPetConfigGroups(language: Language = 'zh'): ConfigGroup[]
         ...(process.platform === 'win32' ? {
           [`${K}.window.hideWhenFullscreen`]: { type: 'boolean', title: c.hideWhenFullscreen.title, description: c.hideWhenFullscreen.description, 'x-hot': true },
           [`${K}.window.passWhenFullscreen`]: { type: 'boolean', title: c.passWhenFullscreen.title, description: c.passWhenFullscreen.description, 'x-hot': true },
-          [`${K}.window.hideFromCapture`]: { type: 'boolean', title: language.startsWith('zh') ? '截图和录屏时隐藏 Live2D' : 'Hide Live2D from screenshots and recordings',
-            description: language.startsWith('zh') ? '仅作用于 Live2D 窗口。开启后，NVIDIA 即时重放的桌面捕获可能无法启动。' : 'Applies to the Live2D window. NVIDIA Instant Replay may fail to start desktop capture while enabled.', 'x-hot': true },
+          [`${K}.window.hideFromCapture`]: { type: 'boolean', title: language.startsWith('zh') ? '截图和录屏时隐藏桌宠' : 'Hide the pet from screenshots and recordings',
+            description: language.startsWith('zh') ? '仅作用于本扩展的桌宠窗口。开启后，NVIDIA 即时重放的桌面捕获可能无法启动。' : 'Applies to this extension’s pet window. NVIDIA Instant Replay may fail to start desktop capture while enabled.', 'x-hot': true },
           [`${K}.window.overTaskbar`]: { type: 'boolean', title: language.startsWith('zh') ? '允许覆盖任务栏' : 'Allow overlap with the taskbar',
-            description: language.startsWith('zh') ? '关闭后，Live2D 窗口限于屏幕工作区，角色仍站在工作区底部。' : 'When off, the Live2D window stays in the display work area. The character keeps the same floor.', 'x-hot': true },
+            description: language.startsWith('zh') ? '关闭后，桌宠窗口限于屏幕工作区，角色仍站在工作区底部。' : 'When off, the pet window stays in the display work area. The character keeps the same floor.', 'x-hot': true },
         } : {}),
         [`${K}.window.exportOverlay`]: { type: 'boolean', title: c.exportOverlay.title, description: c.exportOverlay.description, 'x-hot': true },
         [`${K}.window.electronFile`]: { type: 'string', title: c.electronFile.title, description: c.electronFile.description, 'x-path': { kind: 'file' }, 'x-hot': false },

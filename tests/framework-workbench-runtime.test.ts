@@ -45,6 +45,33 @@ afterEach(() => {
   delete window.coopanionWindow;
 });
 
+it('leaves the model service loading state on timeout and can read an empty catalog on retry', async () => {
+  const timeout = new AbortController();
+  const deadline = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeout.signal);
+  let reads = 0;
+  api.invokePanel.mockImplementation(async (_provider, _panel, method, _args, options) => {
+    if (method !== 'services.state') return runtime();
+    if (++reads === 1) return new Promise((_resolve,reject) => {
+      options.signal.addEventListener('abort', () => reject(options.signal.reason), {once:true});
+    });
+    return { providers:[], models:[], protocols:[], selected:{} };
+  });
+  const page = fixture('services');
+  try {
+    await vi.waitFor(() => expect(reads).toBe(1));
+    expect(page.button('添加提供商')?.disabled).toBe(true);
+    timeout.abort();
+    await vi.waitFor(() => expect(page.root.textContent).toContain('读取模型服务超时'));
+    deadline.mockRestore();
+    page.button('重新读取')!.click();
+    await vi.waitFor(() => expect(page.button('添加提供商')?.disabled).toBe(false));
+    expect(page.button('重新读取')?.hidden).toBe(true);
+  } finally {
+    deadline.mockRestore();
+    page.controller.abort();
+  }
+});
+
 it('cancels a pending local model import through its operation ID', async () => {
   let rejectLoad: (reason: Error) => void = () => {};
   let phase = 'preparing';
@@ -190,6 +217,8 @@ it('stages and validates geometry before adding or replacing a touch area', () =
     expect(editor.value()?.areaNotes?.[id]).toBe('发饰旁边');
 
     button('试触').click();
+    expect(editor.element.querySelector('select[aria-label="本地反应"]')).not.toBeNull();
+    expect(editor.element.querySelector('select[aria-label="Coo 上报"]')).not.toBeNull();
     expect(send).toHaveBeenLastCalledWith('touch-config', expect.objectContaining({ tool:'test', replacing:null }));
   } finally { controller.abort(); }
 });
@@ -243,28 +272,28 @@ it('starts from the workbench header and waits for the window before changing th
   });
   const workbench = fixture('framework');
   try {
-    const header = workbench.root.querySelector('.studio-header-tools')!;
+    const header = workbench.root.querySelector('.studio-panel-header')!;
     const launch = header.querySelector<HTMLButtonElement>('.studio-runtime-launch')!;
     await vi.waitFor(() => expect(launch.disabled).toBe(false));
-    expect(launch.textContent).toBe('启动梦境');
+    expect(launch.textContent).toBe('启动桌宠');
     launch.click();
     launch.click();
     await vi.waitFor(() => expect(launch.textContent).toBe('正在连接…'));
     expect(workbench.root.querySelector('dialog[open]')).toBeNull();
     state.inWindow = state.onDesktop = state.bodyReady = true;
     for (const poll of workbench.intervals) poll();
-    await vi.waitFor(() => expect(launch.textContent).toBe('隐藏梦境'));
+    await vi.waitFor(() => expect(launch.textContent).toBe('隐藏桌宠'));
     launch.click();
     await vi.waitFor(() => expect(launch.textContent).toBe('正在隐藏…'));
     expect(launch.disabled).toBe(true);
     state.onDesktop = false;
     for (const poll of workbench.intervals) poll();
-    await vi.waitFor(() => expect(launch.textContent).toBe('显示梦境'));
+    await vi.waitFor(() => expect(launch.textContent).toBe('显示桌宠'));
     launch.click();
     await vi.waitFor(() => expect(launch.textContent).toBe('正在显示…'));
     state.onDesktop = true;
     for (const poll of workbench.intervals) poll();
-    await vi.waitFor(() => expect(launch.textContent).toBe('隐藏梦境'));
+    await vi.waitFor(() => expect(launch.textContent).toBe('隐藏桌宠'));
     expect(commands).toEqual(['runtime.openWindow', 'runtime.hideWindow', 'runtime.openWindow']);
     expect(api.invokePanel.mock.calls.some(call => ['runtime.selectBody','runtime.selectStockBody'].includes(call[2]))).toBe(false);
   } finally {
@@ -333,16 +362,16 @@ it('switches mouse pass-through independently of the Coo body route', async () =
     if (method === 'runtime.setClickThrough') state.clickThrough = args[0];
     return structuredClone(state);
   });
-  const workbench = fixture('desktop');
+  const workbench = fixture('engines');
   try {
-    const version = workbench.root.querySelector<HTMLButtonElement>('.studio-version')!;
-    version.click();
-    expect(workbench.root.querySelector('dialog[open] h2')?.textContent).toBe('运行详情');
+    const settings = workbench.root.querySelector<HTMLDetailsElement>('.studio-runtime-startup')!;
+    expect(settings.open).toBe(false);
+    settings.open = true;
     await vi.waitFor(() => expect(workbench.button('启用鼠标穿透')?.disabled).toBe(false));
     workbench.button('启用鼠标穿透')!.click();
-    await vi.waitFor(() => expect(workbench.button('关闭鼠标穿透')?.disabled).toBe(false));
-    workbench.button('关闭鼠标穿透')!.click();
-    await vi.waitFor(() => expect(workbench.root.textContent).toContain('已恢复鼠标交互'));
+    await vi.waitFor(() => expect(workbench.button('恢复鼠标操作')?.disabled).toBe(false));
+    workbench.button('恢复鼠标操作')!.click();
+    await vi.waitFor(() => expect(workbench.root.textContent).toContain('已恢复鼠标操作'));
     expect(api.invokePanel.mock.calls.filter(call => call[2] === 'runtime.setClickThrough').map(call => call[3])).toEqual([[true], [false]]);
     expect(api.invokePanel.mock.calls.some(call => ['selectBody', 'selectStockBody'].includes(call[2]))).toBe(false);
   } finally {
@@ -350,7 +379,7 @@ it('switches mouse pass-through independently of the Coo body route', async () =
   }
 });
 
-it('keeps stopped-window details actionable and reveals advanced settings on demand', async () => {
+it('keeps stopped-window actions in Engines and reveals advanced settings on demand', async () => {
   const state = {
     ...runtime(), inWindow:false, onDesktop:false, bodyReady:false, url:'http://127.0.0.1:7800/pet',
     activeScene:null, window:{phase:'stopped'}, windowHint:'',
@@ -373,14 +402,13 @@ it('keeps stopped-window details actionable and reveals advanced settings on dem
     }}}, values:{[port]:7798,[executable]:''},
   }]});
   api.setConfig.mockResolvedValue(undefined);
-  const workbench = fixture('framework');
+  const workbench = fixture('engines');
   try {
-    workbench.root.querySelector<HTMLButtonElement>('.studio-version')!.click();
-    const details = workbench.root.querySelector<HTMLDialogElement>('dialog[open]')!;
+    const details = workbench.root.querySelector<HTMLElement>('[data-task=window]')!;
     const actions = () => [...details.querySelectorAll<HTMLButtonElement>('.studio-runtime-actions button:not([hidden])')];
-    await vi.waitFor(() => expect(actions().map(button => button.textContent)).toEqual(['启动梦境']));
+    await vi.waitFor(() => expect(actions().map(button => button.textContent)).toEqual(['启动桌宠']));
     expect(details.querySelector('.studio-runtime-state')?.textContent).toBe('未启动');
-    expect(details.querySelector('.studio-runtime-facts')?.textContent).toContain('所选角色');
+    expect(details.querySelector('h2')?.textContent).toBe('桌宠窗口');
     expect(details.textContent).not.toContain('身体未就绪');
     const startup = details.querySelector<HTMLDetailsElement>('.studio-runtime-startup')!;
     expect(startup.open).toBe(false);
@@ -398,5 +426,48 @@ it('keeps stopped-window details actionable and reveals advanced settings on dem
     expect(details.querySelector('.studio-runtime-state')?.textContent).toBe('窗口启动失败');
     expect(details.querySelector('.studio-runtime-feedback')?.textContent).toBe('窗口进程启动失败');
   } finally { workbench.controller.abort(); }
+});
+
+it('directs missing window components to Engines and offers launch again after installation', async () => {
+  const state = {
+    ...runtime(), onDesktop:false, inWindow:false, bodyReady:false,
+    window:{phase:'missing', reason:{kind:'noElectron'}},
+    electron:{phase:'absent', supported:true, done:0, total:158_149_795, stage:undefined as string | undefined, cancelled:false},
+  };
+  api.invokePanel.mockImplementation(async (_provider, _panel, method) => {
+    if (method === 'resources') return [];
+    if (method === 'runtime.installElectron') Object.assign(state.electron, {phase:'working', stage:'downloading', cancelled:false});
+    if (method === 'runtime.cancelElectron') Object.assign(state.electron, {phase:'absent', stage:undefined, cancelled:true});
+    return structuredClone(state);
+  });
+  const workbench = fixture('framework');
+  const previousHash = window.location.hash;
+  try {
+    await vi.waitFor(() => expect(workbench.button('设置桌宠窗口')?.disabled).toBe(false));
+    workbench.button('设置桌宠窗口')!.click();
+    expect(window.location.hash).toMatch(/\/engines\?task=window$/);
+    expect(workbench.root.querySelector('dialog[open]')).toBeNull();
+    const engines = fixture('engines');
+    try {
+      await vi.waitFor(() => expect(engines.button('安装窗口组件')?.hidden).toBe(false));
+      expect(engines.root.textContent).toContain('158 MB');
+      engines.button('安装窗口组件')!.click();
+      await vi.waitFor(() => expect(engines.root.querySelector('.studio-runtime-state')?.textContent).toBe('正在下载窗口组件'));
+      expect(engines.root.querySelector('progress[aria-label="窗口组件安装进度"]')?.hasAttribute('hidden')).toBe(false);
+      await vi.waitFor(() => expect(engines.button('取消下载')?.disabled).toBe(false));
+      engines.button('取消下载')!.click();
+      await vi.waitFor(() => expect(engines.root.textContent).toContain('下载已取消'));
+      engines.button('安装窗口组件')!.click();
+      await vi.waitFor(() => expect(engines.root.textContent).toContain('正在下载窗口组件'));
+      Object.assign(state.electron, {phase:'ready', stage:undefined});
+      for (const poll of engines.intervals) poll();
+      await vi.waitFor(() => expect(engines.button('启动桌宠')?.hidden).toBe(false));
+      expect(engines.button('启动桌宠')?.disabled).toBe(false);
+      expect(engines.root.querySelector('.studio-runtime-indicator')?.getAttribute('data-state')).toBe('idle');
+    } finally { engines.controller.abort(); }
+  } finally {
+    workbench.controller.abort();
+    window.history.replaceState(null, '', previousHash || window.location.pathname);
+  }
 });
 

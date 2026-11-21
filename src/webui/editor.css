@@ -4,23 +4,23 @@ html,body{margin:0;min-height:100%;color-scheme:light dark}
   height:100dvh;display:grid;grid-template-rows:minmax(0,1fr);background:var(--sheet);color:var(--ink);font:14px/22px var(--studio-font);
 }
 .live2d-editor .editor-shell{width:auto;max-width:none;height:100%;max-height:none;overflow:hidden;display:grid;grid-template-rows:auto minmax(0,1fr)}
-.editor-heading{box-sizing:border-box;min-height:72px;border-bottom:1px solid var(--line);padding:12px clamp(16px,3vw,36px);display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--studio-surface)}
+.editor-heading{box-sizing:border-box;block-size:78px;border-bottom:1px solid var(--studio-surface-edge);padding:10px clamp(16px,3vw,36px);display:grid;grid-template-columns:minmax(0,1fr) minmax(250px,55%);align-items:center;gap:16px;background:var(--studio-surface)}
 .editor-heading h1{margin:1px 0 0;font-size:clamp(18px,2vw,24px);line-height:1.25;font-weight:660;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .editor-heading span{color:var(--studio-muted);font-size:12px;line-height:18px}
 .editor-heading>div{min-width:0}
 .editor-feedback{max-width:46ch;margin:0;color:var(--studio-alert);font-size:12px;text-align:end;overflow-wrap:anywhere}
 .editor-feedback:empty{display:none}
 .editor-notices,.editor-draft-notice{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:6px 10px}
+.editor-notices{max-block-size:56px;overflow:auto;overscroll-behavior:contain;padding:2px 4px;align-content:start}
+.editor-notices:not(:has(>.editor-feedback:not(:empty),>button:not([hidden]),>.editor-draft-notice:not([hidden]))){visibility:hidden}
 .editor-draft-notice p{margin:0;max-width:40ch;color:var(--studio-alert);font-size:12px}
 .live2d-editor .editor-layout{display:grid;grid-template-columns:minmax(128px,152px) minmax(230px,1fr) minmax(322px,clamp(374px,34vw,500px));gap:clamp(12px,1.6vw,24px);padding:clamp(12px,2vw,28px);min-height:0;height:auto}
 .editor-layout>section,.editor-layout>nav{min-width:0;min-height:0}
 .editor-layout .studio-editor-nav{overflow:auto;align-self:start;max-height:100%;border:0;padding:3px;gap:5px;scrollbar-width:thin}
-.live2d-editor button.studio-button{border:1px solid var(--studio-line);border-radius:var(--studio-radius);background:var(--studio-surface);color:var(--studio-text);padding:6px 10px;min-height:var(--studio-control);cursor:pointer}
-.live2d-editor button.studio-button.is-primary{background:var(--studio-action);border-color:transparent;color:var(--studio-accent)}
-.live2d-editor button.studio-button:hover:not(:disabled){background:var(--studio-hover)}
-.live2d-editor button.studio-button:disabled{opacity:.55;cursor:default}
-.live2d-editor input:not([type=range]):not([type=checkbox]),.live2d-editor select{border:1px solid var(--studio-line);border-radius:var(--studio-radius);background:var(--studio-surface);color:var(--studio-text);padding:6px 9px;min-height:var(--studio-control);box-sizing:border-box}
-.editor-layout nav button.studio-button{border-color:transparent;background:transparent;color:var(--studio-muted);text-align:start;font-size:13px;padding-inline:11px}
+.live2d-editor button.studio-button{padding:6px 10px;min-height:var(--studio-control)}
+.live2d-editor :is(input:not([type=range],[type=checkbox],[type=radio]),select){padding:6px 9px;min-height:var(--studio-control)}
+.editor-layout nav button.studio-button{border-color:transparent;background:transparent;color:var(--studio-muted);text-align:start;font-size:13px;padding-inline:11px;box-shadow:none}
+.editor-layout nav button.studio-button:hover:not(:disabled){background:var(--studio-hover);border-color:transparent}
 .editor-layout nav button.studio-button[aria-current=page]{color:var(--studio-accent);background:var(--studio-action);font-weight:650}
 .editor-canvas,.live2d-editor .editor-inspector{background:var(--studio-surface)}
 .editor-canvas{position:relative;display:grid;grid-template-rows:auto minmax(0,1fr);border:1px solid var(--line);border-radius:var(--studio-card-radius);overflow:hidden}
@@ -41,6 +41,15 @@ html,body{margin:0;min-height:100%;color-scheme:light dark}
 .live2d-editor .editor-inspector .framework-editor-workspace{min-height:0; min-width:0; overflow:auto}
 .live2d-editor .editor-inspector .framework-editor-external{border:0;border-radius:0}
 .live2d-editor .editor-inspector .framework-editor-workspace > :is(.studio-editor-group,.touch-editor){padding:16px}
+.live2d-editor .studio-character-wardrobe{display:grid;gap:8px;margin-block:10px}
+.live2d-editor .studio-character-wardrobe>label{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);align-items:center;gap:12px;font-size:13px}
+.live2d-editor .studio-character-wardrobe>label[hidden]{display:none}
+.live2d-editor .studio-character-wardrobe select{width:100%;min-width:0}
+.studio-figure-outfit-summary,.studio-figure-outfit-status{font-size:12px;line-height:18px;color:var(--studio-muted);margin:0;overflow-wrap:anywhere}
+.studio-figure-outfit-status[data-state=ready]{color:var(--studio-ready)}
+.studio-figure-outfit-status[data-state=error]{color:var(--studio-alert)}
+.studio-figure-outfit-status:empty{display:none}
+.studio-figure-outfit-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px;margin-block-start:12px}
 .live2d-editor .studio-binding-search{display:block;width:100%;margin-block-end:7px}
 .live2d-editor .studio-binding-words{margin-block-end:10px;border-radius:var(--studio-radius);background:var(--studio-bg)}
 .live2d-editor .editor-inspector .framework-editor-footer{
@@ -50,11 +59,8 @@ html,body{margin:0;min-height:100%;color-scheme:light dark}
 .live2d-editor .editor-inspector .framework-draft-state{max-height:3em;overflow:auto;overflow-wrap:anywhere;min-width:0}
 .live2d-editor .editor-inspector .framework-editor-footer > p{grid-row:auto;max-height:3em}
 .live2d-editor .editor-inspector .framework-editor-footer > p:empty{display:none}
-.live2d-editor .editor-inspector .framework-editor-actions button.studio-button.is-primary,
-.live2d-editor .touch-clear-dialog button.studio-button.is-primary{
-  background:var(--studio-accent);border-color:transparent;color:var(--studio-surface);font-weight:650;
-}
-.live2d-editor .editor-inspector .framework-editor-actions button.studio-button.is-primary:hover:not(:disabled){background:color-mix(in srgb,var(--studio-accent) 87%,var(--studio-text))}
+.live2d-editor .studio-editor-save-status[data-outfit=ready]{color:var(--studio-ready)}
+.live2d-editor .studio-editor-save-status[data-outfit=error]{color:var(--studio-alert)}
 .live2d-editor :is(button,input,select,textarea,summary):focus-visible{outline:2px solid var(--studio-focus);outline-offset:2px}
 @media(max-width:985px){
   .live2d-editor .editor-layout{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}
@@ -62,10 +68,26 @@ html,body{margin:0;min-height:100%;color-scheme:light dark}
   .editor-layout .studio-editor-nav button{width:auto;flex:none}
 }
 @media(max-width:680px){
-  .editor-heading{min-height:58px;padding:8px 12px;gap:8px}
+  .editor-heading{block-size:114px;grid-template-columns:minmax(0,1fr);grid-template-rows:36px minmax(0,1fr);padding:8px 12px;gap:4px}
+  .editor-notices,.editor-draft-notice{justify-content:flex-start}
+  .editor-feedback{text-align:start}
+  .editor-draft-notice p{flex-basis:100%;max-width:none}
   .live2d-editor .editor-layout{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(152px,38dvh) minmax(0,1fr);padding:8px 12px 12px;gap:8px}
   .editor-canvas-heading{min-height:34px;padding-inline:10px}
   .live2d-editor .editor-inspector .framework-editor-footer{padding:8px}
+  .live2d-editor .framework-editor-workspace:has(>.studio-figure-wardrobe:not([hidden])){
+    grid-template-rows:minmax(0,1fr);overflow:hidden;
+  }
+  .live2d-editor .framework-editor-workspace>.studio-figure-wardrobe:not([hidden]){
+    display:grid;grid-template-rows:auto minmax(0,1fr) auto;min-height:0;margin:0;padding:10px 12px 8px;border:0;
+  }
+  .live2d-editor .studio-figure-wardrobe .studio-character-wardrobe{
+    grid-template-columns:repeat(2,minmax(0,1fr));align-content:start;overflow:auto;overscroll-behavior:contain;padding:3px;margin-block:6px;
+  }
+  .live2d-editor .studio-character-wardrobe>label:first-child{grid-column:1/-1}
+  .live2d-editor .studio-character-wardrobe>label:not(:first-child){grid-template-columns:minmax(0,1fr);gap:2px}
+  .studio-figure-outfit-preview{border-block-start:1px solid var(--line);padding-block-start:7px}
+  .studio-figure-outfit-actions{margin-block-start:5px}
 }
 .touch-editor{display:grid;gap:10px}
 .touch-editor [hidden]{display:none}
@@ -79,7 +101,7 @@ html,body{margin:0;min-height:100%;color-scheme:light dark}
 .live2d-editor .touch-editor fieldset>label> :is(input:not([type=range]),select){
   width:min(60%,210px);padding-inline:8px;min-height:29px;border-radius:6px;
 }
-.live2d-editor .touch-editor select:not([multiple]){appearance:auto}
+.live2d-editor .touch-editor select:not([multiple],[size]){padding-inline-end:28px}
 .touch-editor .studio-inline{flex-wrap:wrap;gap:5px}
 .live2d-editor .touch-editor button.studio-button{padding:4px 8px;border-radius:6px;min-height:29px;font-size:12px}
 .live2d-editor .touch-editor button[aria-pressed=true]{background:var(--studio-action);border-color:var(--studio-line);color:var(--studio-accent)}

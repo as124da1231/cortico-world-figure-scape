@@ -35,15 +35,16 @@ describe('presentation transactions', () => {
   });
   it('keeps the old wallpaper while replacement is pending or fails', async () => {
     const { service, send } = fixture();
-    const commit = vi.fn(async () => {});
-    const selected = service.select('wallpaper','first',{payload:{id:'first'},replace:true,commit});
+    const save = vi.fn(async () => async () => {});
+    const selected = service.select('wallpaper','first',{payload:{id:'first'},replace:true,save});
     const first = { request:send.mock.lastCall?.[0].request, mode:'wallpaper', figure:'model', ok:true };
     service.ready(first);
+    await vi.waitFor(() => expect(send).toHaveBeenLastCalledWith({t:'presentation-confirm',request:first.request}));
     service.receive({...first,presentation:{wallpaper:{id:'first'}}});
     await expect(selected).resolves.toMatchObject({phase:'completed',applied:true});
-    expect(commit).toHaveBeenCalledOnce();
-    const replace = vi.fn(async () => {});
-    const pending = service.select('wallpaper','next',{payload:{id:'next'},replace:true,commit:replace});
+    expect(save).toHaveBeenCalledOnce();
+    const replace = vi.fn(async () => async () => {});
+    const pending = service.select('wallpaper','next',{payload:{id:'next'},replace:true,save:replace});
     expect(service.state()).toMatchObject({applied:'wallpaper',details:{wallpaper:{id:'first'}}});
     service.receive({...first,request:send.mock.lastCall?.[0].request,ok:false,reason:'wallpaper-first-frame-failed'});
     await expect(pending).resolves.toMatchObject({phase:'failed',applied:false});
@@ -59,12 +60,57 @@ describe('presentation transactions', () => {
     await first;
     hide();
     send.mockClear();
-    const commit = vi.fn(async () => {});
-    await expect(service.select('wallpaper','second',{payload:{id:'second'},replace:true,commit}))
+    const save = vi.fn(async () => async () => {});
+    await expect(service.select('wallpaper','second',{payload:{id:'second'},replace:true,save}))
       .resolves.toMatchObject({phase:'completed',applied:false});
-    expect(commit).toHaveBeenCalledOnce();
+    expect(save).toHaveBeenCalledOnce();
     expect(send).not.toHaveBeenCalled();
     expect(service.state()).toMatchObject({desired:'wallpaper',details:{wallpaper:{id:'first'}}});
+  });
+  it('rejects the candidate before the renderer commits when a wallpaper write fails', async () => {
+    const { service, send } = fixture();
+    const result = service.select('wallpaper', 'disk-error', { save: async () => { throw Error('disk write failed'); } });
+    const { request } = send.mock.calls[0][0];
+    service.ready({ request, mode: 'wallpaper', figure: 'model' });
+    await expect(result).resolves.toMatchObject({ phase: 'failed', error: 'disk write failed' });
+    expect(send.mock.calls.map(([message]) => message.t)).toEqual(['presentation-apply','presentation-cancel']);
+    service.receive({ request, mode: 'wallpaper', figure: 'model', ok: true });
+    expect(service.state()).toMatchObject({ desired: 'desktop', applied: 'desktop' });
+  });
+  it('restores the prior scene preference and wallpaper after a disconnect before the final frame acknowledgement', async () => {
+    const { service, send } = fixture();
+    const undo = vi.fn(async () => {});
+    const result = service.select('wallpaper', 'lost-window', { save: async () => undo });
+    const { request } = send.mock.calls[0][0];
+    service.ready({ request, mode: 'wallpaper', figure: 'model' });
+    await vi.waitFor(() => expect(send).toHaveBeenLastCalledWith({t:'presentation-confirm',request}));
+    service.disconnected();
+    await expect(result).resolves.toMatchObject({ phase: 'failed', error: 'window-disconnected' });
+    expect(undo).toHaveBeenCalledOnce();
+    expect(service.state()).toMatchObject({ desired: 'desktop', applied: null, operation: null });
+  });
+  it('stages a handoff on a hidden connected renderer instead of marking it as configuration only', async () => {
+    const { service, send, hide } = fixture();
+    hide();
+    const result = service.select('phone', 'from-cabin', { whileHidden: true, replace: true });
+    const { request } = send.mock.calls[0][0];
+    expect(send.mock.calls[0][0]).toMatchObject({t:'presentation-apply',whileHidden:true});
+    service.ready({ request, mode: 'phone', figure: 'model' });
+    service.receive({ request, mode: 'phone', figure: 'model', ok: true });
+    await expect(result).resolves.toMatchObject({ phase: 'completed', applied: true });
+  });
+  it('allows the live, video, poster and frame fallback chain to finish before cancelling', async () => {
+    vi.useFakeTimers();
+    try {
+      const { service, send } = fixture();
+      const task = service.select('wallpaper','fallback',{payload:{id:'wallpaper'}});
+      const first = {request:send.mock.lastCall?.[0].request,mode:'wallpaper',figure:'model',ok:true};
+      await vi.advanceTimersByTimeAsync(27_000);
+      expect(service.state().operation?.phase).toBe('applying');
+      service.ready(first);
+      service.receive(first);
+      await expect(task).resolves.toMatchObject({phase:'completed',applied:true});
+    } finally { vi.useRealTimers(); }
   });
   it('ignores late cancelled receipts and recovers after a failed candidate', async () => {
     const { service, send } = fixture();

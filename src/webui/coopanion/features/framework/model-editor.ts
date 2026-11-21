@@ -10,6 +10,8 @@ import type { ModelOperation } from '../../../../framework/model-domain.ts';
 import { LANGUAGE } from '../../base/language.ts';
 const PROVIDER = 'world:desktop-live2d-pet';
 type FramingReport={supported:{preview:boolean;restore:boolean};status:string;requestId?:string;owner?:string;state?:{fit:unknown;active:boolean;reason?:string|null;geometry?:unknown}};
+type OutfitCandidate = { group: string; option: string; resource: string };
+type OutfitTryOn = { picks: Record<string, string>; resources: Record<string, OutfitCandidate> };
 type EditorContract = {draft?: {revision: string; catalogFingerprint?: string; profile: ModelProfile} | null; active?:boolean;framing?:FramingReport|null;behavior?:{visual?:{hue:boolean;brightness:boolean};mouth?:MouthBehavior;gaze?:{supported:boolean;reason:string|null;settings:{enabled:boolean;speed:number}};motion?:{supported:boolean;compiledKind:string;effectiveKind:string;facing:string;reason:string|null};crop?:{supported:boolean;reason:string|null;settings:{mode:string;edge:string;line:number;curve:number;feather:number;transition:number}}}|null;figure:string;editor:ModelEditorState|null;fields:Array<{path:string;type:string;min?:number;max?:number;step?:number;default?:number|boolean|string;options?:string[]}>;operation:{saved:boolean;applied:boolean;phase:string;error:string|null}};
 /** A consumer of the model domain contract, not an independent source/profile or renderer. */
 export function modelEditor(ctx: PageContext, options: {
@@ -28,7 +30,7 @@ export function modelEditor(ctx: PageContext, options: {
  const c=studioControls(ctx);
  const call=<T>(method:string,args:unknown[]=[])=>invokePanel<T>(PROVIDER,'framework',method,args,{signal});
  const el=(tag:string,value='')=>{const n=doc.createElement(tag);n.textContent=value;return n;};
- const wardrobe=wardrobeEditor(ctx,(picks,candidate,label)=>void previewLook('wardrobe',picks,candidate,label)),mouth=mouthEditor(ctx);
+ const wardrobe=wardrobeEditor(ctx,(picks,candidate)=>void previewLook('wardrobe',picks,candidate)),mouth=mouthEditor(ctx);
  const panel=el('section'),fields=el('div'),cropFields=el('div'),behaviorFields=el('div'),bindings=el('div'),status=el('p');panel.className='framework-model-editor';panel.hidden=true;status.setAttribute('role','status');
  fields.className=cropFields.className=behaviorFields.className='framework-model-fields';
  const preview=ui.button(text('预览取景（不保存）','Preview framing (not saved)'),{size:'sm'}),revert=ui.button(text('还原预览','Revert preview'),{size:'sm'}),previewStatus=el('p');previewStatus.setAttribute('role','status');
@@ -101,7 +103,9 @@ export function modelEditor(ctx: PageContext, options: {
   panes.get('framing')!.append(visualGroup);
  }
  visualGroup.append(el('h2',text('模型配色','Model colors')),visualHint,visualFields,visualCommands);
- panes.get('wardrobe')!.append(wardrobe.element,c.button(text('结束试穿','End try-on'),()=>void restoreLook()));panes.get('behavior')!.append(el('h2',text('移动与注视','Movement and gaze')),behaviorFields);panes.get('mouth')!.append(mouth.element, c.button(text('测试口型','Test mouth movement'),()=>void mouthPulse()),c.button(text('结束测试','End test'),()=>void mouthPulse('release')));
+ panes.get('wardrobe')!.append(wardrobe.element);panes.get('behavior')!.append(el('h2',text('移动与注视','Movement and gaze')),behaviorFields);panes.get('mouth')!.append(mouth.element, c.button(text('测试口型','Test mouth movement'),()=>void mouthPulse()),c.button(text('结束测试','End test'),()=>void mouthPulse('release')));
+ const endOutfitPreview=c.button(text('结束试穿','End try-on'),()=>void restoreLook());
+ endOutfitPreview.hidden=true;
  async function mouthPulse(kind:'pulse'|'release'='pulse'){
   if(!current?.editor||kind==='pulse'&&!mouth.valid())return;
   try{
@@ -115,12 +119,13 @@ export function modelEditor(ctx: PageContext, options: {
  function selectSection(id:string){
   if(!panes.has(id))return;
   if(id!==section){
-   if(options.preview){releaseDraft();actionRequest=undefined;if(section==='wardrobe'){outfitPicks={};outfitResources={};}void options.preview('release-task',{task:section})?.catch(()=>{});}
+   if(options.preview){releaseDraft();actionRequest=undefined;void options.preview('release-task',{task:section})?.catch(()=>{});}
    else deactivate();
    section=id;status.textContent='';
   }
   for(const[key,node]of panes)node.hidden=key!==id;
   for(const[key,b]of tabButtons)b.setAttribute('aria-current',key===id?'page':'false');
+  endOutfitPreview.hidden=id!=='wardrobe';
   if(id==='touch')options.touch?.setBindings?.(rows.map(row=>row.value()));
  }
  if(options.externalNavigation){tabs.hidden=true;panel.classList.add('framework-editor-external');}
@@ -132,7 +137,7 @@ export function modelEditor(ctx: PageContext, options: {
   saveNotice.setAttribute('role','status');
   draftState.setAttribute('role','status');
  }
- const footerActions=el('div');footerActions.className='framework-editor-actions';footerActions.append(draftState,reload,retry,save);
+ const footerActions=el('div');footerActions.className='framework-editor-actions';footerActions.append(draftState,endOutfitPreview,reload,retry,save);
  footer.append(progress,status);
  if(saveNotice!==status)footer.append(saveNotice);
  footer.append(footerActions);panel.append(tabs,workspace,footer);
@@ -143,6 +148,7 @@ export function modelEditor(ctx: PageContext, options: {
   reload.textContent=options.onDraft&&!stale?text('放弃修改','Discard edits'):text('重新读取','Reload');
   retry.hidden=!retryRevision||Boolean(options.onDraft&&dirty);
   retry.disabled=busy||stale;
+  endOutfitPreview.disabled=busy||stale;
  }
  function markDirty(event?:Event){
   const target=event?.target as HTMLInputElement|HTMLSelectElement|undefined;
@@ -314,8 +320,9 @@ export function modelEditor(ctx: PageContext, options: {
   previewMode.dataset.previewMode='true';previewMode.setAttribute('aria-label',text('本次试播方式','Preview mode'));
   const play=c.button(text('试播当前组合','Play this combination'),()=>void runDraft(item.value(),previewMode.value),true);
   const stop=c.button(text('停止试播','Stop preview'),()=>void stopAction());
+  const audition=(id:string)=>runDraft({word:item.value().word,resource:id,nativeOnly:false},'native',true);
   const picker=expressionPicker(ctx,{resources:catalog,initial:original.overlays??[],current:()=>item.value(),
-   change:()=>markDirty(),audition:id=>runDraft({...item.value(),resource:id,overlays:[],release:undefined},'native',true)});
+   change:()=>markDirty(),audition});
   const controls=el('div');controls.className='studio-inline framework-binding-commands';
   controls.append(previewMode,play,c.button(text('重播','Replay'),()=>void runDraft(item.value(),previewMode.value)),stop);
   remove.classList.add('studio-binding-remove');
@@ -324,7 +331,7 @@ export function modelEditor(ctx: PageContext, options: {
     const label=el('div');label.className='studio-binding-resource';label.append(el('span',title),control);
     const choices=control===release?candidates.filter(r=>r.kind==='motion'):candidates;
     label.append(resourcePicker(ctx,control,[{id:'',title:control.options[0].textContent??'',kind:''},...choices],
-      id=>void runDraft({...item.value(),resource:id,overlays:[],release:undefined},'native')));
+      id=>void audition(id).catch(()=>{})));
     node.append(label);
    }else{
     const label=el('label',title);label.append(control);node.append(label);
@@ -339,6 +346,7 @@ export function modelEditor(ctx: PageContext, options: {
  }
  function releaseDraft(feedback=false){
   editEpoch++;
+  clearOutfitPreview();
   if(feedback)void options.preview?.('restore')?.catch(error=>{status.textContent=String(error);});
   const active=activePreview;activePreview=null;
   if(!active)return;
@@ -366,9 +374,12 @@ export function modelEditor(ctx: PageContext, options: {
   const figure=current.figure, epoch=++editEpoch;
   actionRequest=undefined;
   const task=(async()=>{
+   const resource=current?.editor?.catalog?.resources.find(item=>item.id===binding.resource);
+   if(!single && resource?.classification==='pose' && !binding.release)
+    throw Error(text('请为该姿态选择结束后的复位动作。','Choose a release motion for this pose.'));
    status.textContent=text('正在准备试播…','Preparing preview…');
    if(options.preview){
-    const receipt=await options.preview('action',{command:{kind:'play',owner:'editor',binding,mode}});
+    const receipt=await options.preview('action',{command:{kind:'play',owner:'editor',binding,mode,...(single?{audition:true}:{})}});
     if(epoch!==editEpoch||signal.aborted||receipt?.cancelled)return;
     actionRequest=typeof receipt?.id==='string'?receipt.id:undefined;
     status.textContent=text('正在试播','Preview playing');
@@ -399,26 +410,70 @@ export function modelEditor(ctx: PageContext, options: {
    activePreview={figure,owner:session.id};
    return session;
  }
- let outfitPicks:Record<string,string>={};
- let outfitResources:Record<string,{group:string;option:string;resource:string}>={};
- async function previewLook(kind:'visual'|'wardrobe',picks?:Record<string,string>,candidate?:{group:string;option:string;resource:string},label?:string){
+ let shownOutfit: OutfitTryOn = { picks: {}, resources: {} };
+ let requestedOutfit: OutfitTryOn | undefined;
+ let outfitCycle = 0;
+ let outfitQueue = Promise.resolve();
+ function clearOutfitPreview() {
+  outfitCycle++;
+  shownOutfit = { picks: {}, resources: {} };
+  requestedOutfit = undefined;
+  delete status.dataset.outfit;
+ }
+ function previewOutfit(picks?: Record<string, string>, candidate?: OutfitCandidate) {
+  const before = requestedOutfit ?? shownOutfit;
+  const request: OutfitTryOn = {
+   picks: { ...before.picks, ...picks },
+   resources: candidate ? { ...before.resources, [candidate.group]: candidate } : before.resources,
+  };
+  requestedOutfit = request;
+  status.dataset.outfit = 'pending';
+  status.textContent = text('正在准备试穿…', 'Preparing outfit preview…');
+  const cycle = outfitCycle;
+  outfitQueue = outfitQueue.then(async () => {
+   if (requestedOutfit !== request || signal.aborted) return;
+   const profile = readDraft();
+   const catalog = current?.editor?.catalog?.resources ?? [];
+   const resources = new Map(catalog.filter(resource => !resource.wardrobeError).map(resource => [resource.id, resource]));
+   const groups = (profile.wardrobe ?? []).map(group => ({ ...group, options: group.options.map(option => {
+    const trial = request.resources[group.id];
+    return trial?.option === option.id ? { ...option, resource: trial.resource } : option;
+   }).filter(option => option.name.trim() && resources.has(option.resource)) })).filter(group => group.name.trim());
+   const retained = Object.entries(request.picks).filter(([groupId, optionId]) => groups.some(group =>
+    group.id === groupId && (optionId === 'default' || group.options.some(option => option.id === optionId))));
+   if (candidate && !retained.some(([groupId]) => groupId === candidate.group)) {
+    throw Error(text('试穿前请补全分组和选项名称。', 'Name the group and its option before trying it on.'));
+   }
+   const report = await options.preview?.('wardrobe', { command: {
+    kind: 'preview', owner: 'editor', groups, bindings: committed?.bindings, picks: Object.fromEntries(retained),
+   } });
+   if (cycle !== outfitCycle || signal.aborted || report?.cancelled) return;
+   shownOutfit = request;
+   if (requestedOutfit === request) {
+    const names = retained.map(([group, option]) => {
+     const resource = groups.find(row => row.id === group)?.options.find(item => item.id === option);
+     return resource && resources.get(resource.resource)?.title;
+    }).filter(Boolean);
+    status.dataset.outfit = 'ready';
+    status.textContent = text('正在试穿 · ', 'Trying on · ') + (names.join(' · ') || text('草稿装扮', 'Draft outfit'));
+   }
+  }).catch(error => {
+   if (cycle === outfitCycle && requestedOutfit === request && !signal.aborted) {
+    status.dataset.outfit = 'error';
+    status.textContent = String(error?.message ?? error);
+   }
+  }).finally(() => { if (requestedOutfit === request) requestedOutfit = undefined; });
+ }
+ async function previewLook(kind:'visual'|'wardrobe',picks?:Record<string,string>,candidate?:OutfitCandidate){
   if(busy||stale||!options.preview&&previewTask||!current?.editor||kind==='visual'&&!visualReady())return;
+  if(kind==='wardrobe' && options.preview) { previewOutfit(picks,candidate); return; }
   const figure=current.figure,epoch=++editEpoch;
   const task=(async()=>{
    status.textContent=text('正在准备预览…','Preparing preview…');
    const profile=readDraft();
    if(kind==='visual')profile.visual??={hue:0,brightness:1};
-   const mergedPicks={...outfitPicks,...picks};
-   const candidateResources=candidate?{...outfitResources,[candidate.group]:candidate}:outfitResources;
-   const validResources=new Set(current?.editor?.catalog?.resources.filter(r=>!r.wardrobeError).map(r=>r.id));
-   const groups=profile.wardrobe?.map(group=>({...group,options:group.options.map(option=>{
-    const trial=candidateResources[group.id];return trial?.option===option.id?{...option,resource:trial.resource}:option;
-   }).filter(option=>option.name.trim()&&validResources.has(option.resource))})).filter(group=>group.name.trim()&&group.options.length);
-   const local=options.preview?.(kind,kind==='visual'?{value:profile.visual}:{command:{kind:'preview',owner:'editor',groups,bindings:committed?.bindings,picks:mergedPicks}});
-   if(local){const report=await local;if(epoch===editEpoch&&!report?.cancelled){
-    if(kind==='wardrobe'){outfitPicks=mergedPicks;outfitResources=candidateResources;}
-    status.textContent=kind==='wardrobe'?text('正在试穿：','Trying on: ')+(label??text('草稿装扮','Draft outfit')):text('配色预览已应用。','Color preview applied.');
-   }return;}
+   const local=options.preview?.(kind,{value:profile.visual});
+   if(local){const report=await local;if(epoch===editEpoch&&!report?.cancelled)status.textContent=text('配色预览已应用。','Color preview applied.');return;}
    const session=await openPreview(figure,epoch);
    if(!session)return;
    await call('edit.validate',[session.id,profile]);
@@ -445,10 +500,15 @@ export function modelEditor(ctx: PageContext, options: {
   finally{if(previewTask===task)previewTask=null;}
  }
  async function restoreLook(){
-  outfitPicks={};outfitResources={};
+  clearOutfitPreview();
   if(!options.preview){releaseDraft(true);return;}
-  try{await options.preview('release-task',{task:'wardrobe'});status.textContent=text('已恢复当前穿戴','Current outfit restored');}
-  catch(error){if(!signal.aborted)status.textContent=String(error);}
+  const cycle = outfitCycle;
+  try {
+   const result = await options.preview('release-task',{task:'wardrobe'});
+   if (cycle === outfitCycle && !requestedOutfit && !result?.cancelled) status.textContent=text('已恢复当前穿戴','Current outfit restored');
+  } catch(error) {
+   if(cycle === outfitCycle && !requestedOutfit && !signal.aborted) status.textContent=String(error);
+  }
  }
  async function retryApply(){
   if(busy||stale||!retryRevision||options.onDraft&&dirty)return;
@@ -484,7 +544,7 @@ export function modelEditor(ctx: PageContext, options: {
    const optionLabels:Record<string,[string,string]>={full:['全身','Full body'],upper:['上半身','Upper body'],flat:['平直','Flat'],round:['圆弧','Round'],roam:['跟随宿主漫游策略','Inherit host roaming'],stand:['关闭自主漫游','Disable autonomous roaming'],fixed:['固定朝向','Fixed facing'],mirror:['镜像朝向','Mirrored facing']};
    const canColor=visualReady();
    save.textContent=result.active===false?text('保存配置','Save settings'):text('保存并应用','Save and apply');
-   visualHint.textContent=canColor?text('调整当前模型的色相和亮度。','Adjust the current model’s hue and brightness.'):text('显示 Live2D 后可检查模型是否支持配色。','Show Live2D to check whether this model supports colors.');
+   visualHint.textContent=canColor?text('调整当前模型的色相和亮度。','Adjust the current model’s hue and brightness.'):text('显示桌宠后可检查模型是否支持配色。','Show the desktop pet to check whether this model supports colors.');
    visualHint.hidden=!!options.preview&&canColor;
    visualCommands.hidden=!canColor||!!options.preview;
    for(const field of [...result.fields,...(canColor?visualSchema:[])]){
@@ -680,6 +740,7 @@ export function modelEditor(ctx: PageContext, options: {
  return {element:panel,refresh:read,deactivate,markDirty,actionState,isSaving:()=>busy,
   previewUnavailable(){
    editEpoch++;
+   clearOutfitPreview();
    previewSerial++;
    actionRequest=undefined;
    status.textContent='';

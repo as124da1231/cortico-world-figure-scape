@@ -25,6 +25,7 @@ import { bindAppearance } from './appearance.js';
 import { createMic } from './mic.js';
 import { runFrames } from './frame-loop.js';
 import { createLandscapeChat } from './framework/landscape-chat.js';
+import { SCENE_CHAT_TEXT_MAX, chatTextLengthNote } from './framework/chat-text.js';
 import { createPhoneChat } from './framework/phone-chat.js';
 import { createPhoneGesture } from './framework/phone-gesture.js';
 import { createTouchOverlay } from './framework/touch-overlay.js';
@@ -51,7 +52,7 @@ document.head.append(accentStyle, bubbleStyle);
 const prefs = {
   roam: 'calm', sound: true, theme: document.documentElement.dataset.theme, scale: 1, bubbleSize: 1, fontSize: 1, bubbleSpeed: 1, replyBubbleSeconds: REPLY_BUBBLE_DEFAULT, glow: 7, user: '', mic: false, micDevice: '', bot: null,
   /** Voice input: switched on, recognizer ready, why not, how to talk, and the mode in force. */
-  voice: { enabled: false, ready: false, detail: null, hint: '', mode: 'hold' },
+  voice: { enabled: false, ready: false, detail: null, hint: '', mode: 'hold', recording: false, processing: false },
   /** The actions shown as buttons beside the pet on hover. */
   hoverButtons: ['chat', 'voice', 'menu'], hoverButtonsVisible: true,
   touchRegionsVisible: false,
@@ -348,7 +349,7 @@ async function changePresentation(message) {
         if (message.request === null) return;
         await new Promise((resolve, reject) => {
           const abort = () => { clearTimeout(timeout); reject(controller.signal.reason); };
-          const timeout = setTimeout(() => controller.abort(Error('presentation-confirmation-timeout')), 2500);
+          const timeout = setTimeout(() => controller.abort(Error('presentation-confirmation-timeout')), 5000);
           controller.signal.addEventListener('abort', abort, { once: true });
           presenting.confirm = () => {
             clearTimeout(timeout);
@@ -363,7 +364,7 @@ async function changePresentation(message) {
         while (performance.now() < until) {
           signal.throwIfAborted();
           const box = figure.layout?.box;
-          if (figure.frameRevision > revision && figure.reportedFrameScope === scope && windowShown
+          if (figure.frameRevision > revision && figure.reportedFrameScope === scope && (windowShown || message.whileHidden === true)
             && box?.w > 0 && box?.h > 0 && area.W > 0 && area.H > 0) return;
           await new Promise(resolve => setTimeout(resolve, 16));
         }
@@ -449,9 +450,8 @@ async function configureDesktopModel({request,id,configuration}) {
 }
 
 /**
- * The pet window puts the pet where it stood when the World last stopped (`startX`, a share of the window
- * width, and `startY` of its height for a body that stood off the floor) from the first `init` only; after a reconnect it stays where it is. While `rememberPosition` is on it
- * reports where the pet stands each time the body changes mode, so the World holds the place of its last stop.
+ * A new window restores the last reported position from its first init. Coordinates are shares of
+ * the window width and height. Connecting again leaves the current body where it stands.
  */
 let restored = false, sentX = null, sentY = null;
 function restorePosition(startX, startY) {
@@ -523,9 +523,14 @@ function applyPrefs(p) {
   if (typeof p.sound === 'boolean') { prefs.sound = p.sound; sfx.set(p.sound); }
   if (p.sounds && typeof p.sounds === 'object') sfx.configure({ kinds: p.sounds, snoreSeconds: p.sounds.snoreSeconds, panByPosition: p.sounds.panByPosition, volume: p.sounds.volume });
   if (p.theme === 'dark' || p.theme === 'light') { prefs.theme = p.theme; applyTheme(p.theme); modeBtn?.show(p.theme); system.body?.set({ theme: p.theme }); }
+  if (typeof p.appearance === 'string') document.documentElement.dataset.appearance = p.appearance;
   if (typeof p.glow === 'number') prefs.glow = p.glow;
   if (p.presentationScales) { prefs.presentationScales = p.presentationScales; controlPhone.applyModelSize(); }
   else if (typeof p.scale === 'number') { prefs.scale = p.scale; controlPhone.applyModelSize(); }
+  if (typeof p.cabinEntry === 'string') {
+    prefs.cabinEntry = p.cabinEntry;
+    controlPhone.updateCabin(p.cabinEntry);
+  }
   if (typeof p.bubbleSize === 'number') { prefs.bubbleSize = p.bubbleSize; sizeVar('--bubble-size', p.bubbleSize); }
   if (typeof p.fontSize === 'number') { prefs.fontSize = p.fontSize; sizeVar('--bubble-font', p.fontSize); }
   if (typeof p.bubbleSpeed === 'number') prefs.bubbleSpeed = p.bubbleSpeed;
@@ -638,7 +643,17 @@ function onOrder(m) {
       if (m.reason === 'voice-input') stopForVoiceInput();
       else speech.stop();
       break;
-    case 'say': dropAsks(); queue.push({ ...m, kind: 'say', i: -1 }); holdRoam(20); break;
+    case 'speech-take':
+      if (Number.isFinite(m.deadline) && Date.now() <= m.deadline) {
+        send({ t:'speech-checkpoint', request:m.request, rows:takeSpeech() });
+      }
+      break;
+    case 'say': {
+      dropAsks();
+      queue.push({ ...m, kind:'say', i:(m.resume?.beat ?? 0) - 1, cueBeat:m.cueBeat ?? m.clips?.findIndex(Boolean),presented:m.resume?.displayed });
+      holdRoam(20);
+      break;
+    }
     case 'ask': dropAsks(); queue.push({ kind: 'ask', id: m.id, question: m.question, options: m.options || [], own: m.own !== false }); holdRoam(20); break;
     case 'confirm': dropAsks(); rushLines(); queue.push({ kind: 'ask', confirm: true, id: m.id, question: m.question, options: m.options, own: false }); holdRoam(20); break;
     case 'walk': walk(m); break;
@@ -667,6 +682,9 @@ function onOrder(m) {
     case 'speech-control': if (system.body?.pack === m.figure) speech.preview(m.kind, m.id); break;
     case 'act': if (m.figure && m.figure !== system.body?.pack) { system.actions.rejectRequest(m.id, m.actions, 'body-changed'); break; } system.actions.enqueueRequest(m.id ?? null, ...m.actions); holdRoam(20); break;
     case 'listen': onListen(m); break;
+    case 'mic-error': reportVoiceError(m.state === 'denied'
+      ? desktopLabel('麦克风权限被拒绝。允许访问后重试。', 'Microphone access was denied. Allow access and try again.')
+      : desktopLabel('麦克风无法开启，请检查输入设备。', 'Could not open the microphone. Check your input device.')); break;
     // a message sent from the chat page, once the bot has it, and one taken back before delivery
     case 'said': {
       const text = typeof m.text === 'string' ? m.text : '';
@@ -735,6 +753,30 @@ function cancelUtterances(reason) {
   }
   if (item?.kind === 'say') closeBubble(reason);
   else speech.stop(reason);
+}
+
+function takeSpeech() {
+  const rows = [];
+  if (item?.kind === 'say') {
+    const it = item;
+    const index = it.i < 0 ? 0 : it.i + (it.beatDone ? 1 : 0);
+    const entered = index === it.i && !it.beatDone;
+    const position = entered && it.startedBeat ? speech.take(it.beats[index]) : null;
+    if (it.resume) rows.push(it.resume);
+    else if (index < it.beats.length) rows.push({
+      id:it.id,beat:index,shown:entered ? it.shown : 0,fired:entered ? it.fired : 0,
+      leading:entered,offset:position ?? it.seek ?? 0,audio:!entered || !it.startedBeat || position !== null,displayed:it.presented,
+    });
+    it.clips = [];
+    closeBubble('scene-handoff');
+  }
+  for (let i = 0; i < queue.length;) {
+    const it = queue[i];
+    if (it.kind !== 'say') { i++; continue; }
+    rows.push(it.resume ?? {id:it.id,beat:0,shown:0,fired:0,leading:false,offset:0,audio:true});
+    queue.splice(i,1);
+  }
+  return rows.slice(0,64);
 }
 
 function stopForVoiceInput() {
@@ -876,9 +918,12 @@ function stepDialog(dt) {
       it.i++;
       it.beatDone = false;
       const b = it.beats[it.i];
+      const resumed = it.resume?.beat === it.i ? it.resume : null;
+      it.resume = null;
       let lead = 0;
-      for (const a of b.actions || []) { system.actions.enqueue(a); lead = .45; }
-      it.shown = 0; it.acc = 0; it.fired = 0; it.startAt = T + lead; it.startedBeat = false;
+      if (!resumed?.leading) for (const a of b.actions || []) { system.actions.enqueue(a); lead = .45; }
+      it.shown = resumed?.shown ?? 0; it.acc = 0; it.fired = resumed?.fired ?? 0;
+      it.seek = resumed?.offset ?? 0; it.startAt = T + lead; it.startedBeat = false;
       bubble.hidden = true;
       return;
     }
@@ -889,15 +934,17 @@ function stepDialog(dt) {
       it.startedBeat = true;
       const clip = it.clips?.[it.i];
       const current = it.figure === system.body?.pack && (it.modelGeneration === undefined || it.modelGeneration === system.modelGeneration);
-      if (clip && (!current || prefs.mic)) send({ t: 'speech-media', id: clip, status: 'cancelled', reason: prefs.mic ? 'voice-input' : 'target-changed' });
-      speech.start(b, { text: b.text, clip: current && !prefs.mic ? clip : null,
-        cues: it.i === it.clips?.findIndex(Boolean) ? it.cues : undefined, wantsPlan: it.planClips?.includes(clip), face: it.faces?.[it.i] });
+      const recording = hold.el !== null || listen.phase === 'hearing';
+      if (clip && (!current || recording)) send({ t: 'speech-media', id: clip, status: 'cancelled', reason: recording ? 'voice-input' : 'target-changed' });
+      speech.start(b, { text: b.text, clip: current && !recording ? clip : null,
+        cues: it.i === it.cueBeat ? it.cues : undefined, wantsPlan: it.planClips?.includes(clip), face: it.faces?.[it.i],offset:it.seek });
     }
     const progress = speech.progress(b);
     if (progress.mode === 'waiting') return;
     if (bubble.hidden) {
       openBubble('say', `<button class="b-close" type="button" aria-label="${esc(t('bubble.skip'))}" title="${esc(t('bubble.skip'))}">×</button><p class="b-text"></p>`);
       bubble.querySelector('.b-close').addEventListener('click', skipBeat);
+      if (it.shown) bubble.querySelector('.b-text')?.replaceChildren(linked(b.text,it.shown));
     }
     if (progress.mode === 'audio') {
       it.shown = Math.max(it.shown, progress.shown);
@@ -1303,11 +1350,18 @@ function openInput() {
   const expand = prefs.bot?.buttons?.chat
     ? `<button class="b-expand" type="button" aria-label="${esc(t('bubble.expand'))}" title="${esc(t('bubble.expand'))}">${ICONS.expand}</button>`
     : '';
-  openBubble('ask', `<button class="b-close" type="button" aria-label="${esc(t('bubble.close'))}">×</button><div class="b-imgs" hidden></div><form class="b-own"><textarea rows="1" maxlength="500" autocomplete="off" placeholder="${esc(t('bubble.typePlaceholder'))}" aria-label="${esc(t('bubble.typeLabel'))}"></textarea>${expand}<button type="submit">${esc(t('bubble.send'))}</button></form><span class="b-hint b-note" hidden></span>`);
+  openBubble('ask', `<button class="b-close" type="button" aria-label="${esc(t('bubble.close'))}">×</button><div class="b-imgs" hidden></div><form class="b-own"><textarea rows="1" autocomplete="off" placeholder="${esc(t('bubble.typePlaceholder'))}" aria-label="${esc(t('bubble.typeLabel'))}"></textarea>${expand}<button type="submit">${esc(t('bubble.send'))}</button></form><span class="b-hint b-note" role="status" hidden></span>`);
   const form = bubble.querySelector('form'), input = form.querySelector('textarea');
   const submit = form.querySelector('button[type="submit"]');
   const tray = bubble.querySelector('.b-imgs'), note = bubble.querySelector('.b-note');
-  const say = (text) => { note.textContent = text || ''; note.hidden = !text; };
+  const lengthNote = () => chatTextLengthNote(input.value, SCENE_CHAT_TEXT_MAX, desktopLabel);
+  const say = (text) => {
+    const limit = lengthNote();
+    note.textContent = limit || text || '';
+    note.hidden = !note.textContent;
+    submit.disabled = !!it.sending || !!limit;
+  };
+  input.addEventListener('input', () => say(it.sending ? desktopLabel('正在发送…', 'Sending…') : ''));
   input.addEventListener('compositionstart', () => { it.composing = true; });
   input.addEventListener('compositionend', () => { it.composing = false; });
   const draw = () => {
@@ -1348,13 +1402,14 @@ function openInput() {
   bubble.querySelector('.b-close').addEventListener('click', () => closeBubble());
   // the chat page takes longer text and more images; the draft goes with it
   bubble.querySelector('.b-expand')?.addEventListener('click', () => {
-    send({ t: 'expand', text: input.value, images: it.images });
-    closeBubble();
+    if (send({ t: 'expand', text: input.value, images: it.images })) closeBubble();
+    else say(desktopLabel('连接已断开，输入已保留。','Disconnected. The draft is kept.'));
   });
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     const v = input.value.trim();
     if (it.sending || it.pending || (!v && !it.images.length)) return;
+    if (lengthNote()) { say(''); return; }
     const images = it.images.map(({ mime, base64, name }) => ({ mime, base64, name }));
     const key = JSON.stringify([v, images]);
     if (it.request?.key !== key) it.request = { key, id: crypto.randomUUID() };
@@ -1364,12 +1419,10 @@ function openInput() {
       return;
     }
     it.sending = true;
-    submit.disabled = true;
     say(desktopLabel('正在发送…', 'Sending…'));
     const finish = (message) => {
       clearTimeout(it.sendTimer);
       it.sending = false;
-      submit.disabled = false;
       say(message);
     };
     it.sendTimer = setTimeout(() => finish(desktopLabel('还没收到确认，可以重试。', 'No confirmation yet. You can retry.')), 8000);
@@ -1603,7 +1656,20 @@ function stepStatus() {
 }
 
 /* ---------- microphone: open while `prefs.mic`, which the World turns on and off with a held talk key in hold mode ---------- */
-const { start: startMic, stop: stopMic } = createMic({ prefs, send, sendAudio: (data) => { if (ws && ws.readyState === 1) ws.send(data); } });
+let captureState = 'off';
+const captureProblem = () => captureState === 'denied'
+  ? desktopLabel('麦克风权限被拒绝', 'Microphone access denied')
+  : captureState === 'error' ? desktopLabel('无法打开麦克风', 'Microphone unavailable') : '';
+const { start: startMic, stop: stopMic } = createMic({
+  prefs,
+  send: (message) => {
+    send(message);
+    if (message.t !== 'mic') return;
+    captureState = message.state;
+    refreshButtons();
+  },
+  sendAudio: (data) => { if (ws && ws.readyState === 1) ws.send(data); },
+});
 
 /* ---------- actions: the menu's lower zone and the hover buttons draw from one list ---------- */
 const ROAM_ORDER = ['off', 'calm', 'free'];
@@ -1638,7 +1704,7 @@ const ACTIONS = {
   },
   desktopClose: {
     icon: () => ICONS.power, available: () => !!host,
-    state: () => desktopLabel('关闭梦境窗口', 'Close Figure Scape window'), run: () => controlDesktop('desktop-close'),
+    state: () => desktopLabel('关闭桌宠窗口', 'Close pet window'), run: () => controlDesktop('desktop-close'),
   },
   chat: {
     icon: () => ICONS.chat,
@@ -1648,11 +1714,26 @@ const ACTIONS = {
   voice: {
     keep: true,
     icon: () => (prefs.voice.enabled ? ICONS.mic : ICONS.micOff),
-    value: () => !prefs.voice.enabled ? ON_OFF(false) : prefs.voice.ready ? desktopLabel('就绪', 'Ready') : desktopLabel('待就绪', 'Waiting'),
+    value: () => prefs.voice.testing ? desktopLabel('设置中试录', 'Testing in settings')
+      : !prefs.voice.enabled ? (prefs.voice.mode === 'always' ? desktopLabel('已暂停', 'Paused') : ON_OFF(false))
+      : captureProblem() ? captureProblem()
+      : !prefs.voice.ready ? desktopLabel('待就绪', 'Waiting')
+      : captureState === 'opening' ? desktopLabel('正在打开麦克风', 'Opening microphone')
+      : prefs.voice.processing ? desktopLabel('正在转写', 'Transcribing')
+      : prefs.voice.recording ? desktopLabel('录音中', 'Recording')
+      : prefs.voice.mode === 'always' && captureState === 'on' ? desktopLabel('自动监听', 'Listening')
+      : desktopLabel('就绪', 'Ready'),
     on: () => prefs.voice.enabled,
-    state: () => (!prefs.voice.enabled ? desktopLabel('请在声音设置中启用语音输入', 'Enable voice input in Sound settings')
+    state: () => (prefs.voice.testing ? desktopLabel('麦克风正在试录', 'Microphone test in progress')
+      : prefs.voice.activating ? desktopLabel('正在开启语音输入', 'Enabling voice input')
+      : !prefs.voice.enabled ? (prefs.voice.mode === 'always'
+        ? desktopLabel('点击恢复自动监听', 'Click to resume automatic listening')
+        : desktopLabel('点击开启语音输入', 'Click to enable voice input'))
+      : prefs.voice.mode === 'always' ? desktopLabel('点击暂停自动监听', 'Click to pause automatic listening')
+      : captureProblem() ? captureProblem()
+      : captureState === 'opening' ? desktopLabel('正在打开麦克风', 'Opening microphone')
       : !prefs.voice.ready ? t('action.voiceNotReady', { detail: prefs.voice.detail || t('action.voiceNoService') })
-      : desktopLabel('按住说话，松开发送', 'Hold to talk, release to send')),
+      : prefs.voice.hint || desktopLabel('按住说话，松开发送', 'Hold to talk, release to send')),
     run: () => controlDesktop('desktop-voice-settings'),
   },
   roam: {
@@ -1723,14 +1804,24 @@ function drawAction(b, id) {
   }
   b.classList.toggle('on', on === true);
   b.classList.toggle('off', on === false);
-  if (id === 'voice') b.classList.toggle('waiting', prefs.voice.enabled && !prefs.voice.ready);
+  if (id === 'voice') {
+    const testing = !!prefs.voice.testing;
+    b.classList.toggle('waiting', testing || (prefs.voice.enabled && (!prefs.voice.ready || prefs.voice.processing || captureState === 'opening' || !!captureProblem())));
+    b.classList.toggle('live', !testing && prefs.voice.enabled && prefs.voice.ready && captureState === 'on' &&
+      (prefs.voice.recording || prefs.voice.mode === 'always'));
+    if (testing) b.setAttribute('aria-disabled', 'true');
+    else b.removeAttribute('aria-disabled');
+  }
   const description = a.state();
   const role = b.getAttribute('role');
   const isSwitch = role === 'switch';
   const label = isSwitch ? b.querySelector('.control-phone-label').textContent : description;
   if (b.getAttribute('aria-label') !== label) b.setAttribute('aria-label', label);
   b.dataset.description = description;
-  if (on !== undefined) b.setAttribute(isSwitch || role === 'menuitemcheckbox' ? 'aria-checked' : 'aria-pressed', String(on));
+  const settingSwitch = isSwitch || role === 'menuitemcheckbox';
+  if (id === 'voice' && !settingSwitch && prefs.voice.mode === 'hold') b.removeAttribute('aria-pressed');
+  else if (on !== undefined) b.setAttribute(settingSwitch ? 'aria-checked' : 'aria-pressed',
+    String(id === 'voice' && !settingSwitch && prefs.voice.mode === 'toggle' ? prefs.voice.recording : on));
   if (isSwitch) return;
   const value = a.value?.() ?? (on === undefined ? '' : ON_OFF(on));
   const state = b.querySelector('.m-state');
@@ -1809,7 +1900,9 @@ const controlPhone = createControlPhone({
     },
     enterCabin: () => {
       if (send({t:'control',action:'desktop-cabin'})) {
-        controlPhone.status(desktopLabel('正在准备小屋世界…', 'Preparing Cabin World…'), 'pending');
+        if (prefs.cabinEntry === 'ready') {
+          controlPhone.status(desktopLabel('正在进入小屋世界…', 'Entering Cabin World…'), 'pending');
+        } else closeMenu();
       }
     },
     wallpaper: host ? {
@@ -1883,7 +1976,7 @@ function selectDesktopScene(mode, exiting = false) {
   sceneRequest = {request, mode, exiting};
   sceneExitMessage = '';
   if (exiting && system.mode === 'phone') phoneChat.feedback('');
-  desktopModeRequestTimer = setTimeout(() => finishDesktopScene({request, reason:'presentation-timeout'}), mode === 'wallpaper' ? 25000 : 7000);
+  desktopModeRequestTimer = setTimeout(() => finishDesktopScene({request, reason:'presentation-timeout'}), mode === 'wallpaper' ? 31000 : 7000);
   menuMessage = null;
   updateMenuStatus();
   syncPhoneChat();
@@ -1907,6 +2000,8 @@ function finishDesktopScene(message) {
     'wallpaper-first-frame-failed': ['壁纸未能显示首帧，当前画面已保留。', 'The wallpaper could not draw its first frame. The current view is still active.'],
     'body-busy': ['角色正在加载，请稍后重试。', 'The character is loading. Try again shortly.'],
     'presentation-timeout': ['窗口未及时确认新场景，可再次尝试。', 'The new scene timed out. Try again.'],
+    'presentation-first-frame-timeout': ['角色未及时画出新场景的首帧，已保留原场景。', 'The character did not draw a frame in time. The previous scene is still active.'],
+    'presentation-confirmation-timeout': ['新场景未及时收到确认，已保留原场景。', 'The new scene was not confirmed in time. The previous scene is still active.'],
     'window-disconnected': ['桌宠连接已断开。', 'The pet is disconnected.'],
   };
   menuMessage = message.ok
@@ -1976,7 +2071,7 @@ function renderControlComponent(id, button, switchIndicator) {
         }
         through.dataset.confirm = 'true';
         through.querySelector('.control-phone-label').textContent = desktopLabel('确认启用穿透', 'Confirm click-through');
-        controlPhone.status(desktopLabel('启用后可在 Coo 的运行详情里恢复鼠标操作。', 'Restore mouse input from Coo’s runtime details.'));
+        controlPhone.status(desktopLabel('可在「引擎 → 桌宠窗口 → 高级启动设置」恢复鼠标操作。', 'Restore mouse input under Engines → Pet window → Advanced startup settings.'));
       });
       return through;
     }
@@ -2138,37 +2233,49 @@ function endHold(cancelled = false) {
   if (pointer !== null && button.hasPointerCapture?.(pointer)) button.releasePointerCapture(pointer);
   send(cancelled ? { t: 'cancel' } : { t: 'speak-hold', down: false });
 }
+function reportVoiceError(message) {
+  if (!menu.hidden) controlPhone.status(message, 'error');
+  else if (system.mode === 'phone') phoneChat.feedback(message);
+  else {
+    const notice = { kind: 'work', text: message };
+    setStatus(notice);
+    setTimeout(() => { if (status.wanted === notice) setStatus(null); }, 3500);
+  }
+}
 function wireVoiceTool(button) {
-  function begin(pointer) {
-    if (!windowShown || hold.el) return;
-    if (!prefs.voice.enabled) { ACTIONS.voice.run(); return; }
-    if (!prefs.voice.ready || !send({ t: 'speak-hold', down: true })) {
-      const message = prefs.voice.detail || phoneUnavailable();
-      if (!menu.hidden) controlPhone.status(message, 'error');
-      else if (system.mode === 'phone') phoneChat.feedback(message);
-      else {
-        const notice = { kind: 'work', text: message };
-        setStatus(notice);
-        setTimeout(() => { if (status.wanted === notice) setStatus(null); }, 3500);
-      }
+  function begin(pointer, click = false) {
+    if (!windowShown || hold.el || prefs.voice.activating || prefs.voice.processing || prefs.voice.testing) return;
+    if (!prefs.voice.ready) { ACTIONS.voice.run(); return; }
+    if (!send(click ? { t: 'speak-toggle' } : { t: 'speak-hold', down: true })) {
+      reportVoiceError(prefs.voice.detail || phoneUnavailable());
       return;
     }
+    if (click) return;
     hold.el = button;
     hold.pointer = pointer;
     button.classList.add('holding');
     stopForVoiceInput();
   }
   button.addEventListener('pointerdown', event => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || !prefs.voice.enabled || prefs.voice.mode !== 'hold') return;
     begin(event.pointerId);
     if (hold.el === button && hold.pointer === event.pointerId && event.isTrusted) button.setPointerCapture?.(event.pointerId);
+  });
+  button.addEventListener('click', () => {
+    if (!windowShown || prefs.voice.testing || prefs.voice.activating) return;
+    if (!prefs.voice.enabled) {
+      if (!send({ t: 'speak-activate' })) reportVoiceError(phoneUnavailable());
+      return;
+    }
+    if (prefs.voice.mode === 'toggle') begin(null, true);
+    else if (prefs.voice.mode === 'always' && !send({ t: 'speak-pause' })) reportVoiceError(phoneUnavailable());
   });
   button.addEventListener('pointerup', event => { if (hold.el === button && hold.pointer === event.pointerId) endHold(); });
   for (const type of ['lostpointercapture', 'pointercancel', 'blur']) {
     button.addEventListener(type, () => { if (hold.el === button) endHold(true); });
   }
   button.addEventListener('keydown', event => {
-    if (event.key !== ' ' && event.key !== 'Enter') return;
+    if (!prefs.voice.enabled || prefs.voice.mode !== 'hold' || (event.key !== ' ' && event.key !== 'Enter')) return;
     event.preventDefault();
     if (!event.repeat) begin(null);
   });
@@ -2224,9 +2331,6 @@ function stepTools() {
     hideToolNote();
   }
   else if (nearBody || p && (overTools(p) || inApproach(p, box, bar))) holdRoam(.3);
-  for (const mic of [tools.querySelector('[data-action=voice]'), menu.querySelector('[data-action=voice]')]) {
-    mic?.classList.toggle('live', listen.phase === 'hearing');
-  }
 }
 
 /* ---------- look wheel: hovering a dress button shows the looks in a row over the body, the one worn in the middle ---------- */
@@ -2547,9 +2651,6 @@ const displayDrag = createDisplayDrag({
 function frameGrip(e) {
   return e.target.closest?.('[data-scene-grip]');
 }
-function frameOrigin() {
-  return { frame: system.scene.rect(), body: system.body, character: at(), moved: false };
-}
 function applySceneFrame(change, origin) {
   if (!system.transformSceneFrame(change, origin)) return;
   syncPhoneChat();
@@ -2573,7 +2674,7 @@ function endFrameDrag() {
 document.addEventListener('pointerdown', e => {
   const grip = frameGrip(e);
   if (!grip || e.button !== 0 || frameDrag || pressing || system.switching || clicksPass()) return;
-  const origin = frameOrigin();
+  const origin = system.sceneFrameOrigin();
   if (!origin.frame) return;
   const kind = grip.dataset.sceneGrip;
   frameDrag = { ...origin, kind, grip, pointer: e.pointerId, startX: e.clientX, startY: e.clientY };
@@ -2595,7 +2696,7 @@ document.addEventListener('keydown', e => {
   if (!grip || frameDrag || pressing || system.switching || clicksPass()) return;
   const direction = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
   if (!direction) return;
-  const origin = frameOrigin();
+  const origin = system.sceneFrameOrigin();
   const distance = e.shiftKey ? 1 : 12;
   const [dx, dy] = direction;
   if (grip.dataset.sceneGrip === 'resize') {

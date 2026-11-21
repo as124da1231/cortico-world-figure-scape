@@ -80,6 +80,7 @@ export function createControlPhone({ root, text, command, scenes, helpers }) {
   root.replaceChildren(frame);
 
   let page = DEFAULT_CONTROL_PAGE, epoch = 0;
+  let cabinEntry = 'setup';
   let layout = defaultControlLayout(), layoutKey = JSON.stringify(layout.pages);
   let renderedMode;
   let feedbackTimer = 0;
@@ -385,9 +386,9 @@ export function createControlPhone({ root, text, command, scenes, helpers }) {
     for (const [id, scene] of available) {
       const el = button(text(...scene.label), scene.icon, () => showScene(id), 'control-phone-scene-app');
       el.dataset.scene = id;
-      const current = id === helpers.mode();
+      const current = id === 'cabin' ? cabinEntry === 'active' : id === helpers.mode();
       el.dataset.current = String(current);
-      if (current || sceneOrder?.mode === id) {
+      if (current || sceneOrder?.mode === id || id === 'cabin' && ['entering','preparing'].includes(cabinEntry)) {
         const badge = node('small', 'control-phone-value');
         badge.textContent = current ? text('使用中','In use') : text('正在准备','Preparing');
         el.append(badge);
@@ -418,8 +419,23 @@ export function createControlPhone({ root, text, command, scenes, helpers }) {
   function renderSceneDetails(id) {
     const detail = node('div','control-phone-scene-detail');
     if (id === 'cabin') {
-      detail.append(button(text('进入小屋世界','Enter Cabin World'), 'play', helpers.enterCabin, 'control-phone-row control-phone-scene-enter'),
-        button(text('住户与活动设置','Resident and activity settings'), 'settings', helpers.openCabin));
+      const labels = {
+        setup:['安装小屋组件','Install Cabin World'],
+        repair:['重新选择已有安装','Choose installation again'],
+        'repair-managed':['修复安装','Repair installation'],
+        preparing:['查看安装进度','View installation progress'],
+        entering:['正在切换…','Switching…'],
+        active:['使用中','In use'],
+        ready:['进入小屋世界','Enter Cabin World'],
+      };
+      const action = button(text(...(labels[cabinEntry] ?? labels.setup)), 'play', helpers.enterCabin,
+        'control-phone-row control-phone-scene-enter');
+      action.dataset.scene = 'cabin';
+      action.disabled = cabinEntry === 'entering' || cabinEntry === 'active';
+      detail.append(action);
+      if (cabinEntry === 'ready' || cabinEntry === 'active') {
+        detail.append(button(text('住户与活动','Residents and activities'), 'settings', helpers.openCabin));
+      }
       return detail;
     }
     const current = id === helpers.mode();
@@ -513,8 +529,8 @@ export function createControlPhone({ root, text, command, scenes, helpers }) {
       if (page === 'through' || page === 'close') {
         const hint = node('p','control-phone-description');
         hint.textContent = page === 'through'
-          ? text('启用后，鼠标会直接操作桌宠后面的窗口。可以在 Coo 的运行详情恢复。','Clicks go to the window behind the pet. Restore input in Coo’s runtime details.')
-          : text('关闭梦境窗口后，可从工作台再次启动。','You can reopen the Figure Scape window from the workbench.');
+          ? text('启用后，鼠标会直接操作桌宠后面的窗口。可在「引擎 → 桌宠窗口 → 高级启动设置」恢复。','Clicks go to the window behind the pet. Restore input under Engines → Pet window → Advanced startup settings.')
+          : text('关闭桌宠窗口后，可从工作台再次启动。','You can reopen the pet window from the workbench.');
         content.append(hint);
       }
       renderSection([DETAILS[page].component]);
@@ -608,6 +624,16 @@ export function createControlPhone({ root, text, command, scenes, helpers }) {
         }
       }
       if (hasScenes && newFeedback && feedback) note(feedback.text, feedback.kind);
+    },
+    updateCabin(next) {
+      if (next === cabinEntry) return;
+      cabinEntry = next;
+      if (root.hidden || openedScene !== 'cabin' && page !== 'scenes') return;
+      const focused = doc.activeElement?.dataset.scene;
+      const top = content.scrollTop;
+      render();
+      content.scrollTop = top;
+      if (focused) content.querySelector('[data-scene="' + focused + '"]:not(:disabled)')?.focus({ preventScroll:true });
     },
     status(value, kind) { note(value, kind); },
     syncSettings,

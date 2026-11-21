@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { assertTouchAreaChange, readTouchProfile, resolvedTouchAreas, touchArea, touchRegionAt, touchRule, touchScreen } from '../web/framework/touch-geometry.js';
-import { createEditorBackend } from '../src/framework/editor-backend.ts';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { createEditorBackend, EditorDraftConflict } from '../src/framework/editor-backend.ts';
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -73,24 +74,67 @@ it('separates per-source editor drafts from the committed profile across editor 
   try {
     let service=createEditorBackend(model as never,()=>directory);
     await service.invoke('modelEditor',['model-a']);
-    await service.invoke('edit.updateDraft',['model-a',{fit:{zoom:1.4}},'r1','f1']);
+    const aVersion = randomUUID(), bVersion = randomUUID();
+    await service.invoke('edit.updateDraft',['model-a',{fit:{zoom:1.4}},'r1','f1',null,aVersion]);
     await service.invoke('modelEditor',['model-b']);
-    await service.invoke('edit.updateDraft',['model-b',{fit:{zoom:1.2}},'r1','f1']);
+    await service.invoke('edit.updateDraft',['model-b',{fit:{zoom:1.2}},'r1','f1',null,bVersion]);
     service=createEditorBackend(model as never,()=>directory);
     expect(await service.invoke('modelEditor',['model-a'])).toMatchObject({draft:{profile:{fit:{zoom:1.4}}}});
     expect(await service.invoke('modelEditor',['model-b'])).toMatchObject({draft:{profile:{fit:{zoom:1.2}}}});
-    await service.invoke('saveLibraryModel',['model-a',{fit:{zoom:1.4}},'r1','f1','save']);
+    await service.invoke('saveLibraryModel',['model-a',{fit:{zoom:1.4}},'r1','f1','save',aVersion]);
     expect(await service.invoke('modelEditor',['model-a'])).toMatchObject({draft:null});
     expect(await service.invoke('modelEditor',['model-b'])).toMatchObject({draft:{profile:{fit:{zoom:1.2}}}});
     expect(model.save).toHaveBeenCalledTimes(1);
 
     model.operation.mockReturnValueOnce(null).mockReturnValue({saved:true,applied:false,revision:'r2'});
     model.save.mockRejectedValueOnce(Error('Application interrupted'));
-    await expect(service.invoke('saveLibraryModel',['model-b',{fit:{zoom:1.2}},'r1','f1','second-save'])).rejects.toThrow('Application interrupted');
+    await expect(service.invoke('saveLibraryModel',['model-b',{fit:{zoom:1.2}},'r1','f1','second-save',bVersion])).rejects.toThrow('Application interrupted');
     expect(await service.invoke('operation.get',['second-save'])).toMatchObject({saved:true,applied:false,revision:'r2'});
     expect(await service.invoke('modelEditor',['model-b'])).toMatchObject({draft:null});
   } finally {
     // Only removes the private directory returned by mkdtemp.
     await rm(directory,{recursive:true,force:true});
   }
+});
+
+it('compares per-source draft versions before writing, saving or clearing beyond the owning tab', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scape-editor-versions-'));
+  const editor = async () => ({figure:'model',editor:{sourceId:'model',revision:'r1',catalogFingerprint:'f1'}});
+  const model = {editor,operation:vi.fn(),save:vi.fn()};
+  try {
+    const original = {revision:'r1',catalogFingerprint:'f1',profile:{fit:{zoom:1.1}}};
+    await writeFile(join(directory,'model.json'),JSON.stringify(original));
+    const service = createEditorBackend(model as never, () => directory);
+    const first = await service.invoke('character.open',['model']) as {draftVersion:string};
+    const second = await service.invoke('character.open',['model']) as {draftVersion:string};
+    expect(first.draftVersion).toMatch(/^[a-f0-9]{64}$/);
+    expect(second.draftVersion).toBe(first.draftVersion);
+    const written = randomUUID(), edit = {fit:{zoom:1.4}};
+    const args = ['model',edit,'r1','f1',first.draftVersion,written];
+    await expect(service.invoke('edit.updateDraft',args)).resolves.toMatchObject({draftVersion:written});
+    await expect(service.invoke('edit.updateDraft',args)).resolves.toMatchObject({draftVersion:written});
+    const newer = randomUUID(), otherEdit = {fit:{zoom:1.8}};
+    await expect(service.invoke('edit.updateDraft',['model',otherEdit,'r1','f1',second.draftVersion,newer])).rejects.toBeInstanceOf(EditorDraftConflict);
+    await expect(service.invoke('edit.clearDraft',['model',second.draftVersion])).rejects.toBeInstanceOf(EditorDraftConflict);
+    await expect(service.invoke('saveLibraryModel',['model',otherEdit,'r1','f1','stale-save',second.draftVersion])).rejects.toBeInstanceOf(EditorDraftConflict);
+    expect(model.save).not.toHaveBeenCalled();
+    await expect(service.invoke('character.open',['model'])).resolves.toMatchObject({draftVersion:written,draft:{profile:edit}});
+    await expect(service.invoke('edit.updateDraft',['model',otherEdit,'r1','f1',written,newer])).resolves.toMatchObject({draftVersion:newer});
+  } finally {
+    await rm(directory,{recursive:true,force:true});
+  }
+});
+
+it('accepts the JSON null placeholder for a packaged draft with no native catalog', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'scape-package-draft-'));
+  const character = {id:'figure-test',sourceId:'figure-test',kind:'figure-pack'};
+  const figures = {read:()=>({character,revision:'r1'})};
+  const backend = createEditorBackend({} as never, () => directory, undefined, figures as never);
+  try {
+    await backend.invoke('character.open',[character.id]);
+    const write = randomUUID();
+    const draft = {visual:{hue:35,brightness:.8}};
+    await expect(backend.invoke('edit.updateDraft',[character.id,draft,'r1',null,null,write])).resolves.toEqual({retained:true,draftVersion:write});
+    await expect(backend.invoke('character.open',[character.id])).resolves.toMatchObject({draft:{profile:draft},draftVersion:write});
+  } finally { await rm(directory,{recursive:true,force:true}); }
 });

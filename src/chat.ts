@@ -79,7 +79,7 @@ export function chatItem(e: EventEnvelope): ChatItem | null {
     case 'message':
     case 'speech': {
       const text = str(m.text);
-      if (text === undefined) return null;
+      if (text === undefined || (m.requiresDelivery === true && e.contextDelivery === 'archive-only')) return null;
       const images = wireImages(e);
       const via = type === 'speech' ? 'voice' : m.via === 'chat' ? 'chat' : 'bubble';
       return { kind: 'user', ...base, via, text, ...(images.length ? { images } : {}) };
@@ -156,8 +156,8 @@ function historyReference(event: EventEnvelope): boolean {
 }
 
 function conversationEvent(event: EventEnvelope): boolean {
-  return event.type === `${event.source}.message` || event.type === `${event.source}.speech`
-    || event.type === `${event.source}.self` && event.meta?.kind === 'say' || historyReference(event);
+  if (event.type === `${event.source}.message` || event.type === `${event.source}.speech`) return chatItem(event) !== null;
+  return event.type === `${event.source}.self` && event.meta?.kind === 'say' || historyReference(event);
 }
 
 // Peer rows share the conversation. Controls for questions and body activity stay with their World.
@@ -284,9 +284,13 @@ export class ChatReplyFallback {
     const events = sources.flatMap(source => store.range({ source, fromCursor: after + 1 }));
     return events.some(event => {
       if (!event.type.endsWith('.self')) return false;
-      const kind = event.meta?.kind;
-      return (event.cursor > input && (kind === 'say' || kind === 'ask')) ||
-        (kind === 'conversation-input' && typeof event.meta?.cursor === 'number' && event.meta.cursor > input);
+      if (event.meta?.kind === 'conversation-input') {
+        return typeof event.meta.cursor === 'number' && event.meta.cursor > input;
+      }
+      if (event.cursor <= input) return false;
+      // The original speech tool can archive an action with an empty caption.
+      const item = chatItem(event);
+      return item?.kind === 'say' || item?.kind === 'ask';
     }) ? '' : reply;
   }
 }

@@ -7,9 +7,8 @@ import { fileURLToPath } from 'node:url';
 import forge from 'node-forge';
 import QRCode from 'qrcode';
 import WebSocket from 'ws';
-import { CooSpeechTarget } from './coo-speech.mjs';
 import { createChatMedia } from './coo-chat-media.mjs';
-import {createCharacterService, cooTargets} from './coo-characters.mjs';
+import { createCharacterService, figureScapeTarget } from './coo-characters.mjs';
 
 const localAddress = '127.0.0.1';
 // Previously paired phones store this endpoint and pin the deployment certificate.
@@ -18,12 +17,10 @@ export const defaultConsolePort = 17788;
 const maxText = 8000;
 const nonce = () => randomBytes(32).toString('base64url');
 const digest = value => createHash('sha256').update(value).digest('hex');
-const nativeTarget='desktop-pet';
-const socketPath=target=>'/ws/providers/'+encodeURIComponent('world:'+target)+'/panels/chat';
+const socketPath='/ws/providers/'+encodeURIComponent('world:'+figureScapeTarget)+'/panels/chat';
 function targetOf(target){
-  if(!target)return nativeTarget;
-  if(!Object.hasOwn(cooTargets,target))throw new LinkError(400,'Coo 桌宠来源无效');
-  return target;
+  if(target == null || target === figureScapeTarget)return figureScapeTarget;
+  throw new LinkError(400,'请在手机「设置 → 连接 Coo → 电脑装扮来源」选择 Figure Scape · 梦境。');
 }
 const allowedFrames = new Set(['init','older','item','ask','draft','phase','paused','activity','settled','performance','withdrawn','notice']);
 const privateIp = /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/;
@@ -114,12 +111,11 @@ class ChatLink {
   ready = false;
   closed = false;
   lastUsed = Date.now();
-  constructor({cookie, target, cooOrigin, speechTarget, onClose}) {
+  constructor({cookie, cooOrigin, onClose}) {
     this.id = randomUUID();
-    this.target = target;
+    this.target = figureScapeTarget;
     this.cookie = cookie;
-    this.speechTarget = speechTarget;
-    this.socket = new WebSocket(new URL(socketPath(target), cooOrigin.replace(/^http:/, 'ws:')), {
+    this.socket = new WebSocket(new URL(socketPath, cooOrigin.replace(/^http:/, 'ws:')), {
       headers:{...(cookie ? {cookie} : {}), 'accept-language':'zh-CN'},
       maxPayload:8 * 1024 * 1024, handshakeTimeout:4000,
     });
@@ -175,8 +171,6 @@ class ChatLink {
       return previous.result;
     }
     const send = async () => {
-      try { if (this.target===nativeTarget) await this.speechTarget.ensure(this.cookie); }
-      catch (error) { throw new LinkError(503, error.message); }
       if (this.closed || this.socket.readyState !== WebSocket.OPEN) throw new LinkError(503, 'Coo 聊天已断开，请连接后重发。');
       return new Promise(resolve => {
         const finish = frame => {
@@ -256,7 +250,6 @@ export async function startLink({
   let devices = read(deviceFile, []);
   let ticket = null;
   const channels = new Map();
-  const speechTarget = new CooSpeechTarget(cooOrigin);
   const connectionRequests = new Map();
   let stopped = false;
   let cleanupTimer;
@@ -287,9 +280,8 @@ export async function startLink({
       const task = cooCookie().then(cookie => {
         if (stopped) throw new LinkError(503, 'Figure Pet 连接已停用。');
         if (!devices.some(item => item.id === device.id)) throw new LinkError(401, '这台手机的连接已解除。');
-        const link = new ChatLink({cookie,target,cooOrigin,speechTarget,onClose: closed => {
+        const link = new ChatLink({cookie,cooOrigin,onClose: closed => {
           if (channels.get(key) === closed) channels.delete(key);
-          if (![...channels.values()].some(item=>item.target===nativeTarget)) speechTarget.release();
         }});
         channels.set(key, link);
         return link;
@@ -304,7 +296,6 @@ export async function startLink({
     save(deviceFile,next);
     devices = next;
     for(const [key,link] of channels)if(key.startsWith(deviceId+'/')){link.close();channels.delete(key);}
-    if (![...channels.values()].some(item=>item.target===nativeTarget)) speechTarget.release();
   }
 
   function withErrors(handle) {
@@ -385,8 +376,9 @@ export async function startLink({
     }
     if(req.method==='GET' && ['/character/file','/character/frame-file'].includes(url.pathname)){
       const revision=url.searchParams.get('revision'),name=url.searchParams.get('name');
+      const target=targetOf(url.searchParams.get('target'));
       const value=url.pathname.endsWith('/frame-file')
-        ? await frameFile(targetOf(url.searchParams.get('target')),url.searchParams.get('id'),revision,name)
+        ? await frameFile(target,url.searchParams.get('id'),revision,name)
         : await characterAsset(revision,name);
       res.writeHead(200,{'content-type':'application/octet-stream','content-length':value.length,'cache-control':'no-store',
         'x-resource-sha256':digest(value)});
@@ -407,7 +399,6 @@ export async function startLink({
     clearInterval(cleanupTimer);
     for (const link of channels.values()) link.close();
     channels.clear();
-    speechTarget.release();
     closing = closeServer(relay);
     return closing;
   }

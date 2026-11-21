@@ -1,16 +1,18 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { copyFile, link, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, link, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocket, WebSocketServer } from 'ws';
+import { removeCabinStage } from './cabin-stage.mjs';
 
-const [root, dataDir, mode, profile, installMode] = process.argv.slice(2);
+const [root, dataDir, mode, profile, installMode, stage] = process.argv.slice(2);
 const bundled = installMode === '--bundled';
 const figure = profile ? JSON.parse(profile) : null;
 const source = join(root, 'CabinWorld.exe');
-let bridge, game, renderer, frames, gamePeer, renderPeer, stage, positionTimer, bodyDisconnectTimer, stopping = false;
+let bridge, game, renderer, frames, gamePeer, renderPeer, positionTimer, bodyDisconnectTimer, stopping = false;
+let gameExitTimer;
 
 function running(child) {
   return child && child.exitCode === null && child.signalCode === null;
@@ -26,6 +28,7 @@ async function stop() {
   stopping = true;
   clearInterval(positionTimer);
   clearTimeout(bodyDisconnectTimer);
+  clearTimeout(gameExitTimer);
   try {
     if (running(game) && bridge?.host.connected) {
       bridge.host.send({type:'quit'});
@@ -43,8 +46,8 @@ async function stop() {
       renderer.kill();
       await waitForExit(renderer,800);
     }
-    if (stage) await rm(stage,{recursive:true,force:true,maxRetries:2,retryDelay:150}).catch(() => {});
   } finally {
+    if (!process.connected) await removeCabinStage(bundled ? dataDir : root,stage);
     process.exit(0);
   }
 }
@@ -78,9 +81,7 @@ async function stagePortrait() {
 }
 
 async function prepareBody() {
-  const stageRoot = bundled ? dataDir : root;
-  await mkdir(stageRoot,{recursive:true});
-  stage = await mkdtemp(join(stageRoot,'.figure-scape-'));
+  if (!stage) throw Error('Cabin World launch directory is missing');
   const exe = join(stage,'CabinWorld.exe');
   await link(source,exe).catch(async error => {
     if (error.code !== 'EXDEV') throw error;
@@ -111,7 +112,14 @@ async function prepareBody() {
       renderPeer = socket;
       socket.on('error', () => {});
       socket.on('message',(frame,binary) => {
-        if (!binary || !Buffer.isBuffer(frame)) return;
+        if (!binary) {
+          if (!process.connected || frame.length > 64 * 1024) return;
+          let message;
+          try { message = JSON.parse(frame.toString()); } catch { return; }
+          if (['body-capabilities','speech-accepted','body-action','speech-report','speech-checkpoint','speech-progress'].includes(message?.type)) process.send(message);
+          return;
+        }
+        if (!Buffer.isBuffer(frame)) return;
         lastFrame = frame;
         if (gamePeer?.readyState === WebSocket.OPEN && gamePeer.bufferedAmount === 0) {
           gamePeer.send(frame,{binary:true},() => {});
@@ -185,8 +193,17 @@ try {
     if ((message?.type === 'chat-state' || message?.type === 'chat-result') && gamePeer?.readyState === WebSocket.OPEN) {
       gamePeer.send(JSON.stringify(message), () => {});
     }
+    if (['speech-play','speech-stop','speech-take'].includes(message?.type)) {
+      if (renderPeer?.readyState === WebSocket.OPEN) renderPeer.send(JSON.stringify(message), () => {});
+      else if (process.connected && message.type === 'speech-play') {
+        if (Number.isFinite(message.actionDeadline)) process.send({type:'speech-accepted',id:message.speech.id,generation:message.generation,accepted:false});
+        for (const id of message.speech.clips) if (id) process.send({type:'speech-report',id,status:'failed',reason:'renderer-disconnected'});
+      }
+    }
   });
   process.on('disconnect', () => void stop());
+  if (stage) await writeFile(join(stage,'bridge.pid'),String(process.pid),{flag:'wx'});
+  if (!process.connected) await stop();
   const { loadConfig, startBridge } = await import(pathToFileURL(join(root,'bridge','bridge.mjs')).href);
   const config = loadConfig(join(root,'bridge','bridge.config.json'));
   Object.assign(config,{dataDir,gameExe:source,http:{host:'127.0.0.1',port:0}});
@@ -211,8 +228,13 @@ try {
     ],{cwd:dirname(exe),env:{...process.env,...body?.env},stdio:'ignore',windowsHide:mode === '--headless'});
     game.once('error',() => { process.send?.('game-launch-failed'); void stop(); });
     game.once('exit',code => {
-      if (!stopping && process.connected) process.send(code === 0 ? 'game-closed' : {type:'game-exited',code},() => void stop());
-      else void stop();
+      if (stopping || !process.connected) { void stop(); return; }
+      const waitForSpeech = renderPeer?.readyState === WebSocket.OPEN;
+      // The parent asks the separate renderer for playback progress before it sends stop.
+      if (waitForSpeech) gameExitTimer = setTimeout(() => void stop(), 2200).unref();
+      process.send(code === 0 ? 'game-closed' : {type:'game-exited',code},error => {
+        if (error || !waitForSpeech) void stop();
+      });
     });
   }
 } catch (error) {

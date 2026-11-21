@@ -22,9 +22,9 @@ export function createMediaSpeech({ audio, report = () => {}, level = () => {}, 
     report(latest);
   }
   return {
-    play(id, cues, wantsPlan = false, face) {
+    play(id, cues, wantsPlan = false, face, offset = 0) {
       if (active) finish(active, 'cancelled', 'replaced');
-      const clip = { id, cues, face, state: 'preparing', controller: new AbortController(), position: 0, duration: 0 };
+      const clip = { id, cues, face, offset, state: 'preparing', controller: new AbortController(), position: offset, duration: 0 };
       active = clip;
       clip.preparation = setTimeout(() => finish(clip, 'failed', 'Speech preparation timed out'), 12_000);
       latest = { id, status: 'preparing' };
@@ -54,16 +54,22 @@ export function createMediaSpeech({ audio, report = () => {}, level = () => {}, 
         signal.throwIfAborted();
         if (active !== clip) return;
         if (output.ctx.state !== 'running' || !buffer.duration || buffer.duration > 120) throw Error('Speech audio cannot play');
+        if (offset >= buffer.duration) {
+          clip.position = clip.duration = buffer.duration;
+          finish(clip, 'finished');
+          return;
+        }
         const node = output.ctx.createBufferSource();
         node.buffer = buffer;
         node.connect(output.master);
         clip.node = node; clip.context = output.ctx; clip.sample = sample;
-        clip.duration = buffer.duration; clip.start = output.ctx.currentTime;
+        clip.duration = buffer.duration; clip.start = output.ctx.currentTime - offset;
         node.onended = () => {
           if (clip.state === 'scheduled') markStarted(clip);
           finish(clip, 'finished');
         };
-        node.start(clip.start);
+        if (offset) node.start(clip.start + offset, offset);
+        else node.start(clip.start);
         clip.state = 'scheduled';
       })().catch(error => finish(clip, 'failed', error?.message ?? String(error)));
       return clip;
@@ -71,7 +77,7 @@ export function createMediaSpeech({ audio, report = () => {}, level = () => {}, 
     tick() {
       if (!active?.context || active.context.state !== 'running') return;
       const clip = active;
-      clip.position = clip.context.currentTime - clip.start;
+      clip.position = Math.min(clip.duration, clip.context.currentTime - clip.start);
       if (clip.position <= 0) return;
       if (clip.state === 'scheduled') {
         markStarted(clip);
@@ -86,6 +92,13 @@ export function createMediaSpeech({ audio, report = () => {}, level = () => {}, 
       }
     },
     stop(reason = 'stopped') { if (active) finish(active, 'cancelled', reason); },
+    take(id) {
+      const clip = active;
+      if (!clip || clip.id !== id) return null;
+      const position = clip.context ? Math.min(clip.duration, Math.max(clip.position, clip.context.currentTime - clip.start)) : clip.position;
+      finish(clip, 'paused', 'scene-handoff');
+      return position;
+    },
     snapshot: () => latest && { ...latest },
   };
 
@@ -93,9 +106,10 @@ export function createMediaSpeech({ audio, report = () => {}, level = () => {}, 
     clearTimeout(clip.preparation);
     clip.state = 'started';
     clip.started = true;
-    latest = { id: clip.id, status: 'started', duration: clip.duration };
+    const seek = clip.offset ? { position: clip.offset } : {};
+    latest = { id: clip.id, status: 'started', duration: clip.duration, ...seek };
     report(latest);
-    plan({ kind: 'start', id: clip.id, duration: clip.duration, cues: clip.cues ?? [], face: clip.face });
+    plan({ kind: 'start', id: clip.id, duration: clip.duration, cues: clip.cues ?? [], face: clip.face, ...seek });
     clip.cuesChanged = false;
   }
 }

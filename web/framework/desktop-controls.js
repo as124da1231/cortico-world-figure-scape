@@ -16,9 +16,10 @@ export function nextToBody(box, anchorY, size, viewport, avoid, preferredSide = 
     right: {left: box.x + box.w + GAP, top: anchorY - height / 2},
   };
   const candidates = [
-    sides[preferredSide], sides[preferredSide === 'right' ? 'left' : 'right'],
-    {left: box.x + (box.w - width) / 2, top: box.y - height - GAP},
-    {left: box.x + (box.w - width) / 2, top: box.y + box.h + GAP},
+    ...[sides[preferredSide], sides[preferredSide === 'right' ? 'left' : 'right']]
+      .map(point => ({ ...point, top: bound(point.top, height, vh) })),
+    {left: bound(box.x + (box.w - width) / 2, width, vw), top: box.y - height - GAP},
+    {left: bound(box.x + (box.w - width) / 2, width, vw), top: box.y + box.h + GAP},
   ];
   const overlap = (point, area) => area
     ? Math.max(0, Math.min(point.left + width, area.right) - Math.max(point.left, area.left))

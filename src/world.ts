@@ -2,7 +2,9 @@ import { SCENE_SIZE_LIMITS, sceneScales } from '../web/framework/model-size.js';
 import { createPresentationService, presentationMode, scenePosition, type PresentationMode } from './framework/presentation-service.ts';
 import { createWallpaperLibrary } from './framework/wallpaper-library.ts';
 import { createCabinWorld, type CabinRuntime, type CabinState } from './framework/cabin-world.ts';
+import { createSpeechHandoff, speechForFigure, type SpeechOrder, type SpeechSurface } from './framework/speech-handoff.ts';
 import { cabinFigureSources, writeCabinFigure } from './framework/cabin-figures.ts';
+import { writeSpriterFigure } from './framework/spriter-figures.ts';
 import { createHash } from 'node:crypto';
 import { CABIN_TOOLS } from './framework/cabin-tools.ts';
 import { createImportUpload } from './live2d/import-upload.ts';
@@ -20,7 +22,8 @@ import { createModelDomain } from './framework/model-domain.ts';
 import { createModelApplication } from './framework/model-application.ts';
 import { createFrameworkConfiguration } from './framework/configuration.ts';
 import { figureSchemes, validateFigureScheme, type createFigureLibrary } from './framework/figure-library.ts';
-import type { CharacterTask, FigureEditorState, FigureSaveResult, FigureSettingsPatch, ModelConfiguration, ModelResources } from './framework/model-contract.ts';
+import type { FigureEditorState, FigureSaveResult, FigureSettingsPatch, ModelConfiguration, ModelResources } from './framework/model-contract.ts';
+import { characterEditorTask, live2dCharacter, packagedCharacter } from './framework/character-source.ts';
 import { BODY_EFFECT_KEYS, bodyEffectsFor, readBodyEffectsFeedback } from './body-effects.ts';
 /**
  * DesktopPetWorld: the pet on the desktop as a World.
@@ -75,11 +78,12 @@ import { SENSEVOICE, SherpaAsr, WHISPER, type SherpaModelKind, type SherpaModule
 import { SystemRecognizer, systemRecognizerSupported, type SystemRecognizerState, type SystemSentence } from './asr/system-recognizer.ts';
 import { createRecognitionRuntime } from './asr/recognition-runtime.ts';
 import { TranscriptionApi, type TranscriptionState } from './asr/transcription-api.ts';
-import { Packer, Segmenter, type SegmentSink, type Utterance } from './asr/segmenter.ts';
+import { Packer, rmsDb, Segmenter, type SegmentSink, type Utterance } from './asr/segmenter.ts';
 import { joinSpeech, looksHallucinated } from './asr/result.ts';
 import { toSimplified } from './asr/simplify.ts';
 import { estimateSeconds, parseActions, parseScript, vocabChange, vocabTable, type VocabWord } from './script.ts';
 import { replyBubbleSeconds } from '../web/framework/bubble-timing.js';
+import { CHAT_TEXT_MAX, SCENE_CHAT_TEXT_MAX, chatTextLengthNote } from '../web/framework/chat-text.js';
 import { ActivityGroup, ChatReplyFallback, ChatSockets, DESKTOP_CHAT_SOURCE, SELF_TYPE, chatItem, chatPage, chatRefs, isDesktopChatEvent, type ChatFigure } from './chat.ts';
 import { readWindowCompatibility, type WindowCompatibility } from './framework/window-compatibility.ts';
 import { ASK_OPTION_MAX, MODEL_TOOL_DECLS, petToolDecls } from './tools.ts';
@@ -98,6 +102,7 @@ import { createModelServices } from './framework/model-services.ts';
 import { readControlLayout, validateControlLayout } from '../web/framework/control-layout.js';
 import { TOUCH_REGIONS, readTouchProfile, readTouchRegion, touchRule, type TouchRegion } from '../web/framework/touch-geometry.js';
 import { WORKSPACE_PANELS } from './framework/workspace.ts';
+import { appearancePreset, isAppearancePreset } from './framework/appearance.ts';
 
 /** The console panels, titled in `language`. */
 function desktopPetPanelDecls(language: Language = 'zh'): WorldPanelDecl[] {
@@ -128,8 +133,7 @@ const CONFIRM_TIMEOUT_MS = 60_000;
 const CONFIRM_UNSHOWN_MS = 180_000;
 /** History events read per chat page load; the page asks for the ones before by cursor. */
 const CHAT_PAGE_EVENTS = 300;
-/** A message from the chat page: text cut to this, up to IMAGES_MAX images of at most IMAGE_MAX_BYTES each, as the console World takes them. */
-const CHAT_TEXT_MAX = 4000;
+/** An attachment limit for the chat page. */
 const IMAGES_MAX = 8;
 const IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 const IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
@@ -137,6 +141,8 @@ const IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif
 const PREFS_SYNC_MS = 150;
 /** Talk-key polling interval: well under the shortest key tap. */
 const MIC_RELEASE_MS = 500;
+const MIC_TEST_CONNECT_MS = 12_000;
+const MIC_TEST_RECORD_MS = 8000;
 
 /**
  * Run controls an embedding app lends the pet's menu. Each button shows only when its control is
@@ -155,6 +161,7 @@ export interface PetBotControls {
   openScenes?(): void;
   openWallpapers?(enter?: boolean): void;
   openCabin?(): void;
+  openCabinEngine?(): void;
   openVoiceSettings?(): void;
   /** Shows the embedding app's list of its Worlds; the hover button 「我的 World」 shows only when this is lent. */
   openWorlds?(): void;
@@ -246,10 +253,13 @@ export interface DesktopPetWorldOptions {
   coverRenderer?: CoverRenderer;
   figureLibrary?: ReturnType<typeof createFigureLibrary>;
   modelsDir: () => string;
+  reuseModelsDir?: () => string;
   wallpaperDir?: string;
   cabinRuntime?: CabinRuntime;
-  /** 内置小屋世界由资源包拼成;进入场景前等它准备好。 */
-  ensureCabinRuntime?: () => Promise<void>;
+  /** Prepare the managed Cabin World installation from the Engines page. */
+  ensureCabinRuntime?: (signal: AbortSignal) => Promise<void>;
+  verifyCabinRuntime?: (signal: AbortSignal) => Promise<void>;
+  cabinResourceState?: () => import('./framework/cabin-bundle.ts').CabinResourceState;
   phone?: ReturnType<typeof import('./phone-link/service.ts').createPhoneConnection>;
   /** Downloads; tests pass a local stand-in. */
   fetchImpl?: typeof fetch;
@@ -310,6 +320,7 @@ interface PendingAsk {
 
 interface TouchBatch {
   kind: string;
+  origin: TouchOrigin;
   region?: TouchRegion;
   areaNote?: string;
   area?: { id: string; name: string };
@@ -318,10 +329,23 @@ interface TouchBatch {
   count: number;
   woke: boolean;
   asleep: boolean;
-  x: number | null;
+  dropPosition: string | null;
   crashed: boolean;
   timer: NodeJS.Timeout;
 }
+
+interface TouchOrigin {
+  scene: string;
+  name: string | null;
+  figure: string | null;
+}
+
+function sameTouchOrigin(a: TouchOrigin, b: TouchOrigin): boolean {
+  return a.scene === b.scene && a.figure === b.figure && a.name === b.name;
+}
+
+const BODY_SCENE_NAMES = { desktop: ['桌面', 'desktop'], room: ['小屋', 'room'], phone: ['竖屏', 'portrait'], wallpaper: ['壁纸', 'wallpaper'], 'cabin-world': ['小屋世界', 'Cabin World'] };
+const bodyLabel = (value: string | null) => value?.replace(/[\r\n\[\];；]/g, ' ').trim().slice(0, 120);
 
 interface HeardLine { text: string; at: number; ms: number; dropped?: boolean }
 
@@ -396,6 +420,7 @@ export class DesktopPetWorld implements World {
   private clickThrough = false;
   private readonly frameworkAppearance: ReturnType<typeof createAppearanceDomain>;
   private readonly sceneMessages = new Map<string, Promise<EventEnvelope | null>>();
+  private readonly speechHandoff = createSpeechHandoff(id => this.tts?.stop(id));
   private readonly frameworkActions: ReturnType<typeof createActionDomain<VocabWord>>;
   private readonly frameworkModel: ReturnType<typeof createModelDomain<PageMessage, SkinSelection>>;
   private readonly frameworkConfiguration: ReturnType<typeof createFrameworkConfiguration>;
@@ -446,10 +471,14 @@ export class DesktopPetWorld implements World {
   private readonly counts = { utterances: 0, delivered: 0, dropped: 0 };
   private micState: { state: string; detail: string | null } = { state: 'off', detail: null };
   private devices: Array<{ id: string; label: string }> = [];
+  private micTest: { segmenter: Segmenter; utterances: Utterance[]; peak: number; timer: NodeJS.Timeout } | null = null;
+  private micTestState: { phase: 'idle' | 'opening' | 'recording' | 'decoding' | 'done' | 'error'; text?: string } = { phase: 'idle' };
+  private micTestGeneration = 0;
   private readonly confirms = new Map<string, PendingConfirm>();
   private readonly dialogs = new Map<string, (a: PetDialogAnswer) => void>();
   /** The pet's local microphone button is held down. */
   private talking = false;
+  private activatingMic: object | null = null;
   /** The audio stream is released after the local microphone button is released. */
   private micHeld = false;
   private micReleaseTimer: NodeJS.Timeout | null = null;
@@ -503,14 +532,29 @@ export class DesktopPetWorld implements World {
       persist:cabinWorld => opts.persist({ cabinWorld }),
       bundled:opts.cabinRuntime,
       ensureRuntime:opts.ensureCabinRuntime,
+      verifyRuntime:opts.verifyCabinRuntime,
+      resourceState:opts.cabinResourceState,
+      reserveScene:() => {
+        if (this.presentationService.busy() || this.frameworkModel.snapshot().busy) throw Error('Wait for the current scene or model change');
+        return this.bodyTransaction.reserve('presentation');
+      },
       changed:active => this.cabinVisibility(active),
-      presented:() => this.reportCabinScene(true),
+      presented:() => { this.reportCabinScene(true); this.resumeSpeech('cabin'); },
       conversation:() => this.cabinConversation(),
       sendMessage:(id,text) => this.sendCabinMessage(id,text),
+      speechReport: report => this.tts?.report(report),
+      speechCheckpoint: (request,rows) => this.speechHandoff.receive('cabin',request,rows),
+      beforeLeave: async () => {
+        if (!this.cabinRestoreBody) return;
+        await this.speechHandoff.capture('cabin',this.cabinWorld.takeSpeech,this.cabinWorld.recoverSpeech);
+        return this.speechHandoff.clips();
+      },
       prepareBody:(signal,model) => this.prepareCabinBody(signal,model),
     });
     this.legacyPresentationScale = opts.cfg.window.scale;
-    this.tts = opts.tts ? createTtsService({ ...opts.tts, selected: () => this.windowVisible(), activeService: () => this.modelServices?.resolve('tts') }) : null;
+    this.tts = opts.tts ? createTtsService({ ...opts.tts,
+      selected: () => this.windowVisible() || !!this.cabinWorld.speechFigure() || this.speechHandoff.active(),
+      activeService: () => this.modelServices?.resolve('tts') }) : null;
     this.speechPlanner = opts.planner ? createSpeechPlanner({
       ...opts.planner, config: () => this.cfg.planner ?? {}, persist: planner => this.opts.persist({ planner }),
       activeService: () => {
@@ -546,6 +590,10 @@ export class DesktopPetWorld implements World {
       selected: () => this.selectedModel(),
       available: () => !!opts.modelService,
       prepare: async (file, signal, options) => {
+        if (/\.scml$/i.test(file)) {
+          if (!opts.figureLibrary) throw Error('Spriter 导入暂不可用');
+          return opts.figureLibrary.importGenerated((directory, abort) => writeSpriterFigure(file, directory, abort), signal);
+        }
         if (basename(file).toLowerCase() === 'figure.json' && opts.figureLibrary) return opts.figureLibrary.prepare(file, signal);
         return (await opts.modelService!.prepare(file, signal, options)).id;
       },
@@ -625,8 +673,8 @@ export class DesktopPetWorld implements World {
         return id;
       },
       previewAppearance: (figure, owner, scheme) => this.server.sendPet({ t: 'preview-edit-appearance', figure, owner, scheme }),
-      previewDraftWardrobe: (figure, owner, profile, picks) => this.server.sendPet({
-        t: 'preview-draft-wardrobe', figure, owner, groups: profile.wardrobe, bindings: profile.bindings, picks,
+      previewDraftWardrobe: (figure, owner, profile, picks, requestId) => this.server.sendPet({
+        t: 'preview-draft-wardrobe', figure, owner, groups: profile.wardrobe, bindings: profile.bindings, picks, requestId,
       }),
       selected: () => this.selectedModel(),
       release: (figure, owner) => { this.server.sendPet({ t: 'release-edit-preview', figure, owner }); },
@@ -650,31 +698,34 @@ export class DesktopPetWorld implements World {
       resources: () => {
         const selected = this.selectedModel();
         const activeSource = opts.modelService?.directModel?.(selected)?.sourceId;
-        return this.libraryPacks().map(pack => ({
-          id: pack.id, name: nameIn(pack.manifest.name, this.appLanguage),
-          kind: pack.rawModel ? 'live2d-model' : 'figure-pack', active: pack.id === selected,
-          ...(pack.builtin ? { builtin:true } : {}),
-          ready: pack.id === selected && this.bodyReady(), failed: pack.id === this.figureFailed,
-          ...(pack.id === this.figureFailed && this.bodyMissing ? { failure: this.bodyMissing } : {}),
-          loading: pack.id === selected && !this.bodyReady() && !this.figureFailed && this.windowHost?.state().phase === 'running',
-          wardrobe: pack.manifest.axes.length > 0 || pack.manifest.presets.length > 0,
-          sourceId: pack.rawModel?.sourceId, source: pack.rawModel?.sourceLabel, origin: pack.manifest.source,
-          sourceActive: !!activeSource && activeSource === pack.rawModel?.sourceId,
-          coverJob: pack.rawModel && !pack.rawModel.cover && !pack.rawModel.generatedCover ? this.modelCovers?.state(pack.id) : undefined,
-          cover: pack.rawModel?.cover || pack.rawModel?.generatedCover
-            ? pack.base + 'models/' + pack.id + (pack.rawModel.cover ? '/cover.png' : '/cover.generated.png')
-            : !pack.rawModel && pack.manifest.thumb ? pack.base + pack.manifest.thumb : undefined,
-        }));
+        return this.libraryPacks().map(pack => {
+          const editor = pack.rawModel ? live2dCharacter(pack.id,pack.rawModel.sourceId) : packagedCharacter(pack);
+          return {
+            id: pack.id, name: nameIn(pack.manifest.name, this.appLanguage),
+            kind: editor.kind, editor, active: pack.id === selected,
+            ...(pack.builtin ? { builtin:true } : {}),
+            ready: pack.id === selected && this.bodyReady(), failed: pack.id === this.figureFailed,
+            ...(pack.id === this.figureFailed && this.bodyMissing ? { failure: this.bodyMissing } : {}),
+            loading: pack.id === selected && !this.bodyReady() && !this.figureFailed && this.windowHost?.state().phase === 'running',
+            wardrobe: pack.manifest.axes.length > 0 || pack.manifest.presets.length > 0,
+            sourceId: pack.rawModel?.sourceId, source: pack.rawModel?.sourceLabel, origin: pack.manifest.source,
+            sourceActive: !!activeSource && activeSource === pack.rawModel?.sourceId,
+            coverJob: pack.rawModel && !pack.rawModel.cover && !pack.rawModel.generatedCover ? this.modelCovers?.state(pack.id) : undefined,
+            cover: pack.rawModel?.cover || pack.rawModel?.generatedCover
+              ? pack.base + 'models/' + pack.id + (pack.rawModel.cover ? '/cover.png' : '/cover.generated.png')
+              : !pack.rawModel && pack.manifest.thumb ? pack.base + pack.manifest.thumb : undefined,
+          };
+        });
       },
       unknownMethod: method => this.ui.console.unknownMethod(`framework.${method}`),
     });
     this.recognition = createRecognitionRuntime<BackendState>({
-      enabled: () => this.cfg.asr.enabled && this.windowVisible(),
+      enabled: () => this.windowVisible() && (this.cfg.asr.enabled || this.micTesting()),
       engine: () => this.engine(),
       recognizer: engine => this.recognizer(engine),
       configurationChanged: engine => engine === 'system' ? this.system?.languageChanged === true
         : engine === 'api' ? this.api?.configChanged === true : this.sherpa(engine)?.configChanged === true,
-      releaseInput: () => this.cancelSpeech(),
+      releaseInput: () => this.cancelLiveInput(),
       changed: () => this.syncPrefs(),
     });
     this.adaptation = opts.modelIntake && opts.modelService?.saveSourceProfile ? createAdaptationService({
@@ -696,13 +747,14 @@ export class DesktopPetWorld implements World {
     this.status = new StatusTracker((status) => this.server.sendPet({ t: 'status', status }), (...args) => opts.describeTool?.(...args), () => this.ui.busy);
     this.segmenter = new Segmenter(this.cfg.asr.segment, FRAME_MS);
     this.segmenter.setSink(this.sink);
-    this.store = new RuntimeStore({ runtimesRoot: opts.runtimesRoot, modelsDir: opts.modelsDir, fetchImpl: opts.fetchImpl, funasrModel: opts.funasrModel, whisperModel: opts.whisperModel, text: () => this.ui });
+    this.store = new RuntimeStore({ runtimesRoot: opts.runtimesRoot, modelsDir: opts.modelsDir, reuseModelsDir: opts.reuseModelsDir, fetchImpl: opts.fetchImpl, funasrModel: opts.funasrModel, whisperModel: opts.whisperModel, text: () => this.ui });
     this.editorBackend = createEditorBackend(this.frameworkModel, () => join(opts.modelsDir(), '.editor-drafts'), () => structuredClone(this.cfg.touch), {
       read: id => this.figureEditorState(id),
       save: (id, profile, revision) => this.saveFigureSettings(id, profile, revision),
-      apply: (id, revision) => this.applyFigureSettings(id, revision),
+      apply: (id, revision, applyOutfit) => this.applyFigureSettings(id, revision, applyOutfit),
     });
     this.server = new PetServer({
+      appearance: () => appearancePreset(this.cfg.appearance),
       editorInvoke: (method, args) => this.editorBackend.invoke(method, args),
       port: () => this.cfg.port,
       webDir: WEB_DIR,
@@ -726,6 +778,7 @@ export class DesktopPetWorld implements World {
       packs: () => this.packs(),
       figureAsset: (id, path) => opts.figureLibrary?.asset(id, path),
       figureSettings: id => opts.figureLibrary?.settings(id),
+      previewScheme: id => this.windowVisible() && this.appearanceReceipt?.figure === id ? this.appearanceReceipt.scheme : undefined,
       models: opts.modelService,
       coverJobs: this.modelCovers,
       importModels: opts.modelIntake?.importUpload,
@@ -794,12 +847,17 @@ export class DesktopPetWorld implements World {
     return figure === this.figureFailed ? null : this.packs().find(pack => pack.id === figure) ?? null;
   }
   /** The words the body on screen does: its pack's vocabulary, less the words its body said it does not know. */
-  private vocab(): VocabWord[] {
-    const pack = this.currentPack();
+  private vocab(pack = this.currentPack()): VocabWord[] {
     if (!pack) return [];
     if(pack.rawModel&&this.bodyVocabulary.has(pack.id))return this.bodyVocabulary.get(pack.id)!;
     const known = this.bodyWords.get(pack.id);
     return known ? pack.manifest.vocab.filter((w) => known.has(w.id)) : pack.manifest.vocab;
+  }
+  private cabinVocab(figure: string | null): VocabWord[] {
+    const body = this.cabinWorld.state().body;
+    if (body?.kind !== 'figure' || body.figure !== figure) return [];
+    const words = new Set(body.words);
+    return this.packs().find(pack => pack.id === figure)?.manifest.vocab.filter(word => words.has(word.id)) ?? [];
   }
   /** The `live2d_pet_move_to` targets of the body on screen's pack, beyond the default ones. */
   private moves(): MoveTarget[] {
@@ -920,6 +978,7 @@ export class DesktopPetWorld implements World {
     this.figureShown = shown;
     this.appearanceReceipt = {figure:id,scheme:typeof msg.scheme === 'string' ? msg.scheme : ''};
     this.publishReadiness();
+    this.resumeSpeech('desktop');
     if (fromBot) { this.botLook = null; return; }
     let look: string | null = null;
     // what the chat page says of a switch the person made: another figure, or another dress of the same one
@@ -1016,9 +1075,12 @@ export class DesktopPetWorld implements World {
 
   async stop(): Promise<void> {
     await this.opts.phone?.stop();
+    await this.store.electron.cancel();
     clearTimeout(this.cabinHideTimer);
     this.cabinHideTimer = undefined;
+    await this.cabinWorld.cancelPreparation();
     await this.cabinWorld.leave(null,false);
+    this.speechHandoff.clear();
     this.tts?.stopAll();
     this.editService.release();
     this.opts.modelIntake?.cancel();
@@ -1070,6 +1132,11 @@ export class DesktopPetWorld implements World {
     return {
       externalizes: () => false,
       onEvent: (event) => {
+        if (event.type === 'response.completed') {
+          // Core sends delivery callbacks to the originating World only.
+          const input = this.replyInput();
+          if (input?.source === DESKTOP_CHAT_SOURCE) this.chatReply.accept([input]);
+        }
         this.chatReply.observe(event);
         if (this.server.petConnected && !this.petHidden) this.status.onEvent(event);
       },
@@ -1157,7 +1224,9 @@ export class DesktopPetWorld implements World {
       }
       case 'send': {
         const id = msg.id;
-        const text = typeof msg.text === 'string' ? msg.text.trim().slice(0, CHAT_TEXT_MAX) : '';
+        const text = typeof msg.text === 'string' ? msg.text.trim() : '';
+        const lengthError = this.chatLengthError(text, CHAT_TEXT_MAX, language);
+        if (lengthError) { this.chat.send(socket, { t: 'rejected', id, reason: lengthError }); return; }
         const images = parseChatImages(msg.images, this.userName, s, this.t);
         if (!images.ok) { this.chat.send(socket, { t: 'rejected', id, reason: images.reason }); return; }
         if (!text && images.blobs.length === 0) return;
@@ -1280,10 +1349,10 @@ export class DesktopPetWorld implements World {
   private async openModelEditor(model: unknown, task: unknown) {
     if (!this.server.port) throw Error('Live2D runtime is offline');
     const pack = this.opts.figureLibrary?.find(typeof model === 'string' ? model : this.selectedModel());
-    if (pack) return this.openModelPage(this.server.editorUrl(pack.id, typeof task === 'string' ? task : 'wardrobe'));
+    if (pack) return this.openModelPage(this.server.editorUrl(pack.id,characterEditorTask(packagedCharacter(pack),task)));
     const target = await this.frameworkModel.editor(model);
     if (!target.editor || !target.figure) throw Error('请选择模型库中的原始 Live2D 模型。');
-    const section = typeof task === 'string' && ['framing','bindings','wardrobe','touch','visual','behavior','mouth'].includes(task) ? task : 'framing';
+    const section = characterEditorTask(live2dCharacter(target.figure,target.editor.sourceId),task);
     return this.openModelPage(this.server.editorUrl(target.figure, section));
   }
 
@@ -1346,15 +1415,12 @@ export class DesktopPetWorld implements World {
     if (!pack || !library) return null;
     const settings = library.settings(id);
     const { manifest } = pack;
-    const tasks: CharacterTask[] = [];
-    if (manifest.vocab.length) tasks.push('bindings');
-    if (manifest.axes.length || manifest.presets.length) tasks.push('wardrobe');
-    tasks.push('touch', 'source');
     return {
-      character: { id, sourceId: id, kind: 'figure-pack', tasks },
+      character: packagedCharacter(pack),
       name: nameIn(manifest.name, this.appLanguage), author: manifest.author,
       axes: manifest.axes, presets: figureSchemes(manifest), actions: manifest.vocab,
       current: settings.scheme ?? '', active: id === this.selectedModel(), settings, revision: library.revisionOf(settings),
+      ...(this.windowVisible() && this.appearanceReceipt?.figure === id ? { worn: this.appearanceReceipt.scheme } : {}),
     };
   }
 
@@ -1370,21 +1436,23 @@ export class DesktopPetWorld implements World {
     const settings = await library.save(id, {
       ...('scheme' in input ? { scheme: input.scheme } : {}),
       ...('touch' in input ? { touch } : {}),
+      ...('visual' in input ? { visual: input.visual } : {}),
     }, expectedRevision);
     const revision = library.revisionOf(settings);
-    try { return await this.applyFigureSettings(id, revision); }
+    try { return await this.applyFigureSettings(id, revision, 'scheme' in input); }
     catch (error) { return { saved: true, settings, revision, applied: false, error: String((error as Error).message) }; }
   }
 
-  private async applyFigureSettings(id: string, revision: string): Promise<FigureSaveResult> {
+  private async applyFigureSettings(id: string, revision: string, applyOutfit = true): Promise<FigureSaveResult> {
     const report = this.figureEditorState(id);
     if (!report || report.revision !== revision) throw Error('角色配置已更新，请重新打开编辑台。');
-    const { settings, current: scheme, active } = report;
+    const { settings, active } = report;
     const saved = { saved: true as const, settings, revision };
     if (!active) return { ...saved, applied: false };
     try {
+      const scheme = applyOutfit ? report.current : lookOf(this.cfg.skin);
       const result = await this.frameworkModel.select(id, { skin: { scheme }, fromBot: false });
-      return { ...saved, applied: result.applied };
+      return { ...saved, applied: result.applied, ...(result.applied ? { worn: scheme } : {}) };
     } catch (error) { return { ...saved, applied: false, error: String((error as Error).message) }; }
   }
 
@@ -1422,19 +1490,27 @@ export class DesktopPetWorld implements World {
   }
 
   private snapshot(): Record<string, unknown> {
+    const cabin = this.cabinWorld.state();
+    const position = this.rememberedPosition();
+    const cabinEntry = cabin.phase === 'active' ? 'active'
+      : cabin.phase === 'connecting' || cabin.phase === 'leaving' ? 'entering'
+        : cabin.preparing ? 'preparing' : cabin.canEnter ? 'ready'
+          : cabin.externalUnavailable ? 'repair' : cabin.resources?.repair ? 'repair-managed' : 'setup';
     return {
       skin: this.effectiveSkin(),
       presentationMode: this.presentationService.state().desired,
       presentationPositions: this.cfg.rememberPosition ? this.cfg.presentationPositions : {},
       presentationScales: this.presentationSizes(),
+      cabinEntry,
       roam: this.quiet?.roam ?? this.cfg.roam,
       sound: this.quiet?.sound ?? this.cfg.sound,
       sounds: this.cfg.sounds,
       theme: this.cfg.theme,
+      appearance: appearancePreset(this.cfg.appearance),
       rememberPosition: this.cfg.rememberPosition,
       // read by the page from `init` only
-      startX: this.launchStartX ?? (this.cfg.rememberPosition ? this.cfg.petX : null),
-      startY: this.cfg.rememberPosition ? this.cfg.petY : null,
+      startX: this.launchStartX ?? position.x,
+      startY: position.y,
       controlLayout: readControlLayout(this.cfg.controlPages, this.cfg.hoverButtons, this.cfg.hoverButtonsVisible, this.cfg.controlPanelSize),
       hoverButtons: hoverButtonList(this.cfg.hoverButtons),
       hoverButtonsVisible: this.cfg.hoverButtonsVisible !== false,
@@ -1471,7 +1547,8 @@ export class DesktopPetWorld implements World {
   }
 
   speechRemaining(): number {
-    return this.server.petInWindow && !this.petHidden ? Math.max(0, this.busyUntil - Date.now(), this.tts?.remaining() ?? 0) : 0;
+    return this.windowVisible() || this.cabinWorld.speechFigure()
+      ? Math.max(0, this.busyUntil - Date.now(), this.tts?.remaining() ?? 0) : 0;
   }
 
   private readonly modelApplication = createModelApplication<PetSkin, PageMessage>({
@@ -1522,13 +1599,13 @@ export class DesktopPetWorld implements World {
       model: ready ? this.selectedModel() : null,
       modelName: pack ? modelName(pack.manifest.name, pack.id, this.language) : null,
       outfit: outfit || null,
-      ...(activeScene === 'cabin-world' ? { cabinWorld: {actor:cabin.actor, name:cabin.residents?.find(row => row.key === cabin.actor)?.name ?? null} } : {}),
+      ...(activeScene === 'cabin-world' ? { cabinWorld: {actor:cabin.actor, name:cabin.residents?.find(row => row.key === cabin.actor)?.name ?? null,body:cabin.body,action:cabin.action} } : {}),
     };
   }
 
   private inputBody(scene?: string) {
     const live = this.availability();
-    const mode = scene ?? live.activeScene ?? live.presentation;
+    const mode = scene ?? live.activeScene ?? 'conversation';
     if (mode === 'cabin-world') {
       return { scene: mode, name: live.cabinWorld?.name ?? null, actor: live.cabinWorld?.actor ?? null };
     }
@@ -1537,19 +1614,21 @@ export class DesktopPetWorld implements World {
 
   private inputBodyReport?: { key: string; sent: Promise<EventEnvelope | null> };
 
+  private describeInputBody(body: ReturnType<DesktopPetWorld['inputBody']>): string {
+    const zh = this.language === 'zh';
+    const scene = BODY_SCENE_NAMES[body.scene as keyof typeof BODY_SCENE_NAMES]?.[zh ? 0 : 1];
+    const name = bodyLabel(body.name);
+    const outfit = 'outfit' in body ? bodyLabel(body.outfit ?? null) : undefined;
+    if (!scene) return zh ? '梦境当前没有已确认的场景。' : 'Figure Scape has no confirmed scene.';
+    return zh ? `梦境当前场景为${scene}。${name ? `当前角色是${name}。` : '暂无已确认的角色。'}${outfit ? `装扮为${outfit}。` : ''}`
+      : `Figure Scape is in ${scene}. ${name ? `The current character is ${name}.` : 'No character is confirmed.'}${outfit ? ` Outfit: ${outfit}.` : ''}`;
+  }
+
   private async reportInputBody(body: ReturnType<DesktopPetWorld['inputBody']>): Promise<void> {
     if (!body.name && !this.inputBodyReport) return;
     const key = JSON.stringify(body);
     if (this.inputBodyReport?.key === key) { await this.inputBodyReport.sent; return; }
-    const zh = this.language === 'zh';
-    const scenes = { desktop: ['桌面', 'desktop'], room: ['小屋', 'room'], phone: ['竖屏', 'portrait'], wallpaper: ['壁纸', 'wallpaper'], 'cabin-world': ['小屋世界', 'Cabin World'] };
-    const scene = scenes[body.scene as keyof typeof scenes]?.[zh ? 0 : 1] ?? (zh ? '对话页' : 'conversation');
-    const label = (value: string | null) => value?.replace(/[\r\n\[\];；]/g, ' ').trim().slice(0, 120);
-    const name = label(body.name);
-    const outfit = 'outfit' in body ? label(body.outfit ?? null) : undefined;
-    const text = zh ? `梦境当前场景为${scene}。${name ? `当前角色是${name}。` : '暂无已确认的角色。'}${outfit ? `装扮为${outfit}。` : ''}`
-      : `Figure Scape is in ${scene}. ${name ? `The current character is ${name}.` : 'No character is confirmed.'}${outfit ? ` Outfit: ${outfit}.` : ''}`;
-    const sent = this.push(`${this.id}.availability`, `${this.id}.availability`, text, 'piggyback', { meta: { body } });
+    const sent = this.push(`${this.id}.availability`, `${this.id}.availability`, this.describeInputBody(body), 'piggyback', { meta: { body } });
     const report = this.inputBodyReport = { key, sent };
     if (!await sent && this.inputBodyReport === report) this.inputBodyReport = undefined;
   }
@@ -1586,15 +1665,16 @@ export class DesktopPetWorld implements World {
   private prefsSignature(): string {
     const s = this.snapshot();
     delete s.status;
-    // a talk key that opens the microphone sends each change by itself (setMicHeld): the signature keeps only that it does
-    s.mic = 'press';
+    s.mic = this.micOpen();
     return JSON.stringify(s);
   }
 
   /** Config is a live object edited by the console; changes reach the pages within PREFS_SYNC_MS. */
   private syncPrefs(): void {
-    this.segmenter.configure(this.cfg.asr.segment);
-    if (!this.cfg.asr.enabled) this.cancelSpeech();
+    const segment = this.segmentConfig();
+    this.segmenter.configure(segment);
+    this.micTest?.segmenter.configure(segment);
+    if (!this.cfg.asr.enabled) this.cancelLiveInput();
     void this.recognition.reconcile();
 
 
@@ -1617,7 +1697,10 @@ export class DesktopPetWorld implements World {
   }
 
   private micOpen(): boolean {
-    return this.micWanted() && this.micHeld;
+    if (this.micTest) return this.windowVisible();
+    const { mode, openOnPress } = this.cfg.asr.mic;
+    return this.micWanted() && (mode === 'always' ||
+      (mode === 'toggle' ? this.talking : this.micHeld || !openOnPress));
   }
 
   private setMicHeld(on: boolean): void {
@@ -1640,9 +1723,13 @@ export class DesktopPetWorld implements World {
     return {
       enabled: this.cfg.asr.enabled,
       ready,
+      activating: this.activatingMic !== null,
       detail: ready ? null : b?.phase === 'starting' ? this.ui.voice.starting : b?.detail ?? this.ui.voice.notRunning,
       hint: this.talkHint(),
-      mode: 'hold',
+      mode: this.cfg.asr.mic.mode,
+      recording: this.talking,
+      processing: this.committing,
+      testing: this.micTesting(),
     };
   }
 
@@ -1695,11 +1782,24 @@ export class DesktopPetWorld implements World {
     }
     const mic = prefs.micSettings as Record<string, unknown> | undefined;
     if (mic && typeof mic === 'object') {
-      if (typeof mic.deviceId === 'string') patch.asr = { ...patch.asr, mic: { deviceId: mic.deviceId } };
+      const settings: Partial<DesktopPetConfigSection['asr']['mic']> = {};
+      if (typeof mic.deviceId === 'string') settings.deviceId = mic.deviceId;
+      if (mic.mode === 'hold' || mic.mode === 'toggle' || mic.mode === 'always') settings.mode = mic.mode;
+      if (typeof mic.openOnPress === 'boolean') settings.openOnPress = mic.openOnPress;
+      if (Object.keys(settings).length) {
+        this.cancelSpeech();
+        patch.asr = { ...patch.asr, mic: settings };
+      }
     }
     if (Object.keys(patch).length) this.opts.persist(patch);
     if (prefs.mic === true && this.windowVisible()) void this.startVoiceBackend();
     this.syncPrefs();
+  }
+
+  private rememberedPosition() {
+    if (!this.cfg.rememberPosition) return { x: null, y: null };
+    // A report without y means the body is back on the floor.
+    return { x: this.standX ?? this.cfg.petX, y: this.standX === null ? this.cfg.petY : this.standY };
   }
 
   /**
@@ -1708,9 +1808,7 @@ export class DesktopPetWorld implements World {
    * the stored position as it was.
    */
   private savePosition(): void {
-    const x = this.cfg.rememberPosition ? this.standX ?? this.cfg.petX : null;
-    // a report without y comes from a body on the floor, which clears a saved height
-    const y = !this.cfg.rememberPosition ? null : this.standX === null ? this.cfg.petY : this.standY;
+    const { x, y } = this.rememberedPosition();
     if (x === this.cfg.petX && y === this.cfg.petY) return;
     try {
       this.opts.persist({ petX: x, ...(y !== this.cfg.petY ? { petY: y } : {}) });
@@ -1728,6 +1826,9 @@ export class DesktopPetWorld implements World {
         return;
       }
       case 'speech-media': return this.tts?.report(msg);
+      case 'speech-checkpoint':
+        if (this.server.petInWindow) this.speechHandoff.receive('desktop',msg.request,msg.rows);
+        return;
       case 'speech-visible':
         if (Number.isSafeInteger(msg.cursor)) this.log?.debug('发言气泡已打开', { cursor: msg.cursor });
         return;
@@ -1773,6 +1874,7 @@ export class DesktopPetWorld implements World {
           const note = this.vocabNote();
           if (note) void this.push('desktop-live2d-pet.figure', 'desktop-live2d-pet.figure', this.t.figureNote(note), 'debounce');
         }
+        this.resumeSpeech('desktop');
         return;
       }
       case 'visual-preview-failed': {
@@ -1810,6 +1912,7 @@ export class DesktopPetWorld implements World {
         this.petHidden = msg.hidden === true;
         if (showing && this.server.petInWindow) {
           this.server.sendPet({ t: 'presentation-resume', mode: this.presentationService.state().desired });
+          this.resumeSpeech('desktop');
           if (this.cfg.asr.enabled) void this.startVoiceBackend();
         }
         this.tellDesktop();
@@ -1822,7 +1925,7 @@ export class DesktopPetWorld implements World {
       case 'phone-control': return void this.handlePhoneControl(msg);
       case 'text': return void this.handlePetText(msg, reply);
       case 'expand': {
-        const text = typeof msg.text === 'string' ? msg.text.slice(0, CHAT_TEXT_MAX) : '';
+        const text = typeof msg.text === 'string' ? msg.text : '';
         const images = draftImages(msg.images);
         this.draft = { text, images };
         if (this.chat.size) { this.chat.broadcast({ t: 'draft', text, images }); this.draft = null; }
@@ -1830,13 +1933,25 @@ export class DesktopPetWorld implements World {
         return;
       }
       case 'touch': return this.onTouch(msg);
-      case 'touch-reaction': if (this.touch?.kind === 'drop' && msg.kind === 'drop' && typeof msg.status === 'string' && ['suppressed','busy','played','unavailable'].includes(msg.status)) this.touch.reaction = msg.status; return;
+      case 'touch-reaction': {
+        if (this.touch?.kind === 'drop' && msg.kind === 'drop' && typeof msg.status === 'string'
+          && ['suppressed','busy','played','unavailable'].includes(msg.status)
+          && sameTouchOrigin(this.touch.origin, this.touchOrigin())) this.touch.reaction = msg.status;
+        return;
+      }
       case 'mic': {
         this.micState = { state: String(msg.state), detail: typeof msg.detail === 'string' ? msg.detail : null };
         // a closed microphone sends no more frames: the meter drops to silence
         if (this.micState.state !== 'on') {
           this.level = -100;
           this.voiceFrame({ type: 'level', level: this.level, speaking: false, open: this.gateOpen() });
+        }
+        if (this.micState.state === 'error' || this.micState.state === 'denied') {
+          if (this.micTest) void this.finishMicTest();
+          else {
+            if (this.talking || this.listenOpen) this.cancelSpeech();
+            this.server.sendPet({ t:'mic-error', state:this.micState.state });
+          }
         }
         return;
       }
@@ -1899,10 +2014,22 @@ export class DesktopPetWorld implements World {
         return;
       }
       case 'speak-hold': {
-        if (msg.down === true && this.micWanted()) this.setTalking(true);
+        if (this.cfg.asr.mic.mode !== 'hold' || this.micTest || this.micTestState.phase === 'decoding') return;
+        if (msg.down === true && this.micWanted() && !this.committing) this.setTalking(true);
         else if (msg.down === false && this.talking) this.commitSpeech();
         return;
       }
+      case 'speak-toggle': {
+        if (this.cfg.asr.mic.mode !== 'toggle' || this.micTest || this.micTestState.phase === 'decoding' || !this.micWanted()) return;
+        if (this.talking) this.commitSpeech();
+        else if (!this.committing) this.setTalking(true);
+        return;
+      }
+      case 'speak-activate': return void this.activateMicrophone();
+      case 'speak-pause':
+        if (this.cfg.asr.mic.mode === 'always' && this.cfg.asr.enabled && this.windowVisible() &&
+          !this.micTest && this.micTestState.phase !== 'decoding') this.savePrefs({ mic: false });
+        return;
       case 'commit': return this.commitSpeech();
       case 'cancel': return this.cancelSpeech();
     }
@@ -1913,14 +2040,20 @@ export class DesktopPetWorld implements World {
       { meta: { via: 'bubble', text }, ...(blobs.length ? { blobs } : {}) });
   }
 
+  private chatLengthError(value: string, limit = SCENE_CHAT_TEXT_MAX, language = this.appLanguage): string {
+    return chatTextLengthNote(value, limit, (zh, en) => language.startsWith('zh') ? zh : en);
+  }
+
   private async handlePetText(msg: PageMessage, reply?: (msg: PageMessage) => void) {
     const request = typeof msg.request === 'string' && /^[\w-]{1,80}$/.test(msg.request) ? msg.request : undefined;
     const language = petText(this.appLanguage).chat;
-    const text = typeof msg.text === 'string' ? msg.text.trim().slice(0, 500) : '';
-    const images = parseChatImages(msg.images, this.userName, language, this.t);
+    const text = typeof msg.text === 'string' ? msg.text.trim() : '';
     const respond = (value: Record<string, unknown>) => {
       if (request) reply?.({ t: 'text-result', request, ...value });
     };
+    const lengthError = this.chatLengthError(text);
+    if (lengthError) { respond({ ok: false, reason: lengthError }); return; }
+    const images = parseChatImages(msg.images, this.userName, language, this.t);
     if (!images.ok || (!text && !images.blobs.length) || this.petHidden) {
       respond({ ok: false, reason: images.ok ? language.notSent : images.reason });
       return;
@@ -1932,8 +2065,9 @@ export class DesktopPetWorld implements World {
   private async handlePhoneMessage(msg: PageMessage): Promise<void> {
     const request = msg.request;
     if (typeof request !== 'string' || !/^[\w-]{1,80}$/.test(request) || !this.server.petInWindow) return;
-    const text = typeof msg.text === 'string' ? msg.text.trim().slice(0, 500) : '';
+    const text = typeof msg.text === 'string' ? msg.text.trim() : '';
     const respond = (value: Record<string, unknown>) => this.server.sendPet({ t: 'phone-message-result', request, ...value });
+    if (this.chatLengthError(text)) { respond({ ok: false, reason: 'text-too-long' }); return; }
     const scene = msg.scene ?? 'phone';
     if (!text || this.petHidden || !presentationMode(scene) || scene === 'desktop' || this.presentationService.state().applied !== scene) {
       respond({ ok: false, reason: 'unavailable' });
@@ -1980,7 +2114,9 @@ export class DesktopPetWorld implements World {
   private async sendCabinMessage(request: unknown, value: unknown) {
     const state = this.cabinWorld.state();
     if (state.phase !== 'active' || state.presented === false || !state.actor) throw Error('小屋世界尚未就绪，输入已保留。');
-    const text = typeof value === 'string' ? value.trim().slice(0, 500) : '';
+    const text = typeof value === 'string' ? value.trim() : '';
+    const lengthError = this.chatLengthError(text);
+    if (lengthError) throw Error(lengthError);
     if (typeof request !== 'string' || !/^[\w-]{1,80}$/.test(request) || !text) throw Error('请输入消息后发送。');
     const sent = await this.deliverSceneText('cabin-world',request,text,state.actor);
     if (!sent) throw Error('Coo 未收到这条消息，请重试。');
@@ -2116,7 +2252,8 @@ export class DesktopPetWorld implements World {
     else if (action === 'desktop-wallpapers' || action === 'desktop-wallpaper-enter') c.openWallpapers?.(action === 'desktop-wallpaper-enter');
     else if (action === 'desktop-cabin-settings') c.openCabin?.();
     else if (action === 'desktop-cabin') {
-      if (!this.cabinWorld.state().configured) c.openCabin?.();
+      const cabin = this.cabinWorld.state();
+      if (!cabin.canEnter) (c.openCabinEngine ?? c.openCabin)?.();
       else {
         try { this.enterCabin(undefined,true); }
         catch { c.openCabin?.(); }
@@ -2134,6 +2271,7 @@ export class DesktopPetWorld implements World {
   }
 
   private async closeDesktopWindow(): Promise<void> {
+    this.cabinRestoreBody = false;
     if (this.server.petInWindow || this.windowHost?.state().phase === 'running') {
       this.petHidden = true;
       this.tellDesktop();
@@ -2152,27 +2290,63 @@ export class DesktopPetWorld implements World {
     if (active) {
       this.cabinRestoreBody = this.windowVisible();
       if (this.cabinRestoreBody) {
-        this.petHidden = true;
-        this.releaseDesktopOperations();
-        const sent = this.server.sendPet({ t:'hide' });
-        if (!sent) this.revealCabin();
-        else if (this.cabinWorld.state().presented === false) {
-          this.cabinHideTimer = setTimeout(() => void this.cabinWorld.leave('原场景未确认隐藏，已取消切换。'),4000);
-        }
-        this.tellDesktop();
+        void this.coverDesktopForCabin();
       } else this.revealCabin();
     } else {
       clearTimeout(this.cabinHideTimer);
       this.cabinHideTimer = undefined;
-      if (this.cabinRestoreBody) this.server.sendPet({ t:'show' });
+      const restore = this.cabinRestoreBody;
       this.cabinRestoreBody = false;
+      if (restore && (!this.server.petInWindow || !this.server.sendPet({ t:'show' }))) {
+        try { this.openWindow(); }
+        catch (error) { this.log?.warn(`恢复桌宠窗口失败:${String(error)}`); }
+      }
     }
     if (!active || this.cabinWorld.state().presented === undefined) this.reportCabinScene(active);
+  }
+
+  private async coverDesktopForCabin() {
+    if (this.cabinWorld.state().presented === false) {
+      await this.speechHandoff.capture('desktop',(request,deadline) => this.server.sendPet({t:'speech-take',request,deadline}));
+      if (this.cabinWorld.state().phase !== 'active') {
+        this.resumeSpeech('desktop');
+        return;
+      }
+    }
+    this.petHidden = true;
+    this.releaseDesktopOperations();
+    const sent = this.server.sendPet({ t:'hide' });
+    if (!sent) this.revealCabin();
+    else if (this.cabinWorld.state().presented === false) {
+      this.cabinHideTimer = setTimeout(() => void this.cabinWorld.leave('原场景未确认隐藏，已取消切换。'),4000);
+    }
+    this.tellDesktop();
+  }
+
+  private playSpeech(surface: SpeechSurface, order: SpeechOrder) {
+    const sent = surface === 'cabin' ? this.cabinWorld.speak(order)
+      : this.server.sendPet({t:'say',...order,modelGeneration:this.bodyControls.snapshot()?.modelGeneration});
+    if (sent) this.speechHandoff.remember(order);
+    else for (const clip of order.clips) if (clip) this.tts?.stop(clip);
+    return sent;
+  }
+
+  private resumeSpeech(surface: SpeechSurface) {
+    if (!this.speechHandoff.active()) return;
+    if (surface === 'desktop') {
+      const scene = this.presentationService.state();
+      const cabin = this.cabinWorld.state().phase;
+      if (!this.bodyReady() || scene.applied !== scene.desired || cabin === 'active' || cabin === 'leaving') return;
+    }
+    const figure = surface === 'cabin' ? this.cabinWorld.speechFigure() : this.selectedModel();
+    if (!figure) return;
+    for (const order of this.speechHandoff.resume(figure)) this.playSpeech(surface,order);
   }
 
   private reportCabinScene(active: boolean): void {
     if (active === this.cabinSceneReported) return;
     this.cabinSceneReported = active;
+    if (!active) this.busyUntil = 0;
     const text = this.language === 'zh'
       ? active ? '已进入小屋世界。使用 cabin_status 或 cabin_look 查看住户和场景。' : '已离开小屋世界。继续在原会话中对话。'
       : active ? 'Cabin World is active. Use cabin_status or cabin_look to inspect the resident and scene.' : 'Cabin World is no longer active. Continue in the same conversation.';
@@ -2190,7 +2364,8 @@ export class DesktopPetWorld implements World {
       : this.opts.figureLibrary?.settings(pack.rawModel?.sourceId ?? pack.id).scheme ?? '';
     url.search = new URLSearchParams({ model:pack.id, cabin:'1', scheme }).toString();
     const runtime = resolveHostCommand(url.href,this.cfg.window.electronFile,this.store.electron.executable());
-    if ('missing' in runtime || !runtime.args[0]?.endsWith('electron-main.cjs')) throw Error('请先在梦境运行详情中安装 Electron 运行组件。');
+    if ('missing' in runtime || !runtime.args[0]?.endsWith('electron-main.cjs')) throw Error(this.appLanguage.startsWith('zh')
+      ? '请在「引擎 → 桌宠窗口」检查窗口组件和启动设置。' : 'Check the window component and startup settings under Engines → Pet window.');
     return {
       key:'figure-scape-'+createHash('sha256').update(pack.rawModel?.sourceId ?? pack.id).digest('hex').slice(0,24),
       name:(pack.manifest.name.zh || pack.manifest.name.en || '梦境角色').slice(0,32),
@@ -2205,20 +2380,48 @@ export class DesktopPetWorld implements World {
     }
     const current = this.cabinWorld.state();
     if (current.phase === 'connecting' || current.phase === 'active' || current.phase === 'leaving') return current;
+    if (!current.canEnter) throw Error(current.externalUnavailable
+      ? '找不到小屋世界安装，请在「引擎 → 小屋世界」重新选择程序。'
+      : current.resources?.repair ? '请在「引擎 → 小屋世界」修复安装。' : '请在「引擎 → 小屋世界」先安装组件。');
     if (this.presentationService.busy() || this.frameworkModel.snapshot().busy) throw Error('Wait for the current scene or model change');
-    const release = this.bodyTransaction.reserve('presentation');
     void this.cabinWorld.enter(model).then(next => {
-      if (fromDesktop && next.phase === 'error') this.opts.controls?.openCabin?.();
-    }).finally(release);
+      const controls = this.opts.controls;
+      if (fromDesktop && next.phase === 'error') {
+        (next.resources?.repair ? controls?.openCabinEngine ?? controls?.openCabin : controls?.openCabin)?.();
+      }
+    });
     return this.cabinWorld.state();
+  }
+
+  private async leaveCabinForScene(): Promise<void> {
+    const { phase } = this.cabinWorld.state();
+    if (phase === 'connecting' || phase === 'active' || phase === 'leaving') await this.cabinWorld.leave();
   }
 
   private async selectScene(mode: unknown, request?: unknown) {
     if (!presentationMode(mode)) throw Error('Invalid presentation mode');
     if (this.frameworkModel.operation(request)) throw Error('Operation ID already belongs to a model request');
     const wallpaper = mode === 'wallpaper' ? await this.wallpapers.prepare() : null;
-    if (this.cabinWorld.state().phase === 'active') await this.cabinWorld.leave();
-    return this.presentationService.select(mode, request, wallpaper ? {payload:wallpaper} : undefined);
+    return this.transferScene(mode, request, wallpaper ? { payload: wallpaper } : undefined);
+  }
+
+  private async transferScene(mode: PresentationMode, request: unknown, options?: Parameters<typeof this.presentationService.select>[2]) {
+    const cabin = this.cabinWorld.state();
+    if (cabin.phase === 'active') {
+      if (cabin.presented === false || !this.server.petInWindow || this.appearanceReceipt?.figure !== this.selectedModel()) {
+        throw Error(this.appLanguage.startsWith('zh')
+          ? '桌宠窗口还未就绪。可以继续留在小屋世界，或先退出后启动桌宠。'
+          : 'The pet window is not ready. Stay in Cabin World, or leave and start the pet first.');
+      }
+      const result = await this.presentationService.select(mode, request, { ...options, replace: true, whileHidden: true });
+      if (result.applied && this.presentationService.state().applied === mode && this.cabinWorld.state().phase === 'active') {
+        this.cabinRestoreBody = true;
+        await this.cabinWorld.leave();
+      }
+      return result;
+    }
+    await this.leaveCabinForScene();
+    return this.presentationService.select(mode, request, options);
   }
 
   /** Ends the wait with 'timeout' after `ms`, and takes the confirmation off the page, queued or shown. */
@@ -2308,10 +2511,15 @@ export class DesktopPetWorld implements World {
   }
 
   private releaseDesktopOperations(): void {
-    this.tts?.stopAll();
+    this.cancelMicTest();
+    this.level = -100;
+    this.micState = { state: 'off', detail: null };
+    const capturingCabin = this.cabinRestoreBody && this.cabinWorld.state().phase === 'leaving';
+    if (!capturingCabin && !this.cabinWorld.speechFigure()) this.tts?.stopAll(this.speechHandoff.clips());
     this.editService.releasePreview();
     this.cancels++;
     this.talking = false;
+    this.activatingMic = null;
     this.listenOpen = false;
     this.committing = false;
     this.partial = this.interim = '';
@@ -2319,7 +2527,7 @@ export class DesktopPetWorld implements World {
     if (this.packTimer) clearTimeout(this.packTimer);
     this.packTimer = null;
     this.packer.take();
-    this.segmenter.flush();
+    this.segmenter.discard();
     this.wasSpeaking = false;
     this.setMicHeld(false);
     this.voiceFrame({ type: 'gate', open: false });
@@ -2331,8 +2539,6 @@ export class DesktopPetWorld implements World {
     for (const [id, d] of this.dialogs) { d({ unavailable: true }); this.dialogs.delete(id); }
     for (const [id, w] of this.walks) { clearTimeout(w.timer); w.resolve(this.t.walkWindowGone); this.walks.delete(id); }
     for (const [id, c] of this.confirms) { clearTimeout(c.timer); c.resolve('unavailable'); this.confirms.delete(id); }
-    this.segmenter.flush();
-    if (this.wasSpeaking) this.wasSpeaking = false;
   }
 
   /** An answer from the pet's bubble or the chat page; an answer from the page closes the bubble. */
@@ -2357,11 +2563,19 @@ export class DesktopPetWorld implements World {
       { meta: { askId: ask.id, ...(index !== null ? { index } : { text }) } });
   }
 
+  private touchOrigin(): TouchOrigin {
+    const body = this.inputBody();
+    return { scene: body.scene, name: body.name, figure: body.figure ?? null };
+  }
+
   private onTouch(msg: PageMessage): void {
     if (!this.cfg.touch.enabled || typeof msg.figure === 'string' && msg.figure !== this.selectedModel()) return;
     const kind = String(msg.kind);
     if (kind === 'grab') return;
-    if (kind === 'crash' && this.touch && (this.touch.kind === 'throw' || this.touch.kind === 'drop')) {
+    const origin = this.touchOrigin();
+    if (origin.scene === 'cabin-world') return;
+    const sameOrigin = this.touch && sameTouchOrigin(this.touch.origin, origin);
+    if (kind === 'crash' && this.touch && sameOrigin && (this.touch.kind === 'throw' || this.touch.kind === 'drop')) {
       this.touch.crashed = true;
       return;
     }
@@ -2375,7 +2589,7 @@ export class DesktopPetWorld implements World {
     const rule = touchRule(profile, kind, locationId ?? 'all');
     const reaction = typeof msg.reaction === 'string' && ['suppressed','busy','played','unavailable'].includes(msg.reaction) ? msg.reaction : undefined;
     if (rule?.send === 'local' || kind === 'shake' && !rule) return;
-    if (this.touch && this.touch.kind === kind && this.touch.region === region && this.touch.area?.id === area?.id
+    if (this.touch && sameOrigin && this.touch.kind === kind && this.touch.region === region && this.touch.area?.id === area?.id
       && this.touch.areaNote === areaNote && this.touch.rule?.send === rule?.send && this.touch.rule?.note === rule?.note && kind !== 'throw' && kind !== 'drop') {
       this.touch.count++;
       this.touch.reaction = reaction ?? this.touch.reaction;
@@ -2386,8 +2600,8 @@ export class DesktopPetWorld implements World {
     }
     if (this.touch) this.flushTouch();
     this.touch = {
-      kind, region, area, areaNote, rule, reaction, count: 1, woke: msg.woke === true, asleep: msg.asleep === true, crashed: false,
-      x: typeof msg.x === 'number' ? msg.x : null,
+      kind, origin, region, area, areaNote, rule, reaction, count: 1, woke: msg.woke === true, asleep: msg.asleep === true, crashed: false,
+      dropPosition: kind === 'drop' && typeof msg.x === 'number' && Number.isFinite(msg.x) && this.screen?.w ? pct(msg.x / this.screen.w) : null,
       timer: setTimeout(() => this.flushTouch(), TOUCH_MERGE_MS),
     };
   }
@@ -2404,7 +2618,7 @@ export class DesktopPetWorld implements World {
       case 'poke': text = t.woke ? m.pokedAwake(u, t.region) : m.poked(u, t.count, t.region); break;
       case 'pet': text = t.asleep ? m.pettedAsleep(u, t.region) : m.petted(u, t.count, t.region); break;
       case 'throw': text = m.thrown(u, t.crashed); break;
-      case 'drop': text = m.dropped(u, t.x !== null && this.screen ? pct(t.x / this.screen.w) : null, t.crashed); break;
+      case 'drop': text = m.dropped(u, t.dropPosition, t.crashed); break;
       case 'crash': text = m.crashed; break;
       case 'shake': text = this.language.startsWith('zh') ? u + '摇晃了你' : u + ' shook you'; break;
       default: return;
@@ -2418,10 +2632,20 @@ export class DesktopPetWorld implements World {
     const areaName = t.area?.name ?? (t.region ? TOUCH_REGIONS[t.region][this.language.startsWith('zh') ? 0 : 1] : undefined);
     const notes = [...new Set([t.areaNote, t.rule?.note].filter(Boolean))];
     if (notes.length) text += ' (' + notes.join(this.language.startsWith('zh') ? '。' : '. ') + ')';
+    const zh = this.language.startsWith('zh');
+    const scene = BODY_SCENE_NAMES[t.origin.scene as keyof typeof BODY_SCENE_NAMES]?.[zh ? 0 : 1];
+    if (scene && !sameTouchOrigin(t.origin, this.touchOrigin())) {
+      const name = bodyLabel(t.origin.name);
+      text += zh ? `（触碰发生在${scene}${name ? `，角色是 ${name}` : ''}）`
+        : ` (This touch happened in ${scene}${name ? ` with ${name}` : ''}.)`;
+    }
     const wakes = t.rule?.send !== 'next' && !this.touchWoke && touchWakes(this.cfg.touch, t.kind);
     if (wakes) this.touchWoke = true;
     void this.push('desktop-live2d-pet.touch', 'desktop-live2d-pet.touch', m.touch(text), wakes ? 'debounce' : 'piggyback',
-      { meta: { touch: { kind: t.kind, count: t.count, woke: t.woke, crashed: t.crashed, ...(t.reaction ? { reaction: t.reaction } : {}), ...(t.region ? { region: t.region } : {}), body: DESKTOP_PET_ID, areaId: t.area?.id ?? t.region ?? 'all', ...(areaName ? { areaName } : {}), ...(t.areaNote ? { areaNote: t.areaNote } : {}) } } });
+      { meta: { touch: { kind: t.kind, count: t.count, woke: t.woke, crashed: t.crashed, scene: t.origin.scene,
+        ...(t.origin.figure ? { figure: t.origin.figure } : {}), ...(t.reaction ? { reaction: t.reaction } : {}),
+        ...(t.region ? { region: t.region } : {}), body: DESKTOP_PET_ID, areaId: t.area?.id ?? t.region ?? 'all',
+        ...(areaName ? { areaName } : {}), ...(t.areaNote ? { areaNote: t.areaNote } : {}) } } });
   }
 
   /**
@@ -2451,11 +2675,14 @@ export class DesktopPetWorld implements World {
     if (!host) return null;
     try {
       const bodyInput = ['message', 'speech', 'answer', 'touch'].some(kind => type === `${this.id}.${kind}`);
+      const requiresDelivery = type === `${this.id}.message` || type === `${this.id}.speech`;
       const sourceScene = typeof extra.meta?.scene === 'string' ? extra.meta.scene : undefined;
       if (bodyInput) await this.reportInputBody(this.inputBody(sourceScene));
       const prefix = this.language === 'zh' ? '[梦境] ' : '[Figure Scape] ';
       const e = await host.pushEvent({ type, source: this.id, senderKey, ts: nowIso(this.opts.timezone),
-        text: this.stamp() + (bodyInput ? prefix : '') + text, ...extra }, { trigger });
+        text: this.stamp() + (bodyInput ? prefix : '') + text, ...extra,
+        ...(requiresDelivery ? { meta: { ...extra.meta, requiresDelivery: true } } : {}) }, { trigger });
+      if (requiresDelivery && e.contextDelivery === 'archive-only') return null;
       const item = chatItem(e);
       if (!item) return e;
       const pending = item.kind === 'user' && e.contextDelivery === 'deliver';
@@ -2489,8 +2716,9 @@ export class DesktopPetWorld implements World {
   /** The model files of a sherpa-onnx engine, or why they are not there. */
   private sherpaModel(engine: SherpaEngine): { paths: Record<string, string> } | { missing: string } {
     const slot = this.store[engine];
-    if (slot.state().phase !== 'ready') return { missing: this.ui.voice.modelMissing(Math.round(slot.bytes / 1048576)) };
-    return { paths: slot.paths() };
+    const state = slot.state();
+    if (state.phase !== 'ready') return { missing: this.ui.voice.modelMissing(Math.round(slot.bytes / 1048576)) };
+    return { paths: slot.paths(state.path) };
   }
 
   /** The engine in force (`asrEngineFor`). */
@@ -2527,31 +2755,153 @@ export class DesktopPetWorld implements World {
   }
 
   private stopVoiceBackend(): Promise<void> {
+    this.cancelMicTest();
     return this.recognition.stop();
+  }
+
+  private micTesting(): boolean {
+    return this.micTest !== null || this.micTestState.phase === 'decoding';
+  }
+
+  private startMicTest(): void {
+    if (!this.windowVisible()) throw Error(this.appLanguage.startsWith('zh')
+      ? '请先显示桌宠再试录。' : 'Show the pet before testing the microphone.');
+    if (this.micTesting()) return;
+    this.cancelSpeech();
+    this.segmenter.discard();
+    this.level = -100;
+    // Use the same segmentation settings as live input, with a separate buffer and no Coo event.
+    this.micTestState = { phase: 'opening' };
+    this.micTest = {
+      segmenter: new Segmenter(this.segmentConfig(), FRAME_MS), utterances: [], peak: -100,
+      timer: setTimeout(() => void this.finishMicTest(), MIC_TEST_CONNECT_MS),
+    };
+    if (this.micState.state === 'denied' || this.micState.state === 'error') {
+      this.server.sendPet({ t: 'prefs', mic: false });
+    }
+    this.server.sendPet({ t: 'prefs', mic: true, voice: this.voiceBrief() });
+    void this.startVoiceBackend().catch(() => {});
+  }
+
+  private async finishMicTest(): Promise<void> {
+    const test = this.micTest;
+    if (!test) return;
+    const captureError = ['denied', 'error'].includes(this.micState.state) ? this.micState.detail : null;
+    const generation = ++this.micTestGeneration;
+    clearTimeout(test.timer);
+    this.micTest = null;
+    this.server.sendPet({ t: 'prefs', mic: this.micOpen() });
+    const zh = this.appLanguage.startsWith('zh');
+    if (this.micTestState.phase === 'opening') {
+      this.micTestState = { phase: 'error', text: captureError || (zh
+        ? '未收到麦克风音频。请检查所选设备和麦克风权限，再试一次。'
+        : 'No audio arrived from the microphone. Check the selected device and microphone permissions, then try again.') };
+      return;
+    }
+    if (test.peak <= -72) {
+      this.micTestState = { phase: 'error', text: captureError || (zh
+        ? '麦克风已接通，这次没有录到声音。说一句话再试，或检查输入音量。'
+        : 'The microphone connected, but the recording was silent. Speak during the next test or check the input level.') };
+      return;
+    }
+    const tail = test.segmenter.flush();
+    if (tail) test.utterances.push(tail);
+    if (!test.utterances.length) {
+      this.micTestState = { phase: 'error', text: this.cfg.asr.mic.mode !== 'always'
+        ? (zh ? '有声音，录音太短。等麦克风接通后再说一句。' : 'Sound detected. Speak a little longer after the microphone connects.')
+        : (zh ? '有声音，但没检测到完整语句。试着说久一点，或调低检测门槛。' : 'Sound detected, but no speech segment. Try speaking longer or lowering the threshold.') };
+      return;
+    }
+    this.micTestState = { phase: 'decoding' };
+    const pcm = new Int16Array(test.utterances.reduce((length, utterance) => length + utterance.pcm.length, 0));
+    let offset = 0;
+    for (const { pcm: audio } of test.utterances) { pcm.set(audio, offset); offset += audio.length; }
+    try {
+      if (this.backendState()?.phase !== 'running') await this.startVoiceBackend();
+      if (generation !== this.micTestGeneration) return;
+      const recognizer = this.recognizer();
+      if (!recognizer || this.backendState()?.phase !== 'running') {
+        this.micTestState = { phase: 'done', text: zh ? '已录到声音。识别引擎就绪后可查看转写。' : 'Sound captured. Start the recognition engine to test transcription.' };
+        return;
+      }
+      const result = await recognizer.transcribe(pcm);
+      if (generation !== this.micTestGeneration) return;
+      const value = this.simplifies ? toSimplified(result.text) : result.text;
+      this.micTestState = result.error || looksHallucinated(value)
+        ? { phase: 'error', text: result.error || (zh ? '录到了声音，但未识别出可用的文字。' : 'Sound was captured, but no usable text was recognized.') }
+        : { phase: 'done', text: value };
+    } catch (error) {
+      if (generation === this.micTestGeneration) this.micTestState = { phase: 'error', text: String(error) };
+    }
+  }
+
+  private cancelMicTest(): void {
+    const test = this.micTest;
+    this.micTestGeneration++;
+    this.micTest = null;
+    this.micTestState = { phase: 'idle' };
+    if (test) {
+      clearTimeout(test.timer);
+      this.server.sendPet({ t: 'prefs', mic: this.micOpen() });
+    }
   }
 
   /* ---------- talk key ---------- */
 
+  private segmentConfig() {
+    const { mic, segment } = this.cfg.asr;
+    // Deliberate recordings keep quiet syllables and pauses; only automatic capture uses VAD.
+    return mic.mode === 'always' ? segment : { ...segment, thresholdDb: -Infinity, minSpeechMs: 0, minUtteranceMs: Math.min(segment.minUtteranceMs, 160) };
+  }
+
   /** Audio reaches the segmenter only while this is true. */
   private gateOpen(): boolean {
-    return this.micWanted() && this.talking;
+    return this.micWanted() && !this.micTest && this.micTestState.phase !== 'decoding' && (this.talking || this.cfg.asr.mic.mode === 'always');
   }
 
   private talkHint(): string {
-    return this.language === 'zh' ? '按住 Live2D 的麦克风按钮说话，松开发送' : 'Hold the Live2D microphone button to speak. Release to send.';
+    const zh = this.appLanguage.startsWith('zh');
+    if (this.committing) return zh ? '正在转写，完成后发送' : 'Transcribing, then sending.';
+    switch (this.cfg.asr.mic.mode) {
+      case 'toggle': return this.talking
+        ? (zh ? '录音中，点麦克风结束并发送' : 'Recording. Click the microphone to stop and send.')
+        : (zh ? '点麦克风开始录音，再点一次结束并发送' : 'Click the microphone to start recording. Click again to stop and send.');
+      case 'always': return zh ? '停顿后自动发送，点麦克风暂停监听' : 'Sends after a pause. Click the microphone to pause listening.';
+      default: return zh ? '按住麦克风说话，松开发送' : 'Hold the microphone to speak. Release to send.';
+    }
+  }
+
+  private async activateMicrophone(): Promise<void> {
+    if (this.activatingMic || !this.windowVisible() || this.cfg.asr.enabled) return;
+    const request = this.activatingMic = {};
+    try {
+      this.savePrefs({ mic: true });
+      await this.startVoiceBackend();
+      if (this.activatingMic !== request || !this.windowVisible() || !this.cfg.asr.enabled) return;
+      if (!this.micWanted()) this.opts.controls?.openVoiceSettings?.();
+    } catch (error) {
+      this.log?.warn('麦克风启动失败', { error: error instanceof Error ? error.message : String(error) });
+      if (this.activatingMic === request && this.windowVisible()) this.opts.controls?.openVoiceSettings?.();
+    } finally {
+      if (this.activatingMic === request) {
+        this.activatingMic = null;
+        this.syncPrefs();
+      }
+    }
   }
 
   private setTalking(on: boolean): void {
     if (this.talking === on) return;
     this.talking = on;
     this.voiceFrame({ type: 'gate', open: on });
-    if (!on) this.releaseMicSoon();
+    if (!on && this.cfg.asr.mic.mode === 'hold') this.releaseMicSoon();
+    if (on && this.cfg.asr.mic.mode === 'hold') this.setMicHeld(true);
+    this.server.sendPet({ t: 'prefs', mic: this.micOpen(), voice: this.voiceBrief() });
     if (!this.cfg.asr.enabled || !this.micWanted()) return;
     if (on) {
       this.listenOpen = true;
       this.tts?.stopAll();
       this.server.sendPet({ t: 'speech-stop', reason: 'voice-input' });
-      this.setMicHeld(true);
       return;
     }
     const tail = this.segmenter.flush();
@@ -2562,22 +2912,29 @@ export class DesktopPetWorld implements World {
 
   /** Cancel the current recording and discard any pending transcription. */
   private cancelSpeech(): void {
-    if (!this.talking && !this.listenOpen) return;
+    this.cancelMicTest();
+    this.cancelLiveInput();
+  }
+
+  private cancelLiveInput(): void {
+    const hadListen = this.listenOpen || this.wasSpeaking;
+    if (!this.talking && !hadListen && !this.committing) return;
     this.talking = false;
     this.setMicHeld(false);
     this.voiceFrame({ type: 'gate', open: false });
-    this.segmenter.flush();
+    this.segmenter.discard();
     this.queue.length = 0;
     this.cancels++;
     this.packer.take();
     this.committing = false;
     this.partial = '';
     this.wasSpeaking = false;
-    if (this.listenOpen) {
+    if (hadListen) {
       this.listenOpen = false;
       this.server.sendPet({ t: 'listen', phase: 'none' });
     }
-    this.log?.info('倾听气泡里点了取消,这次收音已丢弃');
+    this.server.sendPet({ t: 'prefs', mic: this.micOpen(), voice: this.voiceBrief() });
+    this.log?.info('本次收音已取消并丢弃');
   }
 
   /** Finish the local recording and deliver it when transcription settles. */
@@ -2601,6 +2958,21 @@ export class DesktopPetWorld implements World {
   }
 
   private onAudio(frame: Int16Array): void {
+    const test = this.micTest;
+    if (test) {
+      if (!this.windowVisible()) return;
+      if (this.micTestState.phase === 'opening') {
+        clearTimeout(test.timer);
+        this.micTestState = { phase: 'recording' };
+        test.timer = setTimeout(() => void this.finishMicTest(), MIC_TEST_RECORD_MS);
+      }
+      test.utterances.push(...test.segmenter.push(frame));
+      this.level = test.segmenter.level;
+      test.peak = Math.max(test.peak, this.level);
+      return;
+    }
+    if (!this.micWanted()) return;
+    this.level = rmsDb(frame);
     const open = this.gateOpen();
     if (!open) return;
     for (const utterance of this.segmenter.push(frame)) this.enqueue(utterance);
@@ -2706,6 +3078,7 @@ export class DesktopPetWorld implements World {
     if (this.committing && !upstream && !text) {
       // nothing was heard: the committed episode closes empty, unless the talk key still holds it open
       this.committing = false;
+      this.server.sendPet({ t: 'prefs', voice: this.voiceBrief() });
       if (this.listenOpen && !this.talking && !this.segmenter.active) {
         this.listenOpen = false;
         this.partial = '';
@@ -2713,7 +3086,9 @@ export class DesktopPetWorld implements World {
       }
     }
     if (text) {
+      const committed = this.committing;
       this.committing = false;
+      if (committed) this.server.sendPet({ t: 'prefs', voice: this.voiceBrief() });
       this.partial = '';
       this.listenOpen = false;
       this.counts.delivered++;
@@ -2750,7 +3125,8 @@ export class DesktopPetWorld implements World {
 
   tools(): ToolDef[] {
     const handlers: Record<string, ToolDef['handler']> = {
-      live2d_pet_status: async () => ({ text: JSON.stringify(this.availability()) }),
+      live2d_pet_status: async args => ({ text: JSON.stringify({ ...this.availability(),
+        ...(typeof args.actionId === 'string' ? {action:this.cabinWorld.actionReceipt(args.actionId) ?? this.frameworkActions.receipt(args.actionId)} : {}) }) }),
       live2d_pet_say: (args, ctx) => {
         const input = ctx.round === undefined ? undefined : this.replyInput();
         if (input?.source === DESKTOP_CHAT_SOURCE && (input.meta?.via === 'bubble' || input.type === 'desktop-pet.speech')) {
@@ -2769,6 +3145,7 @@ export class DesktopPetWorld implements World {
     const own = petToolDecls(this.appLanguage).map((decl): ToolDef => ({
       ...decl,
       handler: async (args, ctx) => this.petHidden && decl.name !== 'live2d_pet_status' && decl.name !== 'live2d_pet_say'
+        && !(decl.name === 'live2d_pet_act' && this.cabinWorld.state().phase === 'active')
         ? this.notConnected(decl.name) : handlers[decl.name](args, ctx),
       ...(decl.name === 'live2d_pet_move_to' ? { interruptible: true } : {}),
     }));
@@ -2800,6 +3177,7 @@ export class DesktopPetWorld implements World {
     }
     const target = intake?.candidate(id);
     if (!target || !this.adaptation) throw Error('模型分析暂不可用');
+    if (target.kind === 'spriter') throw Error('Spriter 动作沿用源工程，可在角色编辑台试播。');
     const message = '请用 live2d_pet_model_actions 查看候选 ' + target.id + ' 的原生资源，用 live2d_pet_prepare_model 提交动作绑定建议，方案留在工作台审阅。';
     const event = await this.push('desktop-live2d-pet.message', 'desktop-live2d-pet.chat', message, 'preempt', { meta: { via: 'chat', text: message } });
     if (!event) throw Error('当前 Coo 会话未接收分析请求，请重试');
@@ -2845,8 +3223,11 @@ export class DesktopPetWorld implements World {
     const script = typeof args.script === 'string' ? args.script : '';
     const shown = this.shownImages(args.images);
     if (!shown.ok) return { text: shown.reason, failed: true };
+    const authoredInCabin = this.inputBody().scene === 'cabin-world';
+    const authoredFigure = authoredInCabin ? this.cabinWorld.speechFigure() : this.selectedModel();
+    const vocabulary = authoredInCabin ? this.cabinVocab(authoredFigure) : this.vocab();
     const { beats, dropped } = plainText ? { beats: [{ text: script, actions: [], anchors: [] }], dropped: [] }
-      : parseScript(script, this.vocab());
+      : parseScript(script, vocabulary);
     let cues: unknown;
     if (args.cues !== undefined) {
       try { cues = parsePerformanceCues(args.cues); }
@@ -2856,26 +3237,39 @@ export class DesktopPetWorld implements World {
     if (!spoken && shown.blobs.length === 0) return { text: this.t.sayEmpty, failed: true };
     const line = beats.map(b => b.text).join('');
     const hasReply = Boolean(line || shown.blobs.length);
-    const figure = this.selectedModel();
-    const performance = {figure, scheme:lookOf(this.cfg.skin), createdAt:Date.now(), beats, ...(cues ? {cues} : {})};
+    const scheme = authoredFigure && authoredFigure !== this.selectedModel()
+      ? this.opts.figureLibrary?.settings(authoredFigure).scheme ?? '' : lookOf(this.cfg.skin);
+    const performance = {figure:authoredFigure, scheme, createdAt:Date.now(), beats, ...(cues ? {cues} : {})};
     let replyCursor: number | null = null;
     if (hasReply) {
       await this.closeActivity();
-      replyCursor = await this.record({ kind: 'say', beats: beats.map(b => ({ text: b.text, ...moodOf(b.actions, this.vocab()) })),
-         ...(figure ? {performance} : {}) }, line, shown.blobs);
+      replyCursor = await this.record({ kind: 'say', beats: beats.map(b => ({ text: b.text, ...moodOf(b.actions, vocabulary) })),
+         ...(authoredFigure ? {performance} : {}) }, line, shown.blobs);
       if (replyCursor === null) return { text: this.t.saySaveFailed, failed: true };
     }
     if (!spoken) return { text: this.t.imagesShown(shown.blobs.length, this.chat.size > 0) };
-    if (!hasReply && figure) this.chat.broadcast({ t:'performance', id:nextId('mobile-action'), performance });
+    if (!hasReply && authoredFigure) this.chat.broadcast({ t:'performance', id:nextId('mobile-action'), performance });
     const unavailable = () => hasReply ? { text: this.t.saySavedOnly } : this.notConnected('live2d_pet_say');
-    if (this.petHidden || !this.server.petConnected) return unavailable();
+    const cabinActive = this.inputBody().scene === 'cabin-world';
+    const cabinFigure = cabinActive ? this.cabinWorld.speechFigure() : null;
+    const figure = cabinActive ? cabinFigure : this.selectedModel();
+    if (!figure || (!hasReply && figure !== authoredFigure) || (!this.speechHandoff.active() &&
+      (!cabinFigure && (this.petHidden || !this.server.petConnected)))) return unavailable();
+    const sameBody = figure === authoredFigure;
     const modelGeneration = this.bodyControls.snapshot()?.modelGeneration;
     const planner = this.speechPlanner;
     let firstVoice = true;
     const planClips: string[] = [];
-    const faces = beats.map(beat => moodOf(beat.actions, this.vocab()).mood?.id ?? null);
+    const faces = beats.map(beat => moodOf(beat.actions, vocabulary).mood?.id ?? null);
     const clips = beats.map((beat, index) => {
-      const plan = firstVoice && !cues && planner?.ready() ? async (signal: AbortSignal) => {
+      const plan = sameBody && firstVoice && !cues && planner?.ready() ? async (signal: AbortSignal) => {
+        if (cabinFigure) {
+          const { editor } = await this.frameworkModel.editor(cabinFigure);
+          if (signal.aborted || this.cabinWorld.speechFigure() !== cabinFigure || !editor?.catalog) return;
+          const result = await planner.plan(beat.text, faces[index] ?? undefined, editor.catalog.resources, editor.profile, signal);
+          if (!signal.aborted && this.cabinWorld.speechFigure() === cabinFigure) return result;
+          return;
+        }
         const ownsBody = () => !signal.aborted && this.windowVisible() && (this.selectedModel()) === figure
           && this.bodyControls.snapshot()?.modelGeneration === modelGeneration;
         if (!ownsBody()) return;
@@ -2889,11 +3283,13 @@ export class DesktopPetWorld implements World {
       if (id) firstVoice = false;
       return id;
     });
-    const media = clips.some(Boolean) ? { clips, cues, faces, planClips, figure, modelGeneration } : {};
-    if (!this.server.sendPet({ t: 'say', id: nextId('s'), beats, cursor: replyCursor, ...media })) {
-      for (const id of clips) if (id) this.tts?.stop(id);
-      return unavailable();
-    }
+    const order = speechForFigure({id:nextId('s'),figure:authoredFigure ?? '',beats,cursor:replyCursor,clips,cues,cueBeat:clips.findIndex(Boolean),faces,planClips},figure);
+    if (this.speechHandoff.active()) {
+      if (!this.speechHandoff.defer(order)) {
+        for (const clip of clips) if (clip) this.tts?.stop(clip);
+        return unavailable();
+      }
+    } else if (!this.playSpeech(cabinFigure ? 'cabin' : 'desktop',order)) return unavailable();
     const now = Date.now();
     const selfSec = estimateSeconds(beats, this.cfg.window.bubbleSpeed, undefined, this.cfg.window.replyBubbleSeconds);
     const waitSec = Math.max(0, (this.busyUntil - now) / 1000);
@@ -3070,12 +3466,25 @@ export class DesktopPetWorld implements World {
 
   private async act(args: Record<string, unknown>): Promise<ToolOutcome> {
     const list = Array.isArray(args.actions) ? args.actions : typeof args.actions === 'string' ? [args.actions] : [];
-    const vocab = this.vocab();
+    const cabin = this.cabinWorld.state();
+    const inCabin = cabin.phase === 'active';
+    if (cabin.body?.kind === 'resident') return {text:this.t.actCabinResident,failed:true};
+    const cabinFigure = cabin.body?.kind === 'figure' ? cabin.body.figure : null;
+    if (inCabin && !cabinFigure) return {text:this.t.actCabinUnconfirmed,failed:true};
+    const vocab = inCabin ? this.cabinVocab(cabinFigure) : this.vocab();
     const { actions, dropped } = parseActions(list, vocab);
     if (!actions.length) return { text: this.t.actNone(dropped), failed: true };
-    if (!this.server.sendPet({ t: 'act', id: nextId('c'), actions })) return this.notConnected('live2d_pet_act');
+    const id = nextId('c');
+    if (cabinFigure) {
+      const receipt = await this.cabinWorld.enqueueAction({id,figure:cabinFigure,
+        beats:[{text:'',actions,anchors:[]}],clips:[],faces:[],planClips:[]});
+      if (receipt === 'queued') return {text:this.t.actCabinQueued(actions,dropped,id)};
+      return {text:receipt === 'rejected' ? this.t.actCabinRejected : this.t.actCabinUnconfirmed,failed:true};
+    }
+    const accepted = this.server.sendPet({ t: 'act', id, figure:this.selectedModel(), actions });
+    if (!accepted) return this.notConnected('live2d_pet_act');
     const lasting = actions.filter((a) => vocab.find((v) => v.id === a)?.lasting);
-    return { text: this.t.actReceipt(actions, lasting, dropped) };
+    return { text: this.t.actReceipt(actions, lasting, dropped, id) };
   }
 
   /* ---------- prompt ---------- */
@@ -3084,19 +3493,23 @@ export class DesktopPetWorld implements World {
     const { language, t } = this;
     const user = this.userName;
     const reply = this.opts.replyLanguage?.() ?? null;
+    const body = this.inputBody();
+    const cabinActive = body.scene === 'cabin-world';
+    const cabinResident = cabinActive && this.cabinWorld.state().body?.kind === 'resident';
+    const cabinFigure = cabinActive ? this.cabinWorld.speechFigure() : null;
     return {
       'pet.user': user,
-      'pet.vocab': vocabTable(this.vocab(), language),
-      'pet.moves': moveTable(this.moves(), language),
+      'pet.vocab': vocabTable(cabinActive ? this.cabinVocab(cabinFigure) : this.vocab(), language),
+      'pet.moves': moveTable(cabinActive ? [] : this.moves(), language),
       'pet.voice': this.cfg.asr.enabled ? t.on : t.off,
-      'pet.body': this.bodyText(this.currentPack()),
+      'pet.body': this.describeInputBody(body),
       'pet.dress': dressTable(this.libraryPacks(), language),
       'pet.self': this.selfText(),
       'pet.chat': this.opts.controls?.openChat ? t.chatPage(user) : '',
       'pet.reply': reply ? t.reply(user, reply) : '',
-      'pet.cabin': this.cabinWorld.state().phase === 'active'
-        ? language === 'zh' ? '当前身体在 Cabin World。行动前先用 cabin_status 或 cabin_look 看状态。cabin_task 的 done 才确认任务完成。对话回复继续写入 Coo 会话。'
-          : 'Your body is in Cabin World. Use cabin_status or cabin_look first. A cabin_task result of done confirms completion. Continue replying in the same Coo conversation.'
+      'pet.cabin': cabinActive
+        ? language === 'zh' ? `当前身体在小屋世界。行动前先用 cabin_status 或 cabin_look 看状态。cabin_task 返回 done 时可确认游戏活动完成。${cabinResident ? '当前使用原生住户的活动。' : '梦境动作入队后，用动作编号查询 live2d_pet_status 的播放回执。'}对话回复继续写入 Coo 会话。`
+          : `Your body is in Cabin World. Use cabin_status or cabin_look first. A cabin_task result of done confirms the activity is complete. ${cabinResident ? 'This resident uses Cabin World activities.' : 'Check a queued Figure Scape action using its ID with live2d_pet_status.'} Continue replying in the same Coo conversation.`
         : language === 'zh' ? '小屋世界的 cabin_* 工具在使用者从场景页进入后可用。' : 'Cabin World tools act only after the person enters it from the scene page.',
     };
   }
@@ -3148,7 +3561,6 @@ export class DesktopPetWorld implements World {
         socket.onClose(() => this.voiceSockets.delete(socket));
         if (panel === 'framework') this.chat.add(socket, (msg, s) => void this.onChat(msg, s, language, 'conversation'), true);
       },
-      links: this.server.port ? [{ label: c.viewInBrowser, href: this.petUrl }] : [],
       config: desktopPetConfigGroups(language),
       promptDocs: [{
         key: `worlds.${DESKTOP_PET_ID}.envPrompt`,
@@ -3168,20 +3580,30 @@ export class DesktopPetWorld implements World {
       case 'audio.ttsState': return tts.state();
       case 'audio.setTts': {
         const state = await tts.save(args[0]);
-        if (!state.enabled) { tts.stopAll(); this.server.sendPet({ t: 'speech-stop' }); }
+        if (!state.enabled) { tts.stopAll(); this.server.sendPet({ t: 'speech-stop' }); this.cabinWorld.stopSpeech('voice-disabled'); }
         return tts.state();
       }
       case 'audio.previewTts': {
-        if (this.speechRemaining() > 0) throw Error('Wait for the current speech to finish');
+        const zh = this.appLanguage.startsWith('zh');
+        if (this.speechRemaining() > 0) throw Error(zh ? '请等当前发言结束后再试听。' : 'Wait for the current speech to finish before previewing.');
         const text = typeof args[0] === 'string' ? args[0] : '';
+        const cabinFigure = this.cabinWorld.speechFigure();
+        const unavailable = zh ? '请先显示一个可试听的桌宠身体。' : 'Show a pet body before previewing its voice.';
+        if (!cabinFigure && !this.windowVisible()) throw Error(unavailable);
         const id = tts.stage(text, true);
-        if (!id) throw Error('Show Live2D and choose a configured voice service and preview text');
-        if (!this.server.sendPet({ t: 'speech-preview', id })) { tts.stop(id); throw Error('The main window is not connected'); }
+        if (!id) throw Error(zh ? '暂时无法开始试听，请检查语音服务和试听文本。' : 'Could not start the preview. Check the voice service and preview text.');
+        const accepted = cabinFigure ? this.cabinWorld.speak({id,figure:cabinFigure,
+          beats:[{text,actions:[],anchors:[]}],clips:[id],faces:[],planClips:[]})
+          : this.server.sendPet({ t: 'speech-preview', id });
+        if (!accepted) {
+          tts.stop(id);
+          throw Error(unavailable);
+        }
         return { accepted: true, id };
       }
       case 'audio.stopTts':
         if (typeof args[0] === 'string' && tts.state().playback?.id !== args[0]) return tts.state();
-        tts.stopAll(); this.server.sendPet({ t: 'speech-stop' }); return tts.state();
+        tts.stopAll(); this.server.sendPet({ t: 'speech-stop' }); this.cabinWorld.stopSpeech('stopped'); return tts.state();
       default: throw Error(this.ui.console.unknownMethod(method));
     }
   }
@@ -3191,7 +3613,19 @@ export class DesktopPetWorld implements World {
     if (panel === 'framework') {
       const presentation = this.presentationService;
       switch (method) {
+        case 'appearance.set': {
+          const id = args[0];
+          if (!isAppearancePreset(id)) throw Error('Unknown appearance preset');
+          if (appearancePreset(this.cfg.appearance) !== id) this.opts.persist({ appearance: id });
+          this.syncPrefs();
+          this.server.announceAppearance();
+          return { appearance: id };
+        }
         case 'phone.state': return this.opts.phone?.status();
+        case 'phone.configure': {
+          if (!this.opts.phone) throw Error('Figure Pet is unavailable');
+          return this.opts.phone.configure(args[0], args[1] ?? undefined);
+        }
         case 'phone.setEnabled': {
           if (!this.opts.phone || typeof args[0] !== 'boolean') throw Error('Invalid Figure Pet setting');
           return this.opts.phone.setEnabled(args[0]);
@@ -3273,9 +3707,12 @@ export class DesktopPetWorld implements World {
               } finally { release(); }
             }
           }
-          if (this.cabinWorld.state().phase === 'active') await this.cabinWorld.leave();
-          return this.presentationService.select('wallpaper', args[1], {
-            payload:wallpaper, replace:true, commit:() => this.wallpapers.select(wallpaper.id),
+          return this.transferScene('wallpaper', args[1], {
+            payload:wallpaper, replace:true, save:async () => {
+              const previous = (await this.wallpapers.state()).selected;
+              await this.wallpapers.select(wallpaper.id);
+              return async () => { await this.wallpapers.select(previous); };
+            },
           });
         }
         case 'presentation.select': return this.selectScene(args[0],args[1]);
@@ -3294,6 +3731,8 @@ export class DesktopPetWorld implements World {
           finally { this.cabinFigureImport = undefined; }
         }
         case 'cabin.configure': return this.cabinWorld.configure(args[0]);
+        case 'cabin.prepare': return this.cabinWorld.prepare();
+        case 'cabin.cancelPrepare': return this.cabinWorld.cancelPreparation();
         case 'cabin.enter': return this.enterCabin(args[0]);
         case 'cabin.leave': return this.cabinWorld.leave();
         case 'cabin.actor': return this.cabinWorld.setActor(args[0]);
@@ -3310,8 +3749,12 @@ export class DesktopPetWorld implements World {
         }
         case 'runtime.openChat':
           if (!this.windowVisible() || !this.server.sendPet({ t: 'type' })) throw Error(this.appLanguage.startsWith('zh')
-            ? '请先显示 Live2D 桌宠。' : 'Show the Live2D pet first.');
+            ? '请先显示桌宠，再打开打字框。' : 'Show the desktop pet before opening its text input.');
           return this.petState();
+        case 'runtime.openVoiceSettings':
+          if (!this.opts.controls?.openVoiceSettings) throw Error(this.appLanguage.startsWith('zh') ? '请在 Coo 里打开输入设置。' : 'Open Input settings in Coo.');
+          this.onControl('desktop-voice-settings');
+          return { opened: true };
         case 'resources.characterWardrobe': return this.characterWardrobe(args[0]);
         case 'resources.chooseWardrobe': return this.chooseCharacterWardrobe(args[0], args[1]);
         case 'resources.removeModel': return this.removeCharacter(args[0]);
@@ -3363,7 +3806,7 @@ export class DesktopPetWorld implements World {
         case 'saveModelProfile': return this.frameworkConsole.invoke('saveModel', args);
         case 'openDesktopModel': return this.openDesktopModel(args[0]);
         case 'openWindow':
-          if (this.cabinWorld.state().phase === 'active') await this.cabinWorld.leave();
+          await this.leaveCabinForScene();
           await this.prepareWindowRuntime();
           this.openWindow(typeof args[0] === 'number' ? args[0] : undefined);
           return this.petState();
@@ -3378,6 +3821,7 @@ export class DesktopPetWorld implements World {
         // the tray's "click through": kept for this run only, and sent again to a window that reconnects
         case 'setClickThrough': this.setDesktopClickThrough(args[0] === true); return this.petState();
         case 'installElectron': void this.store.electron.install(); return this.petState();
+        case 'cancelElectron': await this.store.electron.cancel(); return this.petState();
         // the Habits page's custom picks (/api/config writes no list or map): `custom` and its picks in one write, as the person's change
         case 'setWakeKinds': {
           const picked = Array.isArray(args[0]) ? args[0] as unknown[] : [];
@@ -3401,10 +3845,14 @@ export class DesktopPetWorld implements World {
     if (panel === 'voice') {
       switch (method) {
         case 'state': return this.voiceState();
+        case 'testStart': this.startMicTest(); return this.voiceState();
+        case 'testFinish': void this.finishMicTest(); return this.voiceState();
+        case 'testCancel': this.cancelMicTest(); return this.voiceState();
         case 'install': void this.installVoice(); return this.voiceState();
         case 'start': await this.startVoiceBackend(); return this.voiceState();
         case 'stop': await this.stopVoiceBackend(); return this.voiceState();
         case 'setEngine': {
+          this.cancelSpeech();
           const engine = args[0];
           if (engine === '' || engine === 'funasr' || engine === 'whisper' || engine === 'system' || engine === 'api') this.opts.persist({ asr: { engine } });
           if (this.cfg.asr.enabled) await this.startVoiceBackend();
@@ -3439,6 +3887,7 @@ export class DesktopPetWorld implements World {
         case 'setThreshold': {
           const db = args[0];
           if (typeof db === 'number' && Number.isFinite(db)) this.opts.persist({ asr: { segment: { thresholdDb: Math.max(THRESHOLD_DB_MIN, Math.min(THRESHOLD_DB_MAX, db)) } } });
+          this.syncPrefs();
           return this.voiceState();
         }
       }
@@ -3449,9 +3898,10 @@ export class DesktopPetWorld implements World {
   /** Downloads the model of `modelEngine()`, chooses that engine, and starts it when voice input is on. */
   async installVoice(): Promise<void> {
     const engine = this.modelEngine();
+    const selected = this.cfg.asr.engine;
     const slot = this.store[engine];
     if (slot.state().phase !== 'ready') await slot.install();
-    if (slot.state().phase !== 'ready') { this.syncPrefs(); return; }
+    if (slot.state().phase !== 'ready' || this.cfg.asr.engine !== selected) { this.syncPrefs(); return; }
     // downloading the model is choosing it
     if (this.engine() !== engine) this.opts.persist({ asr: { engine } });
     if (this.cfg.asr.enabled) await this.startVoiceBackend();
@@ -3493,6 +3943,7 @@ export class DesktopPetWorld implements World {
       previousModelUnavailable: !!this.cfg.skin.figure && this.cfg.skin.figure !== 'coo' && !this.selectedModel(),
       clickThrough: this.clickThrough,
       theme: this.cfg.theme,
+      appearance: appearancePreset(this.cfg.appearance),
       sound: this.quiet?.sound ?? this.cfg.sound,
       scale: this.presentationSizes()[presentation.applied ?? presentation.desired],
       presentationScales: this.presentationSizes(),
@@ -3537,24 +3988,27 @@ export class DesktopPetWorld implements World {
   voiceState(): Record<string, unknown> {
     const modelEngine = this.modelEngine();
     const model = this.store[modelEngine];
+    const modelState = model.state();
     return {
       enabled: this.cfg.asr.enabled,
       engine: this.engine(),
       engineSetting: this.cfg.asr.engine,
       systemSupported: systemRecognizerSupported(),
       server: this.backendState(),
-      model: { ...model.state(), bytes: model.bytes, engine: modelEngine },
+      model: { ...modelState, bytes: model.bytes, engine: modelEngine, reused: modelState.phase === 'ready' && modelState.path !== model.dir },
       /** The transcription service's settings; of the API Key only whether one is saved. */
       api: { ...this.transcriptionBinding().api, keySaved: !!this.transcriptionBinding().key },
       mic: this.micState,
       input: {
         deviceId: this.cfg.asr.mic.deviceId,
-        mode: 'hold',
-        openOnPress: true,
+        mode: this.cfg.asr.mic.mode,
+        openOnPress: this.cfg.asr.mic.openOnPress,
         hint: this.talkHint(),
         open: this.gateOpen(),
         devices: this.devices,
       },
+      windowVisible: this.windowVisible(),
+      test: this.micTestState,
       level: this.level,
       thresholdDb: this.cfg.asr.segment.thresholdDb,
       recent: this.heard.slice(-20),

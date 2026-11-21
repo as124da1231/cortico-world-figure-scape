@@ -50,13 +50,13 @@ export const ASK_OPTION_MAX = 40;
 export const petToolDecls = (language: Language = 'zh'): Array<Omit<ToolDef, 'handler'>> => [
   {
     name: 'live2d_pet_status', tags: ['read', 'snapshot'],
-    description: 'Checks whether your independent Live2D body is visible and ready to receive desktop speech and actions. Use when choosing which of your installed bodies to address.',
-    parameters: { type: 'object', properties: {} },
+    description: 'Read the active Figure Scape scene. Optional actionId reads an action receipt. Status completed requires a body event. Status elapsed means the estimated action interval ended. Cabin World identifies the resident in cabinWorld.body.',
+    parameters: { type: 'object', properties: { actionId: { type: 'string', description: 'Action ID returned by live2d_pet_act.' } } },
   },
   {
     name: 'live2d_pet_say',
     tags: ['speak'],
-    description: 'Save a reply to the shared conversation and play it in Figure Scape when its window is available. 【…】 plays expressions or motions before a new line; <…> plays them at a point in the line. Text and images remain in the conversation when the window is closed. The receipt reports whether playback was queued.',
+    description: 'Save a reply in Figure Scape’s conversation history and play it in Figure Scape when its window is available. 【…】 plays expressions or motions before a new line; <…> plays them at a point in the line. Text and images remain in Figure Scape’s history when the window is closed. The receipt reports whether playback was queued.',
     parameters: {
       type: 'object',
       properties: {
@@ -67,7 +67,7 @@ export const petToolDecls = (language: Language = 'zh'): Array<Omit<ToolDef, 'ha
             face: { type: 'string' }, intensity: { type: 'number', minimum: 0, maximum: 1 },
             resource: { type: 'string' }, pose: { type: 'object', additionalProperties: { type: 'number', minimum: -1, maximum: 1 } },
           }, required: ['at', 'duration'], additionalProperties: false } },
-        images: { type: 'array', items: { type: 'string' }, description: 'Images to show the person with this line, each given by the handle that starts a [blob …] line in your context. They appear on the chat page only, not in the bubble.' },
+        images: { type: 'array', items: { type: 'string' }, description: 'Images to show in Figure Scape’s conversation history, each given by the handle that starts a [blob …] line in your context.' },
       },
       required: ['script'],
     },
@@ -138,7 +138,7 @@ export const petToolDecls = (language: Language = 'zh'): Array<Omit<ToolDef, 'ha
   {
     name: 'live2d_pet_act',
     tags: ['act'],
-    description: 'Play a sequence of expressions or motions without speaking (the current figure\'s vocabulary is in the environment section). Returns at once; words marked as held until the next action stay on.',
+    description: 'Send expressions or motions without speaking. Use the returned action ID with live2d_pet_status to check playback. Use the cabin_* tools for a native Cabin World resident. Held expressions stay until the next action.',
     parameters: {
       type: 'object',
       properties: {

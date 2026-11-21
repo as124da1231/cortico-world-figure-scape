@@ -123,6 +123,7 @@ export function createTouchEditor(options: {
   function field(title: string, control: HTMLElement) {
     const label = doc.createElement('label');
     control.dataset.touchField = title;
+    control.setAttribute('aria-label', title);
     label.append(title, control);
     return label;
   }

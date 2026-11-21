@@ -349,6 +349,16 @@ function runPetHost({ url, parentPid = 0, tray: withTray = true, hideFromCapture
   /** Every click passes through while the tray says so or the second setting meets a fullscreen window. */
   let trayThrough = false, fullscreenThrough = false, capturing = false;
   const captureWindow = createCaptureWindowReader();
+  let lastCapture = -Infinity;
+  const captureHasPriority = (own, current) => {
+    const now = Date.now();
+    // Capture overlays can stop at the taskbar even when the pet window extends over it.
+    const workArea = screen.dipToScreenRect(win, display().workArea);
+    if (captureWindow(own, current, workArea)) lastCapture = now;
+    return now - lastCapture < 550;
+  };
+  // An incoming question or typing shortcut can arrive before the next foreground tick.
+  const captureBlocksKeyboard = () => capturing || !!foreground && captureHasPriority(hwndOf(win), foreground.current());
   const lockMouse = () => mouse.lock(trayThrough || fullscreenThrough || capturing);
   // the other windows, read only while the page asks (its body's pack needs them) and sent when they change:
   // their tops, and the whole windows with their ids, order and foreground flag
@@ -399,6 +409,21 @@ function runPetHost({ url, parentPid = 0, tray: withTray = true, hideFromCapture
   };
 
   const place = () => { if (win) cover(display()); };
+  let displayRecheck;
+  const placeAfterMetricsChange = (_event, changed, metrics) => {
+    const target = win;
+    place();
+    if (process.platform !== 'win32' || !target || displayId !== changed.id || !metrics.includes('scaleFactor')) return;
+    clearTimeout(displayRecheck);
+    // Windows can finish its DPI transition after Electron emits the display change.
+    displayRecheck = setTimeout(() => {
+      if (win !== target || target.isDestroyed() || displayId !== changed.id) return;
+      const current = display(), area = areaFor(current), bounds = target.getBounds();
+      if (['x', 'y', 'width', 'height'].some(key => bounds[key] !== area[key])) cover(current);
+      else tellFloor(area);
+    }, 180);
+  };
+  app.once('will-quit', () => clearTimeout(displayRecheck));
 
   /**
    * A hand showed or hid the window, so the fullscreen rule no longer owns it: a manual show while
@@ -475,14 +500,11 @@ function runPetHost({ url, parentPid = 0, tray: withTray = true, hideFromCapture
     // second, every click passes through and the page is told so. Capture
     // overlays borrow the native topmost band until their selection UI closes.
     let lastForeground = null;
-    let lastCapture = -Infinity;
     const foregroundTimer = foreground && setInterval(() => {
       if (!win) return;
       const own = hwndOf(win), cur = foreground.current();
       const before = fullscreenThrough || capturing;
-      const now = Date.now();
-      if (captureWindow(own,cur)) lastCapture = now;
-      const captureNow = now - lastCapture < 550;
+      const captureNow = captureHasPriority(own, cur);
       if (captureNow !== capturing) {
         capturing = captureNow;
         win.setAlwaysOnTop(!capturing, level);
@@ -501,7 +523,11 @@ function runPetHost({ url, parentPid = 0, tray: withTray = true, hideFromCapture
       lastForeground = cur;
       if (cur !== own) win.setAlwaysOnTop(true, level);
     }, FOREGROUND_EVERY_MS);
-    win.on('closed', () => { appStore?.stop(); clearInterval(cursorTimer); clearInterval(foregroundTimer); watchWindows(false); win = null; });
+    win.on('closed', () => {
+      appStore?.stop(); clearInterval(cursorTimer); clearInterval(foregroundTimer); watchWindows(false);
+      win = null; lastCapture = -Infinity; capturing = fullscreenThrough = autoHidden = false; lent = 0n;
+      lockMouse();
+    });
     // page console lines reach the World's log through stdout
     win.webContents.on('console-message', (e) => { if (e.level !== 'debug') console.log(`[page:${e.level}] ${e.message}`); });
     win.webContents.on('did-fail-load', (_e, code, desc, failedUrl) => console.log(`[page:error] 加载失败 ${code} ${desc} ${failedUrl}`));
@@ -516,7 +542,7 @@ function runPetHost({ url, parentPid = 0, tray: withTray = true, hideFromCapture
   onPet('pet:interactive', (_e, on) => { if (!shape) mouse.ask(on); });
   onPet('pet:inputRects', (_e, rects) => { if (shape && Array.isArray(rects)) mouse.ask(rects); });
   onPet('pet:focus', () => {
-    if (!win || capturing) return;
+    if (!win || captureBlocksKeyboard()) return;
     // Explicit text input activates this menu-bar process as well as its window.
     if (process.platform === 'darwin') app.focus({ steal: true });
     win.focus();
@@ -524,7 +550,7 @@ function runPetHost({ url, parentPid = 0, tray: withTray = true, hideFromCapture
   /** The window that had the keyboard before a question took it; it gets it back afterwards. */
   let lent = 0n;
   onPet('pet:grabFocus', () => {
-    if (!win || !win.isVisible() || process.platform === 'darwin') return;
+    if (!win || !win.isVisible() || process.platform === 'darwin' || captureBlocksKeyboard()) return;
     if (foreground) {
       const own = hwndOf(win), cur = foreground.current();
       if (cur !== own && foreground.give(own)) lent = cur;
@@ -534,7 +560,7 @@ function runPetHost({ url, parentPid = 0, tray: withTray = true, hideFromCapture
   onPet('pet:releaseFocus', () => {
     const back = lent;
     lent = 0n;
-    if (!win) return;
+    if (!win || captureBlocksKeyboard()) return;
     // someone clicked elsewhere meanwhile: the keyboard is already where they want it
     if (foreground) { if (back && foreground.current() === hwndOf(win)) foreground.give(back); }
     else if (win.isFocused()) win.blur();
@@ -597,7 +623,7 @@ function runPetHost({ url, parentPid = 0, tray: withTray = true, hideFromCapture
     // requestingOrigin ends with '/'; a check that fails leaves the page one input with no id or label
     session.defaultSession.setPermissionCheckHandler((wc, permission, requestingOrigin) => permission === 'media' && wc === win?.webContents && ours(requestingOrigin));
     create();
-    screen.on('display-metrics-changed', place);
+    screen.on('display-metrics-changed', placeAfterMetricsChange);
     screen.on('display-added', place);
     screen.on('display-removed', place);
     if (!withTray) return;

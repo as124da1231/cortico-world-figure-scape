@@ -17,15 +17,6 @@ importers:
       fflate:
         specifier: 0.8.3
         version: 0.8.3
-      figure-scape-cabin-1of3:
-        specifier: 0.1.0-dev.2
-        version: 0.1.0-dev.2
-      figure-scape-cabin-2of3:
-        specifier: 0.1.0-dev.2
-        version: 0.1.0-dev.2
-      figure-scape-cabin-3of3:
-        specifier: 0.1.0-dev.2
-        version: 0.1.0-dev.2
       jpeg-js:
         specifier: ^0.4.4
         version: 0.4.4
@@ -44,6 +35,9 @@ importers:
       qrcode:
         specifier: 1.5.4
         version: 1.5.4
+      saxes:
+        specifier: 6.0.0
+        version: 6.0.0
       sherpa-onnx-node:
         specifier: 1.13.8
         version: 1.13.8
@@ -716,24 +710,6 @@ packages:
 
   fflate@0.8.3:
     resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
-
-  figure-scape-cabin-1of3@0.1.0-dev.2:
-    resolution: {integrity: sha512-av7xxbLga88GLLyIYLbE8gC7zUE2WBIjB4Zfhlest0qMqfp1aOfooAFJQZhQzVJklo3nzepnjGFzrhVHmZcvSw==}
-    engines: {node: '>=22'}
-    cpu: [x64]
-    os: [win32]
-
-  figure-scape-cabin-2of3@0.1.0-dev.2:
-    resolution: {integrity: sha512-x2uPHtKfzI87Ez+c4LjdTdse4oevvg3pZgHTqvipvRXa3oSJAY1bja7dorDzKAtse+ncwofCLBZPNOw0nlixug==}
-    engines: {node: '>=22'}
-    cpu: [x64]
-    os: [win32]
-
-  figure-scape-cabin-3of3@0.1.0-dev.2:
-    resolution: {integrity: sha512-9AF6IifGINSa2ug3aKTHReABfW7Y3oYDkJa43YZ0sjd4W+6puKJkds3gHya3Kd0lH2Xa/qiVJmEoiFbNcFsM3A==}
-    engines: {node: '>=22'}
-    cpu: [x64]
-    os: [win32]
 
   find-up@4.1.0:
     resolution: {integrity: sha512-PpOwAdQ/YlXQ2vj8a3h8IipDuYRi3wceVQQGYWxNINccq40Anw7BlsEXCMbt1Zt+OLA6Fq9suIpIWD0OsnISlw==}
@@ -1709,12 +1685,6 @@ snapshots:
       picomatch: 4.0.7
 
   fflate@0.8.3: {}
-
-  figure-scape-cabin-1of3@0.1.0-dev.2: {}
-
-  figure-scape-cabin-2of3@0.1.0-dev.2: {}
-
-  figure-scape-cabin-3of3@0.1.0-dev.2: {}
 
   find-up@4.1.0:
     dependencies:

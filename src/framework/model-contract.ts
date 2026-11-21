@@ -1,24 +1,28 @@
 import type { TouchProfile } from '../../web/framework/touch-geometry.js';
 
 export type CharacterTask = 'framing' | 'bindings' | 'wardrobe' | 'touch' | 'behavior' | 'mouth' | 'source';
+export type CharacterOrigin = 'live2d-model' | 'figure-pack' | 'spriter' | 'cabin-world';
 export interface CharacterEditorSource {
   id: string;
   sourceId: string;
   kind: 'live2d-model' | 'figure-pack';
+  origin: CharacterOrigin;
+  builtin?: boolean;
   tasks: CharacterTask[];
 }
 /** A Figure pack's user preferences. The empty object uses the author defaults. */
-export interface FigureSettings { scheme?: string; touch?: TouchProfile }
-export type FigureSettingsPatch = { scheme?: string | null; touch?: TouchProfile | null };
+export interface FigureSettings { scheme?: string; touch?: TouchProfile; visual?: ModelProfile['visual'] }
+export type FigureSettingsPatch = { scheme?: string | null; touch?: TouchProfile | null; visual?: ModelProfile['visual'] | null };
 type Names = Record<string, string>;
 export interface FigureEditorState {
   character: CharacterEditorSource & { kind: 'figure-pack' };
   name: string;
   author?: string;
   axes: Array<{ id: string; name: Names; options: Array<{ id: string; name: Names }> }>;
-  presets: Array<{ id: string; name: Names }>;
-  actions: Array<{ id: string; kind: 'expression' | 'motion'; names: Record<string, string[]> }>;
+  presets: Array<{ id: string; name: Names; pick?: Record<string, string> }>;
+  actions: Array<{ id: string; kind: 'expression' | 'motion'; names: Record<string, string[]>; about?: Record<string, string> }>;
   current: string;
+  worn?: string;
   active: boolean;
   settings: FigureSettings;
   revision: string;
@@ -28,6 +32,7 @@ export interface FigureSaveResult {
   settings: FigureSettings;
   revision: string;
   applied: boolean;
+  worn?: string;
   error?: string;
 }
 

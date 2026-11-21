@@ -75,7 +75,12 @@ export function modelServicesPanel(ctx: PageContext, notify: (text: string, kind
   const useName = (use: ModelUse) => t(...names[use]);
 
   function providerLabel(id: string) { return state?.providers.find(item => item.id === id)?.name ?? ''; }
-  function select(id: string) { selected = id; filter.value = ''; render(); }
+  function select(id: string) {
+    if (id === selected) return;
+    selected = id;
+    filter.value = '';
+    render();
+  }
   async function mutation(method: string, args: unknown[], inDialog = false) {
     if (pending) return false;
     pending = true; submit.disabled = true; settings.setAttribute('aria-busy', 'true');
@@ -225,9 +230,10 @@ export function modelServicesPanel(ctx: PageContext, notify: (text: string, kind
       draw();
     } catch (error) { if (result.isConnected) dialogStatus.textContent = errorText(error); }
   }
-  function openTest(model: Model) {
+  function openTest(model: Model, retryUse?: ModelUse) {
     const purpose = c.node('select'); purpose.name = 'use';
     purpose.append(...model.uses.map(use => makeOption(use, useName(use))));
+    if (retryUse) purpose.value = retryUse;
     resetForm(t('测试模型', 'Test model'), [c.node('p', providerLabel(model.providerId) + ' / ' + modelName(model)),
       c.field(t('测试用途', 'Test capability'), purpose)], async () => {
       pending = true; submit.disabled = true;
@@ -244,7 +250,8 @@ export function modelServicesPanel(ctx: PageContext, notify: (text: string, kind
       } catch (error) { if (purpose.isConnected) dialogStatus.textContent = errorText(error); }
       finally { pending = false; submit.disabled = false; }
     });
-    submit.textContent = t('开始测试', 'Start test');
+    if (retryUse) dialogStatus.textContent = model.tests[retryUse]?.message || t('测试失败', 'Test failed');
+    submit.textContent = retryUse ? t('重试测试', 'Retry test') : t('开始测试', 'Start test');
   }
   function openLocalPreview(model: Model) {
     const text = c.node('input');
@@ -315,11 +322,21 @@ export function modelServicesPanel(ctx: PageContext, notify: (text: string, kind
     modelRows.replaceChildren(...found.map(model => {
       const row = c.node('div', '', 'studio-model-row'), copy = c.node('div'), controls = c.node('div', '', 'studio-inline');
       const active = selectedUses(model.id);
-      const tests = Object.entries(model.tests).flatMap(([use, result]) => result ? [useName(use as ModelUse) + ' ' + (result.ok ? '✓' : '!')] : []);
+      const failedUse = model.uses.find(use => model.tests[use]?.ok === false);
+      const tests = model.uses.flatMap(use => {
+        const result = model.tests[use];
+        return !result ? [] : result.ok ? [useName(use) + ' ✓']
+          : [useName(use) + ' · ' + (result.message || t('测试失败', 'Test failed'))];
+      });
       const useLabels = model.uses.map(use => useName(use) + (active.includes(use) ? t('（使用中）', ' (in use)') : ''));
-      copy.append(c.node('strong', modelName(model)), c.node('small', [...useLabels, ...tests].join(' · ')));
+      const details = c.node('small', (failedUse ? [...tests, ...useLabels] : [...useLabels, ...tests]).join(' · '), 'studio-model-test-details');
+      if (failedUse) {
+        details.dataset.failed = 'true';
+        details.tabIndex = 0;
+      }
+      copy.append(c.node('strong', modelName(model)), details);
       if (currentProvider()?.protocol === localSovits) controls.append(c.button(t('试听','Preview'), () => openLocalPreview(model)));
-      controls.append(c.button(t('测试', 'Test'), () => openTest(model)), c.button(t('编辑', 'Edit'), () => editModel(currentProvider()!, model)),
+      controls.append(c.button(failedUse ? t('重试测试', 'Retry test') : t('测试', 'Test'), () => openTest(model, failedUse)), c.button(t('编辑', 'Edit'), () => editModel(currentProvider()!, model)),
         c.button(t('移除', 'Remove'), () => remove(t('移除模型', 'Remove model'), active.length
           ? t('请先在上方替换或解除这些用途', 'Replace or clear these assignments first') + ' · ' + active.map(useName).join(' / ')
           : modelName(model), 'services.removeModel', model.id)));
@@ -354,9 +371,12 @@ export function modelServicesPanel(ctx: PageContext, notify: (text: string, kind
       const model = modelFor(choice.value);
       if (model) {
         const tested = model.tests[use];
-        const result = c.node('span', tested === undefined ? t('未测试','Not tested') : tested.ok ? t('测试通过','Test passed') : t('测试失败','Test failed'),'studio-use-test');
+        const result = tested?.ok === false
+          ? c.button(t('查看失败原因', 'Details on failure'), () => openTest(model, use))
+          : c.node('span', tested ? t('测试通过', 'Test passed') : t('未测试', 'Not tested'));
+        result.classList.add('studio-use-test');
+        if (result instanceof HTMLButtonElement) result.classList.add('studio-use-test-action');
         result.dataset.status = tested === undefined ? 'unknown' : tested.ok ? 'ready' : 'error';
-        if (tested?.message) result.title = tested.message;
         identity.append(result);
       }
       choice.addEventListener('change', () => {
@@ -373,12 +393,20 @@ export function modelServicesPanel(ctx: PageContext, notify: (text: string, kind
   }
   function render() {
     if (!state) return;
+    const focusedProvider = (c.doc.activeElement as HTMLElement | null)?.dataset.providerId;
     if (!currentProvider()) selected = state.providers[0]?.id ?? '';
     drawAssignments();
     const provider = currentProvider();
     left.replaceChildren(...state.providers.map(item => {
-      const button = c.button(item.name, () => select(item.id)); button.setAttribute('aria-pressed', String(item.id === selected)); return button;
+      const button = c.button(item.name, () => select(item.id));
+      button.dataset.providerId = item.id;
+      button.setAttribute('aria-pressed', String(item.id === selected));
+      return button;
     }));
+    if (focusedProvider) {
+      const restore = state.providers.some(item => item.id === focusedProvider) ? focusedProvider : selected;
+      [...left.querySelectorAll('button')].find(button => button.dataset.providerId === restore)?.focus({preventScroll:true});
+    }
     selectProvider.replaceChildren(...state.providers.map(item => makeOption(item.id, item.name)));
     selectProvider.value = selected;
     selectProvider.hidden = !provider;
@@ -403,22 +431,30 @@ export function modelServicesPanel(ctx: PageContext, notify: (text: string, kind
   const addProvider = c.button(t('添加提供商', 'Add provider'), () => editProvider(), true);
   addProvider.disabled = true;
   const readRetry = c.button(t('重新读取', 'Reload'), () => void read());
+  const readStatus = c.status();
   readRetry.hidden = true;
   providerActions.append(readRetry, addProvider);
+  settingsHeader.after(readStatus);
   async function read() {
+    if (readRetry.disabled) return;
+    const timeout = AbortSignal.timeout(10_000);
     readRetry.disabled = true;
+    readStatus.textContent = '';
     try {
-      state = await c.call<ServiceState>('services.state');
+      const next = await c.call<ServiceState>('services.state', [], timeout);
       if (signal.aborted) return;
+      state = next;
       readRetry.hidden = true;
       addProvider.disabled = false;
       render();
     }
     catch (error) {
       if (signal.aborted) return;
-      drawAssignments(t('加载失败', 'Could not load'));
+      if (!state) drawAssignments(t('加载失败', 'Could not load'));
       readRetry.hidden = false;
-      notify(errorText(error));
+      readStatus.textContent = timeout.aborted
+        ? t('读取模型服务超时。可以重新读取。', 'Model services did not respond in time. Reload to retry.')
+        : errorText(error);
     } finally {
       readRetry.disabled = false;
     }

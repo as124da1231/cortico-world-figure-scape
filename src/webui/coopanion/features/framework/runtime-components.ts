@@ -1,9 +1,9 @@
 import type { PageContext } from '../../base/page.ts';
 import { errorText, studioControls, studioText as t } from './controls.ts';
 
-type Sdk = { ok: boolean; local: boolean; reusable: boolean; version: string; bytes: number; consentAt: number | null; running: boolean; official: string; messages: string[] };
+export type Sdk = { ok: boolean; local: boolean; reusable: boolean; version: string; bytes: number; consentAt: number | null; running: boolean; official: string; messages: string[] };
 
-export function runtimeComponents(ctx: PageContext, version: string) {
+export function runtimeComponents(ctx: PageContext) {
   const c = studioControls(ctx);
   const license = c.dialog(t('须知', 'Notice'), 'studio-license-dialog');
   let sdkState: Sdk | null = null, licenseReading = 0, sdkWorking = false;
@@ -39,15 +39,8 @@ export function runtimeComponents(ctx: PageContext, version: string) {
   links.append(official);
   licenseRow.append(sdkStatus, links);
   licenseSummary.append(c.node('strong', 'Live2D'), licenseRow);
-  let onReturn: (() => void) | undefined;
-  const summaryTitle = () => onReturn ? t('组件与许可', 'Components and licenses') : t('须知', 'Notice');
-  const goBack = c.button(t('返回运行详情', 'Back to runtime details'), () => {
-    license.element.close();
-    onReturn?.();
-  });
-  goBack.classList.add('studio-runtime-notice-back');
-  goBack.hidden = true;
-  summaryPage.append(goBack, c.node('p', 'v' + version, 'studio-notice-version'), c.node('p', t('首次加载需要在本机准备 Live2D 运行组件。', 'The first load requires the local Live2D runtime.')), licenseSummary, install, sdkProgress, sdkFeedback);
+  const summaryTitle = () => t('Live2D 组件与许可', 'Live2D components and licenses');
+  summaryPage.append(c.node('p', t('首次加载需要在本机准备 Live2D 运行组件。', 'The first load requires the local Live2D runtime.')), licenseSummary, install, sdkProgress, sdkFeedback);
   license.body.append(summaryPage);
 
   function renderSdk(next: Sdk | null) {
@@ -67,10 +60,8 @@ export function runtimeComponents(ctx: PageContext, version: string) {
     if (next?.running && next.messages.length) sdkFeedback.textContent = next.messages.at(-1)!;
   }
 
-  async function openLicense(backToDetails?: () => void) {
+  async function openLicense() {
     if (!license.open()) return;
-    onReturn = backToDetails;
-    goBack.hidden = !onReturn;
     license.heading.textContent = summaryTitle();
     license.body.replaceChildren(summaryPage);
     license.body.scrollTop = 0;

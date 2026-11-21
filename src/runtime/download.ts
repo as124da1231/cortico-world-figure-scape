@@ -20,10 +20,11 @@ export async function downloadFile(url: string, dest: string, options: DownloadO
   const counter = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
       done += chunk.length;
-      options.onProgress?.(done, total);
+      try { options.onProgress?.(done, total); }
+      catch (error) { callback(error as Error); return; }
       callback(null, chunk);
     },
   });
   mkdirSync(dirname(dest), { recursive: true });
-  await pipeline(Readable.fromWeb(res.body as import('node:stream/web').ReadableStream), counter, createWriteStream(dest));
+  await pipeline(Readable.fromWeb(res.body as import('node:stream/web').ReadableStream), counter, createWriteStream(dest), { signal: options.signal });
 }

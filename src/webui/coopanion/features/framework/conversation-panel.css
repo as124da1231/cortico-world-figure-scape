@@ -2,10 +2,11 @@
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   width: min(100%, 880px);
-  height: min(680px, calc(100dvh - 195px));
-  min-height: 260px;
+  height: min(680px, 100%);
+  min-height: 0;
   margin: 0 auto;
   padding: 18px var(--studio-gutter);
+  overflow: auto;
   color: var(--studio-text);
   font-family: var(--studio-font);
 }
@@ -50,4 +51,4 @@
 .studio-conversation-attachments { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; }
 .studio-conversation-error { grid-column: 1 / -1; color: var(--studio-alert); font-size: 13px; margin: 0; }
 .studio-conversation-error:empty, .studio-conversation [hidden] { display: none; }
-@media (max-height: 560px) { .studio-conversation { height: calc(100dvh - 145px); padding-block: 10px; } }
+@media (max-height: 560px) { .studio-conversation { padding-block: 10px; } }

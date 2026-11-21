@@ -11,8 +11,10 @@ const PRIORITY = { face: 1, gesture: 2, command: 3 };
 export function nativeBindingDuration(binding,resources){
  const resource=resources.find(r=>r.id===binding.resource);if(!resource)return 1;
  if(resource.kind!=='motion')return resource.seconds||1;
- const release=resource.classification==='pose'?resources.find(r=>r.id===binding.release):null;
- return (resource.seconds||1)+(release?POSE_HOLD+(release.seconds||1):0)+MOTION_OUT;
+ const pose=resource.classification==='pose';
+ const release=pose?resources.find(r=>r.id===binding.release):null;
+ const hold=pose?POSE_HOLD:0, releaseTime=release?(release.seconds||1):0;
+ return (resource.seconds||1)+hold+releaseTime+MOTION_OUT;
 }
 
 // Merge motion layers before writing parameters. Two successive partial writes
@@ -145,8 +147,7 @@ function createPlayer(resources, initial, failures, warn) {
   outgoing = null;
   return values;
  }
- return {
-  validateBindings(next){
+ function validateBindings(next, audition = false) {
    if(!Array.isArray(next))throw Error('Invalid native bindings');
    const seen=new Set();
    for(const b of next){
@@ -156,15 +157,17 @@ function createPlayer(resources, initial, failures, warn) {
     if(b.nativeOnly&&resource.kind!=='motion')throw Error('Animation-only requires a motion');
     validateExpressionOverlays({resources:[...resources.values()]},b.resource,b.overlays);
     if(b.release&&(!release||release.kind!=='motion'||release.classification==='appearance'||resource.kind!=='motion'))throw Error('Release motion is unavailable');
-    if(resource.classification==='pose'&&!release)throw Error('Pose binding needs a release motion');
+    if(resource.classification==='pose'&&!release&&!audition)throw Error('Pose binding needs a release motion');
    }
-  },
-  previewPlayer(binding) {
-   this.validateBindings([binding]);
+ }
+ return {
+  validateBindings: next => validateBindings(next),
+  previewPlayer(binding, audition = false) {
+   validateBindings([binding], audition);
    return createPlayer(resources, [structuredClone(binding)], [], warn);
   },
   rebind(next){
-   this.validateBindings(next);
+   validateBindings(next);
    bindings.clear();for(const b of next)bindings.set(b.word,structuredClone(b));
    // Preserve an in-flight motion (including its release) and crossfade the
    // currently displayed expression into its newly assigned combination.

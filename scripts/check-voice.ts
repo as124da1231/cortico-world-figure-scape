@@ -15,7 +15,7 @@ import { isLanguage } from 'cortico/core/language.ts';
 import { DESKTOP_PET_DEFAULTS } from '../src/config.ts';
 import { DesktopPetWorld } from '../src/world.ts';
 import { FakeHost } from '../tests/helpers/fake-host.ts';
-import { FakePage } from '../tests/helpers/page.ts';
+import { openVoiceWindow } from '../tests/helpers/voice-window.ts';
 
 const [modelsDir, wavFile, language = 'zh'] = process.argv.slice(2);
 if (!modelsDir || !wavFile || !isLanguage(language)) throw new Error('usage: check-voice.ts <models dir> <wav> [app language]');
@@ -34,6 +34,7 @@ function readWav(file: string): Int16Array {
 const cfg = structuredClone(DESKTOP_PET_DEFAULTS);
 Object.assign(cfg, { enabled: true, port: 0 });
 cfg.window.enabled = false;
+cfg.asr.enabled = true;
 cfg.asr.mic.mode = 'always';
 const world = new DesktopPetWorld({ cfg, timezone: 'Asia/Shanghai', persist: () => {}, runtimesRoot: () => mkdtempSync(join(tmpdir(), 'pet-check-')), modelsDir: () => modelsDir, language: () => language });
 const host = new FakeHost();
@@ -41,7 +42,11 @@ await world.start(host);
 const t0 = Date.now();
 await world.installVoice();
 console.log('model', JSON.stringify(world.voiceState().model), 'server', JSON.stringify(world.voiceState().server), `${Date.now() - t0} ms`);
-const page = await FakePage.open(world.petUrl.replace(/\/pet$/, ''));
+const page = await openVoiceWindow(world);
+const startDeadline = Date.now() + 5000;
+while ((world.voiceState().server as { phase?: string } | null)?.phase !== 'running' && Date.now() < startDeadline) {
+  await new Promise(resolve => setTimeout(resolve, 50));
+}
 const shown: string[] = [];
 void (async () => {
   for (;;) {

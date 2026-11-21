@@ -81,6 +81,8 @@ describe('figure packages in the direct library', () => {
       await library.save(id,{scheme:'blue'}, originalRevision);
       const libraryAfterRestart = createFigureLibrary(join(temp,'library'));
       expect(libraryAfterRestart.settings(id)).toEqual({scheme:'blue'});
+      await expect(libraryAfterRestart.save(id,{visual:{hue:360,brightness:1}})).rejects.toThrow('Invalid model visual');
+      await libraryAfterRestart.save(id,{visual:{hue:35,brightness:.82}});
       expect(await readFile(join(directory,'author.json'))).toEqual(Buffer.from(files['author.json']));
       expect(libraryAfterRestart.asset(id,'../profiles/'+id+'.json')).toBeNull();
 
@@ -92,7 +94,7 @@ describe('figure packages in the direct library', () => {
       try {
         await server.start();
         const descriptor = await fetch(server.origin + '/api/bodies/' + id).then(response => response.json());
-        expect(descriptor).toMatchObject({kind:'figure-pack',entry:'body.mjs',model:'author.json',figureSettings:{scheme:'blue'}});
+        expect(descriptor).toMatchObject({kind:'figure-pack',entry:'body.mjs',model:'author.json',figureSettings:{scheme:'blue',visual:{hue:35,brightness:.82}}});
         expect(JSON.stringify(descriptor)).not.toContain(directory);
         const frame=await fetch(server.origin+'/model-frame?model='+id);
         expect(frame.headers.get('content-security-policy')).toContain('/figure-assets/'+id+'/');
@@ -102,9 +104,9 @@ describe('figure packages in the direct library', () => {
         expect((await fetch(server.origin+'/api/bodies/'+id,{headers:{origin:'null'}})).status).toBe(403);
       } finally { await server.stop(); }
       await expect(libraryAfterRestart.save(id, { scheme: null }, originalRevision)).rejects.toThrow('角色配置已更新');
-      expect(libraryAfterRestart.settings(id)).toEqual({scheme:'blue'});
+      expect(libraryAfterRestart.settings(id)).toEqual({scheme:'blue',visual:{hue:35,brightness:.82}});
       const changedRevision = libraryAfterRestart.revisionOf(libraryAfterRestart.settings(id));
-      await libraryAfterRestart.save(id, { scheme: null, touch: null }, changedRevision);
+      await libraryAfterRestart.save(id, { scheme: null, touch: null, visual: null }, changedRevision);
       expect(libraryAfterRestart.settings(id)).toEqual({});
       expect(libraryAfterRestart.revisionOf(libraryAfterRestart.settings(id))).toBe(originalRevision);
       expect(await readFile(libraryAfterRestart.asset(id,'author.json')!)).toEqual(Buffer.from(files['author.json']));

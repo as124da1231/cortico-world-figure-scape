@@ -281,7 +281,7 @@ const ru: Translation<PetText> = {
   windowReason: {
     badHostEnv: (env: string) => `${env} — не JSON-массив строк`,
     noElectronFile: (file: string) => `Исполняемый файл Electron не найден: ${file}`,
-    noElectron: 'Нет доступного Electron: установите среду выполнения окна на панели питомца или укажите исполняемый файл Electron в конфигурации',
+    noElectron: 'Компонент окна отсутствует. Установите его в разделе «Engines → Pet window».',
     startFailed: (why: string) => `Не удалось запустить: ${why}`,
     closed: 'Окно закрыто',
     exited: (code: number | null) => `Процесс окна завершился (код выхода ${code})`,

@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { createSpeechPresentation } from '../web/framework/speech.js';
 // @ts-expect-error browser module
 import { createSpeech } from '../web/speech.js';
+// @ts-expect-error browser module
+import { createCabinSpeech } from '../web/framework/cabin-speech.js';
 
 describe('speech presentation contract', () => {
  it('keeps bubble progress with the audio clock and returns to text on failure', () => {
@@ -40,4 +42,74 @@ describe('speech presentation contract', () => {
   expect(speech.snapshot()).toMatchObject({generation:3,error:null,scheduledSources:0});
   speech.stop();vi.unstubAllGlobals();
  });
+});
+
+it('plays queued Cabin beats on their confirmed body, deduplicates and releases pending clips on exit', () => {
+  let receive: (message: unknown) => void = () => {};
+  let progress = {mode:'waiting',shown:0,done:false};
+  const report = vi.fn(), unsubscribe = vi.fn();
+  const body = {pack:'resident',words:['happy','wink'],layout:{},do:vi.fn(),set:vi.fn(),speech:vi.fn()};
+  const shared = {start:vi.fn(),stop:vi.fn(),dispose:vi.fn(),tick:vi.fn(),position:()=>1.25,progress:()=>progress};
+  const player = createCabinSpeech({body:()=>body,transport:{report,subscribe(callback:typeof receive){receive=callback;return unsubscribe;}},
+    createSpeech:()=>shared});
+  player.mount({vocab:[{id:'happy',seconds:.01},{id:'wink',seconds:.01},{id:'declared-only',seconds:.01}]},'current-body');
+  expect(report).toHaveBeenCalledWith({type:'body-capabilities',figure:'resident',generation:'current-body',words:['happy','wink'],wordSource:'renderer'});
+  const beat = {text:'你好',actions:['happy'],anchors:[{at:2,actions:['wink']}]};
+  const take = (id: string, figure = 'resident') => ({type:'speech-play',generation:'current-body',speech:{id,figure,beats:[beat],clips:[id],faces:['happy'],planClips:[id]}});
+  const expired = { ...take('stale-body'),generation:'former-body',actionDeadline:Date.now()+1000 };
+  receive(expired);
+  expect(report).toHaveBeenCalledWith({type:'speech-accepted',id:'stale-body',generation:'former-body',accepted:false});
+  const unsupported = take('declared');
+  receive({...unsupported,actionDeadline:Date.now()+1000,speech:{...unsupported.speech,beats:[{...beat,actions:['declared-only']}]}});
+  expect(report).toHaveBeenCalledWith({type:'speech-accepted',id:'declared',generation:'current-body',accepted:false});
+  receive(take('old','other'));
+  expect(report).toHaveBeenCalledWith({id:'old',status:'cancelled',reason:'target-unavailable'});
+  receive(take('current'));
+  receive(take('current'));
+  receive(take('next'));
+  player.tick(.016);
+  expect(shared.start).toHaveBeenCalledExactlyOnceWith(beat,expect.objectContaining({clip:'current',face:'happy',wantsPlan:true}));
+  expect(report).toHaveBeenCalledWith({type:'speech-progress',rows:[
+    expect.objectContaining({id:'current', clip:'current', offset:1.25, audio:true, leading:true}),
+    expect.objectContaining({id:'next', clip:'next', offset:0, leading:false}),
+  ]});
+  player.tick(.016);
+  expect(body.do).toHaveBeenCalledExactlyOnceWith('happy');
+  progress = {mode:'audio',shown:2,done:true};
+  player.tick(.016);
+  player.tick(.016);
+  expect(body.do).toHaveBeenLastCalledWith('wink');
+  expect(shared.start.mock.calls.map(([,options])=>options.clip)).toEqual(['current','next']);
+  receive(take('pending'));
+  player.dispose();
+  expect(shared.stop).toHaveBeenLastCalledWith('scene-closed');
+  expect(report).toHaveBeenCalledWith({id:'pending',status:'cancelled',reason:'scene-closed'});
+  expect(unsubscribe).toHaveBeenCalledOnce();
+});
+
+it('reports Cabin action completion and interrupts standalone orders during speech handoff', () => {
+  let receive: (message: unknown) => void = () => {};
+  const report = vi.fn();
+  const word = 'wink';
+  const body = {pack:'resident',words:[word],layout:{},do:vi.fn(),set:vi.fn(),speech:vi.fn()};
+  const player = createCabinSpeech({body:()=>body,transport:{report,subscribe(callback:typeof receive){receive=callback;return () => {}; }},
+    createSpeech:()=>({start:vi.fn(),stop:vi.fn(),tick:vi.fn(),dispose:vi.fn(),position:()=>null,take:()=>null,progress:()=>({mode:'text'})})});
+  const generation = 'body';
+  player.mount({vocab:[{id:word,seconds:.01}]},generation);
+  function enqueue(id:string) {
+    receive({type:'speech-play',generation,actionDeadline:Date.now()+1000,
+      speech:{id,figure:'resident',beats:[{text:'',actions:[word],anchors:[]}],clips:[],faces:[],planClips:[]}});
+  }
+  enqueue('first');
+  enqueue('next');
+  player.tick(.001);
+  player.tick(.001);
+  player.event('done',{word});
+  expect(report).toHaveBeenCalledWith({type:'body-action',id:'first',generation,status:'running'});
+  expect(report).toHaveBeenCalledWith({type:'body-action',id:'first',generation,status:'completed',completion:'body-event'});
+  receive({type:'speech-take',request:'handoff',deadline:Date.now()+1000});
+  expect(report).toHaveBeenCalledWith({type:'body-action',id:'next',generation,status:'interrupted',reason:'scene-handoff'});
+  expect(report).toHaveBeenCalledWith({type:'speech-checkpoint',request:'handoff',rows:[]});
+  expect(body.do).toHaveBeenCalledExactlyOnceWith(word);
+  player.dispose();
 });

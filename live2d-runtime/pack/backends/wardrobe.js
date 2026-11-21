@@ -27,7 +27,9 @@ export function wardrobeConfig(catalog,groups=[],bindings=[],axisOffset=1){
     const options=new Set(['default']);return {id:g.id,...(g.slot?{slot:g.slot}:{}),...(g.custom?{custom:true}:{}),name:g.name,...(g.en?{en:g.en}:{}),options:g.options.map(o=>{
       if(!/^[a-z0-9]{1,24}$/.test(o.id)||options.has(o.id)||typeof o.name!=='string'||!o.name.trim()||o.name.length>60||!resources.has(o.resource))throw Error('装扮选项无效');options.add(o.id);
       const resource=resources.get(o.resource);
-      const incoming={id:o.resource,title:resource.title||o.name,kind:'wardrobe',group:g.id,option:o.id};
+      const title = resource.title || o.name;
+      const label = g.name + ' · ' + o.name + (title === o.name ? '' : `（${title}）`);
+      const incoming={id:o.resource,title,label,kind:'wardrobe',group:g.id,option:o.id};
       for(const t of wardrobeTracks(resource)){
         const key=channel(t),owner=owners.get(key);
         if(owner&&owner.group!==g.id)throw new ParameterConflict(key,incoming,owner);
@@ -39,6 +41,25 @@ export function wardrobeConfig(catalog,groups=[],bindings=[],axisOffset=1){
   });
   return {version:1,axisOffset,groups:clean,resources:[...used].map(id=>({id,tracks:wardrobeTracks(resources.get(id))}))};
 }
+function wardrobePicks(config, scheme) {
+  const parts = String(scheme ?? '').split('-').slice(config?.axisOffset ?? 0);
+  return Object.fromEntries((config?.groups ?? []).map((group, index) => [group.id, parts[index] || 'default']));
+}
+
+/** A trial validates only the outfit that would actually be worn. */
+export function wardrobeTrial(catalog, groups, bindings, saved, scheme, requested) {
+  const picks = { ...wardrobePicks(saved, scheme), ...requested };
+  const selected = fixedWardrobeGroups(groups).map(group => ({
+    ...group, options: group.options.filter(option => option.id === picks[group.id]),
+  }));
+  for (const [id, option] of Object.entries(requested)) {
+    if (option !== 'default' && !selected.some(group => group.id === id && group.options.length)) {
+      throw Error('找不到要试穿的装扮选项');
+    }
+  }
+  return { config: wardrobeConfig(catalog, selected, bindings, 0), picks };
+}
+
 export function createWardrobe(model,paramIndex,partIndex,defaults={}){
   let config={groups:[],resources:[],axisOffset:1},picks={},owned=new Map();
   const partDefaults=new Map([...partIndex].map(([id,i])=>[id,defaults.parts?.[id]??model.getPartOpacityByIndex(i)]));
@@ -48,7 +69,7 @@ export function createWardrobe(model,paramIndex,partIndex,defaults={}){
   return {
     configure(next){reset();config=next||{groups:[],resources:[]};owned=new Map((config.resources||[]).flatMap(r=>r.tracks.map(t=>[channel(t),t])));picks={};},
     select(next){picks={...next};},
-    scheme(value){const values=String(value||'').split('-').slice(config.axisOffset||0);picks=Object.fromEntries(config.groups.map((g,i)=>[g.id,values[i]||'default']));},
+    scheme(value){picks=wardrobePicks(config,value);},
     apply(){reset();for(const g of config.groups){const option=g.options.find(o=>o.id===picks[g.id]);const r=option&&config.resources.find(r=>r.id===option.resource);for(const t of r?.tracks||[]){const def=base(t);write(t,t.blend==='Add'?def+t.value:t.blend==='Multiply'?def*t.value:t.value);}}},
     state:()=>({...picks}),
     layoutKey:()=>JSON.stringify(config.groups.map(g=>{const o=g.options.find(o=>o.id===picks[g.id]);return [g.id,o?.id||'default',o?.resource??null];})),

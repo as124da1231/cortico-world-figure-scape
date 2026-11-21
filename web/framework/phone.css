@@ -188,7 +188,8 @@ body[data-frame-dragging=resize], body[data-frame-dragging=resize] :is(.scene-gr
 .phone-chat-input { width:100%; min-height:40px; max-height:74px; resize:none; padding:9px 10px; field-sizing:content; }
 .phone-chat-send {
   height:40px; padding:0 13px; font:inherit; font-weight:650;
-  border:1px solid transparent; border-radius:8px; color:var(--coo-surface); background:var(--coo-text); cursor:pointer;
+  border:1px solid var(--studio-primary-edge); border-radius:var(--studio-radius);
+  color:var(--studio-primary-ink); background:var(--studio-primary-bg); cursor:pointer;
 }
 .phone-chat-send:disabled { opacity:.5; cursor:default; }
 .phone-chat-mic {
@@ -221,10 +222,10 @@ body[data-frame-dragging=resize], body[data-frame-dragging=resize] :is(.scene-gr
   overflow:hidden;
   isolation:isolate;
   border:1px solid var(--phone-line);
-  border-radius:18px;
+  border-radius:var(--studio-panel-radius);
   background:var(--phone-paper);
   color:var(--phone-ink);
-  box-shadow:0 12px 30px var(--coo-shadow), 0 2px 7px var(--coo-shadow);
+  box-shadow:var(--studio-shadow), 0 2px 7px var(--coo-shadow);
   font-size:13px;
   animation:control-in 140ms ease-out;
 }
@@ -254,6 +255,7 @@ body[data-frame-dragging=resize], body[data-frame-dragging=resize] :is(.scene-gr
 .control-phone-connection[data-online=true] { background:var(--coo-accent); }
 .control-phone-icon, .control-phone-row, .control-phone-shortcut {
   font:inherit; color:inherit; border:0; background:none; cursor:pointer;
+  transition:background-color var(--studio-motion),color var(--studio-motion),box-shadow var(--studio-motion);
 }
 .control-phone-icon { width:36px; height:36px; display:grid; place-items:center; border-radius:9px; }
 .control-phone-icon[hidden] { display:none; }
@@ -346,10 +348,11 @@ body[data-frame-dragging=resize], body[data-frame-dragging=resize] :is(.scene-gr
   display:flex; flex-wrap:wrap; justify-content:end; gap:6px; margin:12px 0;
 }
 .control-phone-form-button {
-  min-height:34px; padding:4px 9px; font:inherit; color:inherit; cursor:pointer;
-  border:1px solid var(--phone-line); border-radius:8px; background:var(--phone-panel);
+  min-height:34px; padding:4px 9px; font:inherit; color:var(--studio-control-ink); cursor:pointer;
+  border:1px solid var(--studio-control-edge); border-radius:var(--studio-radius); background:var(--studio-control-bg);
+  box-shadow:var(--studio-control-shadow);
 }
-.control-phone-form-button.primary { color:var(--phone-accent); background:var(--phone-tint); }
+.control-phone-form-button.primary { color:var(--studio-primary-ink); background:var(--studio-primary-bg); border-color:var(--studio-primary-edge); }
 .control-phone-form-button:disabled { opacity:.5; cursor:default; }
 
 .control-phone-footer { padding:5px 10px 9px; border-top:1px solid var(--phone-line); }
@@ -357,12 +360,12 @@ body[data-frame-dragging=resize], body[data-frame-dragging=resize] :is(.scene-gr
   position:absolute; z-index:1; inset:46px 10px auto auto; max-inline-size:calc(100% - 20px);
   margin:0; padding:6px 10px; font-size:12px; line-height:1.45; overflow-wrap:anywhere;
   pointer-events:none; color:var(--phone-ink); border:1px solid var(--phone-line);
-  border-radius:8px; background:var(--phone-panel); box-shadow:0 3px 10px #1e162d1c;
+  border-radius:var(--studio-radius); background:var(--phone-panel); box-shadow:0 3px 10px var(--coo-shadow);
 }
 .control-phone-feedback:empty { visibility:hidden; }
 .control-phone-feedback:not(:empty) { animation:control-in 140ms ease-out; }
 .control-phone-feedback[data-kind=pending] { color:var(--phone-accent); }
-.control-phone-feedback[data-kind=error] { color:var(--phone-accent); }
+.control-phone-feedback[data-kind=error] { color:var(--studio-alert); }
 .control-phone-dock {
   display:grid;
   grid-template-columns:repeat(4,minmax(0,1fr));
@@ -378,7 +381,13 @@ body[data-frame-dragging=resize], body[data-frame-dragging=resize] :is(.scene-gr
 :is(.control-phone button:not(:disabled):not([aria-current]), .phone-chat-controls, .phone-chat-close:not(:disabled), .phone-chat-mic):hover {
   background:color-mix(in srgb,var(--phone-tint) 55%,transparent);
 }
-.phone-chat-send:not(:disabled):hover { background:color-mix(in srgb,var(--coo-text) 86%,var(--coo-accent)); }
+.phone-chat-send:not(:disabled):hover,
+.control-phone button.control-phone-form-button.primary:not(:disabled):hover { background:var(--studio-primary-hover); }
+:is(.control-phone-row,.control-phone-form-button,.phone-chat-send,.phone-chat-mic):active:not(:disabled) { box-shadow:var(--studio-pressed-shadow); }
+.live2d-surface[data-appearance="mint"] .phone-chat-send {
+  background:var(--skin-ink); color:var(--coo-surface); border-color:var(--skin-ink);
+}
+.live2d-surface[data-appearance="mint"] .phone-chat-send:not(:disabled):hover { background:var(--skin-eye); border-color:var(--skin-eye); }
 :is(.control-phone,.pet-phone-chat) :is(button,input,textarea,select,.phone-chat-log):focus-visible {
   outline:2px solid var(--phone-accent); outline-offset:-2px;
 }

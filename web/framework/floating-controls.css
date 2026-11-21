@@ -4,33 +4,44 @@
   display:grid; grid-template-columns:var(--floating-key-size); justify-items:center; gap:var(--floating-gap);
   width:max-content; padding:4px; border:1px solid var(--coo-line); border-radius:15px;
   background:var(--coo-surface); color:var(--coo-text);
-  box-shadow:0 6px 16px var(--coo-shadow);
+  box-shadow:inset 0 1px 0 light-dark(#FFFFFFB3,#FFFFFF0D), 0 6px 16px var(--coo-shadow);
+  --floating-hover:color-mix(in srgb,var(--coo-text) 6%,var(--coo-surface));
+  --floating-selected:var(--coo-tint);
+  --floating-selected-edge:color-mix(in srgb,var(--coo-accent) 19%,transparent);
+}
+/* A single shared rail, like the pre-appearance desktop design. Use the accent
+   on meaningful states, not as a ring around every control. The editor preview
+   consumes this same CSS, so it keeps the same hover and target geometry. */
+[data-appearance="mint"] .floating-controls {
+  --floating-hover:light-dark(#F0EEF3,#222A34);
+}
+:is([data-appearance="rose"],[data-appearance="blue"],[data-appearance="amber"]) .floating-controls {
+  background:linear-gradient(155deg,var(--coo-surface),color-mix(in srgb,var(--coo-bg) 43%,var(--coo-surface)));
 }
 .floating-controls > .floating-key {
   position:relative; box-sizing:border-box; display:grid; place-items:center;
   width:var(--floating-key-size); height:var(--floating-key-size); min-width:0; min-height:0; padding:0;
   color:inherit; background:transparent; border:1px solid transparent; border-radius:10px;
-  box-shadow:none; cursor:pointer; transition:background var(--studio-motion),color var(--studio-motion);
+  box-shadow:none; cursor:pointer; transition:background-color var(--studio-motion),border-color var(--studio-motion),color var(--studio-motion),box-shadow var(--studio-motion);
 }
 .floating-key :is(.ic,.layout-icon) { position:relative; display:grid; place-items:center; }
 .floating-key svg { display:block; width:18px; height:18px; stroke-width:1.6; }
 .floating-key .layout-piece-label { display:none; }
-.floating-controls > .floating-key[data-action=menu] { background:var(--coo-tint); color:var(--coo-accent-ink); }
-.floating-controls > .floating-key:hover:not(:disabled) { color:var(--coo-accent-ink); background:var(--coo-bg); }
-.floating-controls > .floating-key[aria-pressed=true]:not(:disabled) { color:var(--coo-accent-ink); background:var(--coo-tint); }
-.floating-controls > .floating-key:not(:disabled):active { background:var(--coo-tint); }
+.floating-controls > .floating-key[data-action=menu] { background:var(--floating-selected); color:var(--coo-accent-ink); }
+.floating-controls > .floating-key:hover:not(:disabled) { color:var(--coo-accent-ink); background:var(--floating-hover); }
+.floating-controls > .floating-key[aria-pressed=true]:not(:disabled) { color:var(--coo-accent-ink); background:var(--floating-selected); border-color:var(--floating-selected-edge); }
+.floating-controls > .floating-key:not(:disabled):active { background:var(--coo-tint); box-shadow:var(--studio-pressed-shadow); }
 .floating-controls > .floating-key:focus-visible { outline:2px solid var(--coo-accent-ink); outline-offset:-2px; }
-.floating-controls > .floating-key:is(.off,.waiting) { color:var(--coo-muted); }
+.floating-controls > .floating-key:is(.off,.waiting,:disabled) { color:var(--coo-muted); }
+.floating-controls > .floating-key:disabled { cursor:default; }
+.floating-controls > .floating-key:disabled:not(.waiting) svg { opacity:.55; }
 .floating-key:is(.on,.waiting,.holding,.live)::before {
   content:""; position:absolute; top:5px; right:5px; width:5px; height:5px; box-sizing:border-box; border-radius:50%;
-  background:var(--coo-accent);
+  background:var(--coo-accent-ink);
 }
 .floating-key.waiting::before { background:transparent; border:1px solid var(--coo-warning); }
-.floating-controls > .floating-key:is(.holding,.live) { color:var(--coo-accent-ink); background:var(--coo-tint); }
-.floating-key:is(.holding,.live)::before { background:var(--coo-accent); border:0; }
-.floating-key.holding::after {
-  content:""; position:absolute; inset:1px; border:1px solid var(--coo-accent); border-radius:inherit; pointer-events:none;
-}
+.floating-controls > .floating-key:is(.holding,.live) { color:var(--coo-accent-ink); background:var(--floating-selected); border-color:var(--floating-selected-edge); }
+.floating-key:is(.holding,.live)::before { background:var(--coo-accent-ink); border:0; }
 .floating-controls[hidden] { display:none; }
 @media (prefers-reduced-motion:reduce) { .floating-key { transition:none; } }
 

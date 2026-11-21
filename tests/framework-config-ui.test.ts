@@ -5,6 +5,7 @@ vi.mock('../src/webui/coopanion/base/api.ts',()=>api);
 vi.mock('../src/webui/coopanion/base/language.ts',()=>({LANGUAGE:'zh'}));
 import { workspacePage } from '../src/webui/coopanion/features/framework/index.ts';
 import { mountConversation } from '../src/webui/coopanion/features/framework/conversation-panel.ts';
+import { modelServicesPanel } from '../src/webui/coopanion/features/framework/model-services.ts';
 import type { PageContext } from '../src/webui/coopanion/base/page.ts';
 import type { RuntimeState } from '../src/webui/coopanion/features/framework/runtime.ts';
 // @ts-expect-error Native wallpaper view is a browser module.
@@ -14,6 +15,79 @@ import { createControlPhone } from '../web/framework/phone-controls.js';
 HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open',''); };
 HTMLDialogElement.prototype.close = function () { this.removeAttribute('open'); this.dispatchEvent(new Event('close')); };
 afterEach(()=>{document.body.replaceChildren();vi.clearAllMocks();});
+
+it('keeps desktop controls inside the panel and leaves its palette to Coo', async () => {
+  const controller = new AbortController();
+  document.body.innerHTML = '<header class="providerchrome"><div class="providerintro">' +
+    '<div class="pagetitle-row"><h1 class="pagetitle">Figure Scape</h1></div></div>' +
+    '<nav class="providertabs"><button class="pagetab active">引擎</button></nav></header>' +
+    '<div class="panelslot"><div class="desktop-live2d-native-page"></div></div>';
+  const chrome = document.querySelector('.providerchrome')!;
+  const hostMarkup = chrome.outerHTML;
+  const root = document.querySelector<HTMLElement>('.desktop-live2d-native-page')!;
+  api.invokePanel.mockImplementation(async (_provider,_panel,method) => {
+    if (method === 'runtime.state') return {
+      inWindow:false, onDesktop:false, appearance:'blue', skin:{figure:'test'}, framework:{configuration:{}},
+      presentation:{desired:'desktop', applied:'desktop', details:{}},
+    } as RuntimeState;
+    if (method === 'cabin.state') return {phase:'idle', configured:true, bundled:true, residents:[]};
+    if (method === 'resources') return [];
+    if (method === 'phone.state') return null;
+    if (method === 'resources.runtimeState') return null;
+    return {};
+  });
+  const button = (text: string) => {
+    const control = document.createElement('button');
+    control.textContent = text;
+    return control;
+  };
+  try {
+    workspacePage('framework').mount({root,signal:controller.signal,ui:{button},
+      lifecycle:{interval:()=>0,add:()=>{}}} as unknown as PageContext);
+    const launch = root.querySelector<HTMLButtonElement>('.studio-panel-header .studio-runtime-launch');
+    await vi.waitFor(() => expect(launch?.disabled).toBe(false));
+    expect(launch?.textContent).toBe('启动桌宠');
+    expect(root.dataset.appearance).toBeUndefined();
+    expect(root.querySelectorAll('.studio-panel-header button')).toHaveLength(1);
+    expect(root.querySelector('dialog[open]')).toBeNull();
+    expect(chrome.outerHTML).toBe(hostMarkup);
+  } finally { controller.abort(); }
+});
+
+it('lets users retry a timed-out model-service read and add a model afterward', async () => {
+  const controller = new AbortController();
+  const stalledRead = new AbortController();
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValueOnce(stalledRead.signal);
+  const protocols = [{ id:'openai-compatible', name:'OpenAI-compatible', uses:['planner'], fields:[] }];
+  const providers = [{ id:'provider', protocol:'openai-compatible', name:'Test provider', endpoint:'https://example.test', hasKey:false, fields:{} }];
+  const ready = { protocols, providers, models:[], selected:{} };
+  api.invokePanel.mockImplementationOnce((_provider, _panel, _method, _args, options) => new Promise((_resolve, reject) => {
+    const signal = options.signal as AbortSignal;
+    signal.addEventListener('abort', () => reject(signal.reason), { once:true });
+  })).mockResolvedValueOnce(ready).mockResolvedValueOnce({
+    ...ready, models:[{ id:'new-model', providerId:'provider', model:'test-model', uses:['planner'], tests:{} }],
+  });
+  const panel = modelServicesPanel({ root:document.body, signal:controller.signal } as PageContext, vi.fn());
+  document.body.append(panel.element);
+  const button = (text: string) => [...panel.element.querySelectorAll('button')].find(item => item.textContent === text)!;
+  try {
+    const initial = panel.read();
+    expect(button('添加提供商').disabled).toBe(true);
+    stalledRead.abort(new DOMException('Timed out', 'TimeoutError'));
+    await initial;
+    expect(panel.element.textContent).toContain('读取模型服务超时');
+    expect(button('重新读取').hidden).toBe(false);
+    button('重新读取').click();
+    await vi.waitFor(() => expect(button('添加提供商').disabled).toBe(false));
+    expect(button('重新读取').hidden).toBe(true);
+    button('手动添加').click();
+    const form = document.querySelector<HTMLFormElement>('dialog[open] form')!;
+    form.querySelector<HTMLInputElement>('[name=model]')!.value = 'test-model';
+    form.dispatchEvent(new Event('submit', { bubbles:true, cancelable:true }));
+    await vi.waitFor(() => expect(panel.element.textContent).toContain('test-model'));
+    expect(document.querySelector('dialog[open]')).toBeNull();
+  } finally { timeout.mockRestore(); controller.abort(); }
+});
 
 it('shows dialogue while hiding drag activity, keeps the draft on reconnect, and matches the send receipt', () => {
   const abort = new AbortController();
@@ -57,6 +131,17 @@ it('shows dialogue while hiding drag activity, keeps the draft on reconnect, and
     expect(sent.at(-1)?.id).toBe(first.id);
     frame({ t:'sent', id:first.id });
     expect(input.value).toBe('');
+    frame({ t:'init', items:[{ ...reply, cursor:20 }, { ...user, cursor:21, text:'最新消息' }], more:true, before:20,
+      refs:{ withdrawn:[7], delivered:[[5,19],[6,19]] } });
+    const history = () => [...document.querySelectorAll('.studio-conversation-log > div')].map(row => row.textContent);
+    frame({ t:'withdrawn', cursor:8 });
+    frame({ t:'settled', cursors:[9], at:22 });
+    frame({ t:'older', items:[{ ...user, cursor:5, text:'排队甲' }, { ...user, cursor:6, text:'排队乙' },
+      { ...user, cursor:7, text:'已撤回' }, { ...user, cursor:8, text:'刚撤回' },
+      { ...user, cursor:9, text:'刚送达' }, { ...reply, cursor:10, beats:[{ text:'早一点的回复' }] }] });
+    frame({ t:'item', item:{ ...user, cursor:7, text:'已撤回' } });
+    frame({ t:'item', item:{ ...user, cursor:9, text:'刚送达' } });
+    expect(history()).toEqual(['早一点的回复','排队甲','排队乙','我是重刀 Coo','最新消息','刚送达']);
   } finally { abort.abort(); }
 });
 
@@ -116,6 +201,7 @@ it('opens scene apps inside one panel and keeps wallpaper selection and scene en
     await vi.waitFor(() => expect(action(first)?.textContent).toBe('已选定'));
     expect(search()?.value).toBe('夜景');
     expect(mode).toBe('desktop');
+    workspace.querySelector<HTMLElement>('.studio-scene-viewport')!.scrollTop = 120;
     focusBack();
     await vi.waitFor(() => expect(enter().textContent).toBe('进入场景'));
     enter().click();
@@ -127,6 +213,8 @@ it('opens scene apps inside one panel and keeps wallpaper selection and scene en
     const libraryButton = workspace.querySelector<HTMLButtonElement>('.studio-wallpaper-header .studio-inline button:last-child')!;
     libraryButton.click();
     await vi.waitFor(() => expect(action(first)?.textContent).toBe('使用中'));
+    expect(search()?.value).toBe('夜景');
+    expect(workspace.querySelector<HTMLElement>('.studio-scene-viewport')!.scrollTop).toBe(120);
     action(second)!.click();
     await vi.waitFor(() => expect(action(second)?.textContent).toBe('使用中'));
     expect(action(first)?.textContent).toBe('切换到这张');
@@ -178,8 +266,18 @@ it('opens right-click scene apps before entering and adjusts only the chosen sce
   expect((document.activeElement as HTMLElement).dataset.scene).toBe('room');
   click('.control-phone-scene-app[data-scene=cabin]');
   expect(cabin).not.toHaveBeenCalled();
+  expect(root.querySelector('.control-phone-scene-enter')?.textContent).toBe('安装小屋组件');
   click('.control-phone-scene-enter');
   expect(cabin).toHaveBeenCalledTimes(1);
+  phone.updateCabin('preparing');
+  expect(root.querySelector('.control-phone-scene-enter')?.textContent).toBe('查看安装进度');
+  phone.updateCabin('ready');
+  expect(root.querySelector('.control-phone-scene-enter')?.textContent).toBe('进入小屋世界');
+  click('.control-phone-scene-enter');
+  expect(cabin).toHaveBeenCalledTimes(2);
+  phone.updateCabin('active');
+  expect(root.querySelector('.control-phone-scene-enter')?.textContent).toBe('使用中');
+  expect(root.querySelector<HTMLButtonElement>('.control-phone-scene-enter')?.disabled).toBe(true);
   phone.close();
 });
 
@@ -263,31 +361,81 @@ it('retries failed settings loads without caching an empty subpanel', async () =
 it('derives speech settings from the service and sends no legacy config writes',async()=>{
  api.invokePanel.mockResolvedValue({framework:{definition:{id:'test',defaultPresentation:'desktop'},configuration:{bodyEffects:{fields:[],desired:{},observed:null},speech:{fields:[{key:'pitch',type:'enum',options:['low','custom']},{key:'pitchHz',type:'number',min:200,max:700,enabledWhen:{pitch:'custom'}}],desired:{pitch:'low',pitchHz:555},effective:{enabled:true,pitchHz:300,unitsPerSecond:13},observed:null}},runtime:null},connected:false,inWindow:false,skin:{}});
  const runtime=await api.invokePanel();
- api.invokePanel.mockImplementation(async(_provider,panel,method)=>{
+ let inputMode = 'hold', thresholdDb = -42, recording = false;
+ api.invokePanel.mockImplementation(async(_provider,panel,method,args)=>{
    if (method==='services.state') return {providers:[],models:[],selected:{}};
    if (method==='audio.ttsState') return {enabled:false,provider:'',providers:{},profiles:{},playback:null};
    if (method==='audio.plannerState') return {enabled:false,ready:false};
-   if (panel==='voice') return {enabled:false,engine:'funasr',systemSupported:false,server:null,model:{phase:'absent'},api:{model:''},mic:{state:'off'},input:{mode:'hold',hotkey:'',keyLabel:'',deviceId:'',openOnPress:false,devices:[]},level:-60,recent:[]};
+   if (panel==='voice') {
+     if (method==='setMic') inputMode=(args?.[0] as {mode:string}).mode;
+     if (method==='setThreshold') thresholdDb=Number(args?.[0]);
+     if (method==='testStart') recording=true;
+     if (method==='testFinish'||method==='testCancel') recording=false;
+     return {enabled:true,windowVisible:true,engine:'funasr',engineSetting:'',systemSupported:false,server:{phase:'running'},model:{phase:'ready',reused:true},api:{model:''},mic:{state:'on'},input:{mode:inputMode,hint:'runtime hint',deviceId:'',openOnPress:true,devices:[]},test:recording?{phase:'recording'}:{phase:'idle'},level:-36,thresholdDb,recent:[]};
+   }
    return runtime;
  });
  const root=document.createElement('div');document.body.append(root);const controller=new AbortController();
  await workspacePage('sound').mount({root,signal:controller.signal,ui:{button:(text:string)=>{const b=document.createElement('button');b.textContent=text;return b;}} as any,lifecycle:{interval:()=>0 as any,add:()=>{}}});
 
- const rows = [...root.querySelectorAll('.studio-settings-row')];
- expect(rows.map(row=>row.querySelector('h2')?.textContent)).toEqual(['音效','说话声','语音输入']);
+ const rows = [...root.querySelectorAll('.studio-sound-sheet')];
+ expect(root.querySelector('.studio-panel-header .studio-runtime-launch')).toBeNull();
+ expect(rows.map(row=>row.querySelector('h3')?.textContent)).toEqual(['语音输入','说话声','音效']);
  expect(root.querySelector('[data-setting=pitch]')).toBeNull();
- const open = rows[1].querySelector('button')!;
+ await vi.waitFor(()=>expect(rows[1].textContent).toContain('语音合成'));
+ expect(rows[1].textContent).not.toContain('音节发声');
+ expect(root.querySelector('dialog[open]')).toBeNull();
+ const input = rows[0]!;
+ await vi.waitFor(()=>expect(input.textContent).toContain('已复用 Coo 的本地模型'));
+ expect(input.querySelector('[aria-pressed=true]')?.textContent).toBe('按住说话');
+ expect(input.querySelectorAll('[role=switch]')).toHaveLength(1);
+ const marker = input.querySelector<HTMLElement>('[role=slider][aria-label="检测门槛"]')!;
+ expect(marker.hidden).toBe(true);
+ expect(input.querySelector('input[type=range]')).toBeNull();
+ input.querySelector<HTMLButtonElement>('[data-mode="toggle"]')!.click();
+ await vi.waitFor(()=>expect(input.textContent).toContain('再点一次结束并发送'));
+ expect(marker.hidden).toBe(true);
+ input.querySelector<HTMLButtonElement>('[data-mode="always"]')!.click();
+ await vi.waitFor(()=>expect(marker.hidden).toBe(false));
+ const meter = input.querySelector<HTMLMeterElement>('meter')!;
+ const track = marker.parentElement!;
+ expect(meter.parentElement).toBe(track);
+ expect(meter.value).toBe(-36);
+ expect(marker.style.left).toBe('47.5%');
+ expect(marker.getAttribute('aria-valuenow')).toBe('-42');
+ expect(input.textContent).toContain('试录转写仅在此显示');
+ const tryMic = [...input.querySelectorAll('button')].find(button=>button.textContent==='开始试录')!;
+ tryMic.click();
+ await vi.waitFor(()=>expect(tryMic.textContent).toBe('结束试录'));
+ expect(api.invokePanel).toHaveBeenCalledWith('world:desktop-live2d-pet','voice','testStart',[],
+   {keepalive:true,signal:expect.any(AbortSignal)});
+ marker.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));
+ await vi.waitFor(()=>expect(marker.getAttribute('aria-valuenow')).toBe('-41'));
+ expect(api.invokePanel).toHaveBeenCalledWith('world:desktop-live2d-pet','voice','setThreshold',[-41],{signal:controller.signal});
+ await vi.waitFor(()=>expect(marker.getAttribute('aria-disabled')).toBe('false'));
+ vi.spyOn(track,'getBoundingClientRect').mockReturnValue({left:100,width:200} as DOMRect);
+ const gesture=(type:string, clientX:number)=>{
+   const event=new MouseEvent(type,{clientX,bubbles:true,button:0});
+   Object.defineProperty(event,'pointerId',{value:7});
+   track.dispatchEvent(event);
+ };
+ gesture('pointerdown',140);
+ gesture('pointermove',230);
+ expect(marker.getAttribute('aria-valuenow')).toBe('-28');
+ expect(api.invokePanel.mock.calls.filter(call=>call[2]==='setThreshold')).toHaveLength(1);
+ gesture('pointercancel',230);
+ expect(marker.getAttribute('aria-valuenow')).toBe('-41');
+ gesture('pointerdown',220);
+ gesture('pointerup',250);
+ await vi.waitFor(()=>expect(marker.getAttribute('aria-valuenow')).toBe('-20'));
+ expect(api.invokePanel).toHaveBeenCalledWith('world:desktop-live2d-pet','voice','setThreshold',[-20],{signal:controller.signal});
+ expect(api.setConfig).not.toHaveBeenCalled();
+ const open = input.querySelector<HTMLButtonElement>('.studio-audio-utilities button')!;
  open.focus();
  open.click();
- const dialog = root.querySelector<HTMLDialogElement>('dialog[open]')!;
- expect(dialog.querySelector('h2')?.textContent).toBe('说话声设置');
- expect(dialog.querySelector('[data-setting=pitch]')).toBeNull();
- await vi.waitFor(()=>expect(dialog.textContent).toContain('语音合成'));
- expect(dialog.textContent).not.toContain('音节发声');
- expect(api.setConfig).not.toHaveBeenCalled();
+ const dialog = root.querySelector<HTMLDialogElement>('dialog[open].studio-recognition-dialog')!;
+ expect(dialog.querySelectorAll('[role=switch]')).toHaveLength(1);
  dialog.close();
- expect(root.querySelector('dialog[open]')).toBeNull();
  expect(document.activeElement).toBe(open);
- expect([...root.querySelectorAll('.studio-settings-row')]).toEqual(rows);
  controller.abort();
 });

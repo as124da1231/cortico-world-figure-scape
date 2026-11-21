@@ -3,7 +3,7 @@ export const MAX_EXPRESSIONS = 8;
 export const bindingResourceIds = b => [b.resource, ...(b.overlays || []), b.release].filter(Boolean);
 export class ParameterConflict extends Error {
   constructor(parameter, incoming, existing) {
-    super('「' + incoming.title + '」与「' + existing.title + '」冲突：' + parameter);
+    super('「' + (incoming.label ?? incoming.title) + '」与「' + (existing.label ?? existing.title) + '」冲突：' + parameter);
     this.detail = { parameter, incoming, existing };
   }
 }

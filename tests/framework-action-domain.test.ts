@@ -17,3 +17,16 @@ it('records a rejected stale-body preview without touching the replacement body'
  expect(runtime.snapshot().recent).toMatchObject([{requestId:'request',word:'happy',status:'failed',reason:'body-changed'}]);
  expect(doWord).not.toHaveBeenCalled();
 });
+
+it('keeps a tracked word pending until the body accepts it and reports an explicit refusal', async () => {
+ const body = { layout:{}, do:vi.fn(), dispatchWord:vi.fn().mockRejectedValue(new Error('body declined')), set:vi.fn() };
+ const runtime = createBodyActions({body:{body},scene:{},receipt:vi.fn()});
+ runtime.bodyCommitted({ vocab:[{ id:'happy',seconds:.05 }] });
+ runtime.enqueueRequest('request','happy');
+ runtime.tick(.01);
+ expect(runtime.snapshot().recent.map((row: { status: string }) => row.status)).toEqual(['accepted']);
+ await Promise.resolve();
+ runtime.tick(.1);
+ expect(runtime.snapshot().recent).toMatchObject([{status:'accepted'},{status:'failed',reason:'body declined'}]);
+ expect(body.do).not.toHaveBeenCalled();
+});

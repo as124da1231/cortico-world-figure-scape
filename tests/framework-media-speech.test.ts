@@ -9,6 +9,32 @@ import { createSpeechPlanner, type SpeechPlannerConfig } from '../src/speech/spe
 import { createMediaSpeech } from '../web/framework/media-speech.js';
 
 describe('desktop media speech', () => {
+  it('pauses at the audio clock and starts the same clip at the captured offset', async () => {
+    const node = () => ({ buffer:null,onended:null,connect:vi.fn(),disconnect:vi.fn(),start:vi.fn(),stop:vi.fn() });
+    const first = node(), second = node();
+    const output = { currentTime:10, state:'running', decodeAudioData:async () => ({duration:4}),
+      createBufferSource:vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second) };
+    const report = vi.fn(), plan = vi.fn();
+    const media = createMediaSpeech({audio:{speechOutput:()=>({ctx:output,master:{}})},
+      read:async () => new Response(new Uint8Array(8)),sampler:async () => null,report,plan});
+    const source = media.play('same');
+    await vi.waitFor(()=>expect(source.state).toBe('scheduled'));
+    output.currentTime = 11.25;
+    media.tick();
+    output.currentTime = 11.625;
+    expect(media.take('same')).toBeCloseTo(1.625);
+    expect(first.stop).toHaveBeenCalledOnce();
+    expect(report).toHaveBeenLastCalledWith({id:'same',status:'paused',reason:'scene-handoff'});
+    output.currentTime = 20;
+    const resumed = media.play('same',[],false,undefined,1.625);
+    await vi.waitFor(()=>expect(resumed.state).toBe('scheduled'));
+    expect(second.start).toHaveBeenCalledWith(20,1.625);
+    output.currentTime = 20.125;
+    media.tick();
+    expect(resumed.position).toBeCloseTo(1.75);
+    expect(plan).toHaveBeenCalledWith(expect.objectContaining({kind:'start',id:'same',position:1.625}));
+    media.stop();
+  });
   it('uses the existing voice adapter and only the selected body can request its clip', async () => {
     const data = await mkdtemp(join(tmpdir(), 'tts-service-'));
     const wav = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WAVE'), Buffer.alloc(36)]);

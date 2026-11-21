@@ -30,6 +30,8 @@ export interface ArtifactState {
   done: number;
   total: number | null;
   detail: string | null;
+  stage?: 'downloading' | 'installing';
+  cancelled?: boolean;
 }
 
 const platformKey = (): string => `${process.platform}-${process.arch}`;
@@ -132,6 +134,7 @@ interface Job { state: ArtifactState; promise: Promise<void> | null }
 /** Tracks one runtime directory: present when its executable is found inside. */
 class RuntimeSlot {
   private job: Job;
+  private controller: AbortController | null = null;
   constructor(
     private readonly root: () => string,
     private readonly spec: typeof ELECTRON_RUNTIME,
@@ -150,47 +153,68 @@ class RuntimeSlot {
   }
 
   /** The executable inside the installed runtime, or null. */
-  executable(): string | null {
+  executable(dir = this.dir): string | null {
     if (process.platform === 'darwin' && this.spec.id === 'electron') {
-      const app = join(this.dir, 'Electron.app', 'Contents', 'MacOS', 'Electron');
+      const app = join(dir, 'Electron.app', 'Contents', 'MacOS', 'Electron');
       return existsSync(app) ? app : null;
     }
-    return findFile(this.dir, this.spec.executable);
+    return findFile(dir, this.spec.executable);
   }
 
   state(): ArtifactState {
     if (this.job.promise) return { ...this.job.state };
     const exe = this.executable();
     if (exe) return { phase: 'ready', path: this.dir, done: 0, total: null, detail: null };
-    return { ...this.job.state, phase: this.job.state.phase === 'error' ? 'error' : 'absent', path: this.dir };
+    return { ...this.job.state, phase: this.job.state.phase === 'error' ? 'error' : 'absent', path: this.dir,
+      total: this.spec.assets[platformKey()]?.bytes ?? null };
+  }
+
+  async cancel(): Promise<void> {
+    if (this.job.state.stage === 'downloading') this.controller?.abort();
+    await this.job.promise;
   }
 
   install(): Promise<void> {
     if (this.job.promise) return this.job.promise;
+    if (this.executable()) return Promise.resolve();
     const asset = this.spec.assets[platformKey()];
     if (!asset) {
       this.job.state = { phase: 'error', path: this.dir, done: 0, total: null, detail: this.text().noBuild(platformKey()) };
       return Promise.resolve();
     }
-    this.job.state = { phase: 'working', path: this.dir, done: 0, total: asset.bytes, detail: this.text().downloading(asset.file) };
+    const controller = this.controller = new AbortController();
+    this.job.state = { phase: 'working', stage: 'downloading', path: this.dir, done: 0, total: asset.bytes, detail: null };
     const partial = `${this.dir}.partial`;
     const work = (async () => {
       rmSync(partial, { recursive: true, force: true });
       mkdirSync(partial, { recursive: true });
       const archive = join(partial, asset.file);
-      const opts: DownloadOptions = { fetchImpl: this.fetchImpl, onProgress: (done, total) => { this.job.state.done = done; this.job.state.total = total ?? asset.bytes; } };
+      const opts: DownloadOptions = { fetchImpl: this.fetchImpl, signal: controller.signal,
+        onProgress: done => { this.job.state.done = done; } };
       await downloadFile(this.spec.url(asset.file), archive, opts);
+      controller.signal.throwIfAborted();
+      if (statSync(archive).size !== asset.bytes) throw Error('invalid-archive-size');
+      this.job.state.stage = 'installing';
       this.job.state.detail = this.text().unpacking;
       await extract(archive, partial, this.text());
+      if (!this.executable(partial)) throw Error('missing-executable');
       rmSync(archive, { force: true });
       writeFileSync(join(partial, 'cortico-runtime.json'), JSON.stringify({ id: this.spec.id, version: this.spec.version, source: this.spec.url(asset.file) }, null, 2));
-      rmSync(this.dir, { recursive: true, force: true });
-      renameSync(partial, this.dir);
+      if (this.executable()) rmSync(partial, { recursive: true, force: true });
+      else {
+        rmSync(this.dir, { recursive: true, force: true });
+        renameSync(partial, this.dir);
+      }
       this.job.state = { phase: 'ready', path: this.dir, done: asset.bytes, total: asset.bytes, detail: null };
     })().catch((err: Error) => {
-      rmSync(partial, { recursive: true, force: true });
-      this.job.state = { phase: 'error', path: this.dir, done: 0, total: null, detail: err.message };
-    }).finally(() => { this.job.promise = null; });
+      const cancelled = controller.signal.aborted;
+      this.job.state = { phase: cancelled ? 'absent' : 'error', path: this.dir, done: 0, total: asset.bytes,
+        detail: cancelled ? null : err.message, cancelled };
+      try { rmSync(partial, { recursive: true, force: true }); }
+      catch (cleanupError) {
+        this.job.state = { ...this.job.state, phase: 'error', detail: String(cleanupError), cancelled: false };
+      }
+    }).finally(() => { this.job.promise = null; this.controller = null; });
     this.job.promise = work;
     return work;
   }
@@ -200,7 +224,7 @@ class RuntimeSlot {
 class ModelSlot {
   private job: Job;
   readonly bytes: number;
-  constructor(private readonly root: () => string, private readonly spec: ModelSpec, private readonly text: StoreText, private readonly fetchImpl?: typeof fetch) {
+  constructor(private readonly root: () => string, private readonly spec: ModelSpec, private readonly text: StoreText, private readonly fetchImpl?: typeof fetch, private readonly reuseRoot?: () => string) {
     this.bytes = spec.files.reduce((n, f) => n + f.bytes, 0);
     this.job = { state: { phase: 'absent', path: '', done: 0, total: null, detail: null }, promise: null };
   }
@@ -214,23 +238,31 @@ class ModelSlot {
   }
 
   /** Where each file lives, by role. */
-  paths(): Record<string, string> {
-    return Object.fromEntries(this.spec.files.map((f) => [f.role, this.file(f.name)]));
+  paths(dir = this.dir): Record<string, string> {
+    return Object.fromEntries(this.spec.files.map((f) => [f.role, join(dir, f.name)]));
   }
 
-  private has(f: { name: string; bytes: number }): boolean {
-    const path = this.file(f.name);
-    return existsSync(path) && statSync(path).size === f.bytes;
+  private has(f: { name: string; bytes: number }, dir = this.dir): boolean {
+    const info = statSync(join(dir, f.name), { throwIfNoEntry: false });
+    return info?.isFile() === true && info.size === f.bytes;
+  }
+
+  private readyDir(): string | null {
+    if (this.spec.files.every(f => this.has(f))) return this.dir;
+    const dir = this.reuseRoot && join(this.reuseRoot(), this.spec.id);
+    return dir && this.spec.files.every(f => this.has(f, dir)) ? dir : null;
   }
 
   state(): ArtifactState {
     if (this.job.promise) return { ...this.job.state };
-    if (this.spec.files.every((f) => this.has(f))) return { phase: 'ready', path: this.dir, done: this.bytes, total: this.bytes, detail: null };
+    const dir = this.readyDir();
+    if (dir) return { phase: 'ready', path: dir, done: this.bytes, total: this.bytes, detail: null };
     return { ...this.job.state, phase: this.job.state.phase === 'error' ? 'error' : 'absent', path: this.dir };
   }
 
   install(): Promise<void> {
     if (this.job.promise) return this.job.promise;
+    if (this.readyDir()) return Promise.resolve();
     this.job.state = { phase: 'working', path: this.dir, done: 0, total: this.bytes, detail: this.text().downloadingModel };
     const work = (async () => {
       mkdirSync(this.dir, { recursive: true });
@@ -270,6 +302,8 @@ class ModelSlot {
 export interface RuntimeStoreOptions {
   runtimesRoot: () => string;
   modelsDir: () => string;
+  /** An installed copy of the same artifacts may be used directly from this directory. */
+  reuseModelsDir?: () => string;
   fetchImpl?: typeof fetch;
   /** The speech models; tests pass small ones. */
   funasrModel?: ModelSpec;
@@ -286,7 +320,7 @@ export class RuntimeStore {
   constructor(opts: RuntimeStoreOptions) {
     const text = () => (opts.text?.() ?? petText()).store;
     this.electron = new RuntimeSlot(opts.runtimesRoot, ELECTRON_RUNTIME, text, opts.fetchImpl);
-    this.funasr = new ModelSlot(opts.modelsDir, opts.funasrModel ?? FUNASR_MODEL, text, opts.fetchImpl);
-    this.whisper = new ModelSlot(opts.modelsDir, opts.whisperModel ?? WHISPER_MODEL, text, opts.fetchImpl);
+    this.funasr = new ModelSlot(opts.modelsDir, opts.funasrModel ?? FUNASR_MODEL, text, opts.fetchImpl, opts.reuseModelsDir);
+    this.whisper = new ModelSlot(opts.modelsDir, opts.whisperModel ?? WHISPER_MODEL, text, opts.fetchImpl, opts.reuseModelsDir);
   }
 }

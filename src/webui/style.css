@@ -30,7 +30,7 @@
 .pet-voicebody > .mountrow:first-child{border-top-color:transparent}
 
 /* The untitled cards end with their last row; the next card's own margin is the room below, about what sits above. */
-.panelslot > .sheet.pet-untitled { padding-bottom: 0; }
+.pet-studio .sheet.pet-untitled { padding-bottom: 0; }
 
 /* Framework-owned configuration shell; Coo supplies only the host. */
 .framework-config{--fw-line:color-mix(in srgb,currentColor 13%,transparent);--fw-soft:color-mix(in srgb,var(--accent,#389574) 9%,transparent);box-sizing:border-box;max-width:1160px;margin:auto;padding:12px 20px;line-height:1.55;height:clamp(500px,calc(100dvh - 120px),980px);display:grid;grid-template-rows:auto auto 24px minmax(0,1fr);gap:6px;color:var(--ink,#242a28)}

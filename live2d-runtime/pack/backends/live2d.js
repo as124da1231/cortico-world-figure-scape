@@ -33,7 +33,7 @@ import { graphicsLimits, displayPixels, resolutionPlan, texturePlan } from './re
 import { createNativeDraftLayer } from './native-draft-layer.js';
 import { touchSuggestion } from '../../../web/framework/touch-geometry.js';
 import { createNativeActions, applyNativeValues, captureMotionLocks, nativeBindingDuration } from './native-actions.js';
-import {createWardrobe,wardrobeConfig} from './wardrobe.js';
+import {createWardrobe,wardrobeConfig,wardrobeTrial} from './wardrobe.js';
 import {PROTECTED_PARAMETER} from './performance-plan.js';
 import {createPetEmotionEffects} from './emotion-effects/index.js';
 import * as emotionConfig from './emotion-style.js';
@@ -955,7 +955,7 @@ export async function createLive2DBody(base, opts, entry, kit) {
     update();
     if (before !== wardrobe.layoutKey()) wardrobeLayoutDirty = true;
   }
-  function settleWardrobe() {
+  function settleWardrobe(strict = false) {
     if (!wardrobeLayoutDirty || !wardrobeBaseline) return;
     const previousFit = fitCopy();
     const previousGeometry = { hitBands, silhouette };
@@ -981,9 +981,9 @@ export async function createLive2DBody(base, opts, entry, kit) {
       fitState = previousFit;
       ({ hitBands, silhouette } = previousGeometry);
       applyFit();
+      if (strict) throw error;
       console.warn('[l2d] 外观轮廓测量失败', error);
-    }
-    wardrobeLayoutDirty = false;
+    } finally { wardrobeLayoutDirty = false; }
   }
   /** 命中圈按高度带取可见 alpha 的中心；整张 bbox 会被尾巴/胡须带偏。 */
   let hitBands = null;
@@ -1603,15 +1603,14 @@ export async function createLive2DBody(base, opts, entry, kit) {
     }
     if (command.kind !== 'preview' || !texturesReady || !extent || renderFailure) throw Error('The model is not ready for wardrobe preview');
     const catalog = { resources: (profile.native?.resources ?? []).map(resource => ({ ...resource, raw: resource.data })) };
-    const config = wardrobeConfig(catalog, command.groups, command.bindings ?? [], 0);
+    const { config, picks } = wardrobeTrial(catalog, command.groups, command.bindings ?? [], profile.wardrobe, framingScheme, command.picks);
     const previous = draftWardrobe, previousPicks = wardrobe.state();
     try {
       changeWardrobe(() => {
         wardrobe.configure(config);
-        wardrobe.scheme(framingScheme);
-        wardrobe.select({...wardrobe.state(),...command.picks});
+        wardrobe.select(picks);
       });
-      settleWardrobe();
+      settleWardrobe(true);
       draftWardrobe = { owner: command.owner, config };
     } catch (error) {
       changeWardrobe(() => { wardrobe.configure(previous?.config ?? profile.wardrobe); wardrobe.select(previousPicks); });
@@ -1697,7 +1696,7 @@ export async function createLive2DBody(base, opts, entry, kit) {
       if (!extent || !texturesReady || renderFailure) throw Error('The active model is not ready for preview');
       const checkpoint = draftLayer.checkpoint();
       try {
-        if (command.kind === 'play') draftLayer.play(command.binding, command.owner, requestId, command.mode);
+        if (command.kind === 'play') draftLayer.play(command.binding, command.owner, requestId, command.mode, command.audition === true);
         else draftLayer.stop(command.owner, requestId);
         body.step(0, true);
         if (renderFailure) throw Error(renderFailure);

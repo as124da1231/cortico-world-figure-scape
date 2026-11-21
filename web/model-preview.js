@@ -1,6 +1,7 @@
 import { loadBody, onBody } from './body-host.js';
 import { touchArea, touchLocal, touchRegionAt, touchShapeFromDrag } from './framework/touch-geometry.js';
 import { createTouchOverlay } from './framework/touch-overlay.js';
+import { createCabinSpeech } from './framework/cabin-speech.js';
 import { useLanguage, language, t } from './i18n.js';
 
 await useLanguage();
@@ -64,6 +65,7 @@ if (standalone) {
 }
 const theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 let controller, body, frame, drag, lease, x = 0, y = 0, zoom = 1;
+const performancePlayer = cabin && window.cabinSpeech ? createCabinSpeech({body:() => body,transport:window.cabinSpeech}) : null;
 const reply = data => { if (parentOrigin && parent !== window) parent.postMessage(data, parentOrigin); };
 const commandEpoch = new Map();
 
@@ -91,6 +93,7 @@ function note(value, state) {
   }
 }
 function release() {
+  performancePlayer?.reset();
   controller?.abort();
   cancelAnimationFrame(frame);
   body?.dispose();
@@ -167,7 +170,9 @@ if (editing) addEventListener('message', async event => {
     reply({ type: 'live2d-editor:receipt', id: message.id });
     return;
   }
-  const channel = ['touch-test','figure-word'].includes(message.kind) ? 'action' : message.kind;
+  const releaseWardrobe = message.kind === 'release-task' && message.task === 'wardrobe';
+  const wardrobeCommand = message.kind === 'wardrobe' || releaseWardrobe;
+  const channel = ['touch-test','figure-word'].includes(message.kind) ? 'action' : wardrobeCommand ? 'wardrobe' : message.kind;
   const sequence = (commandEpoch.get(channel) ?? 0) + 1;
   commandEpoch.set(channel, sequence);
   const isCurrent = () => sequence === commandEpoch.get(channel) && body === figure;
@@ -193,16 +198,16 @@ if (editing) addEventListener('message', async event => {
       }
       respond(isCurrent()?{playback}:{cancelled:true});
       return;
-    } else if (message.kind === 'figure-look') await figure.setScheme(message.scheme, { fade: false });
+    } else if (message.kind === 'figure-look') await figure.setScheme(message.scheme, { fade: 0 });
     else if (message.kind === 'figure-word') await figure.previewWord(message.word, message.id);
     else if (message.kind === 'action') await figure.draftAction(message.command, message.id);
     else if (message.kind === 'framing') figure.framing(message.command);
     else if (message.kind === 'visual') figure.previewVisual(message.value, message.id);
-    else if (message.kind === 'wardrobe') figure.draftWardrobe(message.command);
+    else if (message.kind === 'wardrobe') figure.draftWardrobe(message.command, message.id);
     else if (message.kind === 'mouth') figure.speech(message.command, message.mapping ?? null);
     else if (message.kind === 'release-task') {
       if (message.task === 'bindings' || message.task === 'touch') figure.clearDraftAction();
-      if (message.task === 'wardrobe') figure.draftWardrobe({kind:'restore', owner:'editor'});
+      if (releaseWardrobe) figure.draftWardrobe({kind:'restore', owner:'editor'}, message.id);
       if (message.task === 'mouth' && figure.speechStatus?.supported?.release) figure.speech({kind:'release'},null);
     }
     else if (message.kind === 'restore') {
@@ -212,17 +217,21 @@ if (editing) addEventListener('message', async event => {
       figure.draftWardrobe({kind:'restore', owner:'editor'});
       if (figure.speechStatus?.supported?.release) figure.speech({kind:'release'}, null);
     } else throw Error('Invalid preview command');
-    if (['framing', 'wardrobe', 'mouth'].includes(message.kind)) {
+    if (wardrobeCommand || ['framing', 'mouth'].includes(message.kind)) {
       const report = () => message.kind === 'framing' ? figure.framingStatus
-        : message.kind === 'wardrobe' ? figure.wardrobeDraftStatus : figure.speechStatus;
+        : wardrobeCommand ? figure.wardrobeDraftStatus : figure.speechStatus;
       let status;
       for (let attempt = 0; attempt < 30 && isCurrent(); attempt++) {
-        status = report()?.status;
+        const current = report();
+        status = !wardrobeCommand || current?.request === message.id ? current?.status : undefined;
         if (['applied','released','dispatched','failed','unsupported','timeout','mismatch'].includes(status)) break;
         await new Promise(resolve => setTimeout(resolve, 70));
       }
       if (!isCurrent()) { respond({cancelled:true}); return; }
-      if (!['applied', 'released', 'dispatched'].includes(status)) throw Error(report()?.error || status || 'Preview receipt timed out');
+      if (!['applied', 'released', 'dispatched'].includes(status)) {
+        const detail = !wardrobeCommand || report()?.request === message.id ? report()?.error : '';
+        throw Error(detail || text('预览未返回确认。', 'The preview did not return confirmation.'));
+      }
     }
     respond(isCurrent()?{}:{cancelled:true});
   } catch (error) {
@@ -235,7 +244,14 @@ if (editing) addEventListener('message', async event => {
 const retained = new Promise((resolve, reject) => {
   const params = new URLSearchParams({ role: 'model-preview', model: model ?? '' });
   lease = new WebSocket('ws://' + location.host + '/socket?' + params);
-  lease.onmessage = () => resolve();
+  lease.onmessage = event => {
+    const message = JSON.parse(event.data);
+    if (typeof message.appearance === 'string') {
+      document.documentElement.dataset.appearance = message.appearance;
+      if (editing && parent !== self) parent.postMessage({ type:'live2d-editor:appearance', appearance:message.appearance }, location.origin);
+    }
+    if (message.t === 'preview-retained') resolve();
+  };
   lease.onclose = () => { reject(Error('Model preview is unavailable')); release(); note(text('预览连接已关闭。', 'Preview connection closed.'), 'error'); };
 });
 
@@ -258,6 +274,7 @@ async function saveCover(png, failure) {
 }
 
 async function load() {
+  if (editing) reply({type:'live2d-editor:loading'});
   release();
   controller = new AbortController();
   const { signal } = controller;
@@ -266,7 +283,7 @@ async function load() {
   try {
     await retained;
     signal.throwIfAborted();
-    const response = await fetch('/api/bodies/' + encodeURIComponent(model ?? ''), { signal });
+    const response = await fetch('/api/bodies/' + encodeURIComponent(model ?? '') + (editing ? '?editor=1' : ''), { signal });
     if (!response.ok) throw Error(text('这个模型已不可用。', 'This model is unavailable.'));
     const pack = await response.json();
     if (!['live2d-model', 'figure-pack'].includes(pack.kind)) throw Error(text('这个角色暂不可用。', 'This character is unavailable.'));
@@ -281,8 +298,9 @@ async function load() {
     }
     const area = bounds();
     const next = await loadBody({
-      layer, pack, start: { x: area.W / 2, y: area.floorY, facing: 1, scheme: (cabin ? query.get('scheme') : null) ?? pack.figureSettings?.scheme ?? '' }, theme,
+      layer, pack, start: { x: area.W / 2, y: area.floorY, facing: 1, scheme: (cabin ? query.get('scheme') : null) ?? pack.previewScheme ?? pack.figureSettings?.scheme ?? '' }, theme,
       bounds: area, staged: true, signal, previewSize: size, editorPreview: editing,
+      onEvent: performancePlayer ? (kind, detail) => performancePlayer.event(kind, detail) : undefined,
       onCover: coverToken && !packaged ? png => void saveCover(png) : undefined,
       onError: error => {
         if (signal.aborted) return;
@@ -292,6 +310,7 @@ async function load() {
     });
     if (signal.aborted) { next.dispose(); return; }
     body = next;
+    performancePlayer?.mount(pack, crypto.randomUUID());
     next.place(area.W / 2, 1, area.floorY);
     next.reveal();
     if (editing) reply({type:'live2d-editor:ready',behavior:next.modelBehavior,words:next.words});
@@ -301,7 +320,9 @@ async function load() {
     let lastAction = '';
     function draw(now) {
       if (signal.aborted) return;
-      if (!modelPaused) next.tick(Math.min(.05, Math.max(0, (now - previous) / 1000)), true);
+      const dt = Math.min(.05, Math.max(0, (now - previous) / 1000));
+      if (!modelPaused) next.tick(dt, true);
+      performancePlayer?.tick(dt);
       previous = now;
       const action = next.draftActionStatus;
       if (editing && action?.requestId && action.requestId+':'+action.status !== lastAction) {
@@ -347,6 +368,6 @@ const observer = new ResizeObserver(() => {
 });
 observer.observe(viewport);
 quality.onchange = () => void load();
-addEventListener('pagehide', () => { observer.disconnect(); lease.close(); release(); }, { once: true });
+addEventListener('pagehide', () => { observer.disconnect(); lease.close(); release(); performancePlayer?.dispose(); }, { once: true });
 void load();
 

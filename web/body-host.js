@@ -26,6 +26,7 @@ import { createInputReceiptState } from './body-input-contract.js';
 import { createSpeechReceiptState } from './body-speech-contract.js';
 import { language, t } from './i18n.js';
 import { BODY_EFFECT_KEYS, readEffectReport, effectOutcome } from './body-effects-contract.js';
+import { visualSettings } from './body-visual-contract.js';
 
 /** A pack that has not drawn its first frame by then is taken as broken: its scripts or textures did not load. */
 const READY_MS = 20_000;
@@ -71,11 +72,16 @@ export function readLayout(l, size) {
   if (touchFrame && l.touchAreas) {
     try { touchAreas = readTouchProfile({ areas:l.touchAreas, rules:[] }).areas; } catch { /* Ignore unrecognized geometry reports. */ }
   }
+  const restExtent = l.restExtent;
+  const hasRestExtent = Array.isArray(restExtent) && restExtent.length === 4
+    && restExtent.every(n => Number.isFinite(n) && Math.abs(n) <= 1024)
+    && restExtent[2] - restExtent[0] >= 1 && restExtent[3] - restExtent[1] >= 1;
   return {
     x: clampTo(num(l.x, W / 2), 0, W), ...(typeof l.y === 'number' && Number.isFinite(l.y) ? { y: clampTo(l.y, 0, groundLimit) } : {}), facing: l.facing === -1 ? -1 : 1, mode: typeof l.mode === 'string' ? l.mode.slice(0, 32) : 'idle',
     busy: !!l.busy, moving: !!l.moving, pressing: !!l.pressing,
     cursor: l.cursor === 'grab' || l.cursor === 'grabbing' ? l.cursor : '',
     box,
+    ...(hasRestExtent ? { restExtent } : {}),
     ...(touchFrame ? { touchFrame, touchAreas } : {}),
     ...(Number.isFinite(l.touchBounds?.y) && Number.isFinite(l.touchBounds?.h) && l.touchBounds.h > 0
       ? { touchBounds: { y: clampTo(l.touchBounds.y, -2 * side, H + 2 * side), h: Math.min(l.touchBounds.h, 2 * side) } }
@@ -140,7 +146,7 @@ export function knownScheme(pack, scheme) {
  * `pack`: the descriptor from `/api/bodies/:id`; `start`: { x, facing, enter, skin }; `bounds`: { W, H, floorY, S };
  * `theme`: 'dark' | 'light'. Resolves to the body once it is ready.
  */
-export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, onError, onBodyEffects, staged = false, signal, previewSize, editorPreview = false, onCover }) {
+export function loadBody({ layer, pack, start, theme, bounds, frameBounds, onEvent, onSound, onError, onBodyEffects, staged = false, signal, previewSize, editorPreview = false, onCover }) {
   return new Promise((resolve, reject) => {
     const frame = document.createElement('iframe');
     frame.setAttribute('sandbox', 'allow-scripts');
@@ -149,6 +155,12 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
     frame.className = 'figure-frame';
     // The server limits the renderer to its own model assets.
     frame.src = `/model-frame?model=${encodeURIComponent(pack.id)}`;
+    function applyPackageVisual(value) {
+      const visual = value == null ? null : visualSettings(value);
+      frame.style.filter = visual && (visual.hue || visual.brightness !== 1)
+        ? 'hue-rotate(' + visual.hue + 'deg) brightness(' + visual.brightness + ')' : '';
+    }
+    if (pack.kind === 'figure-pack') applyPackageVisual(pack.figureSettings?.visual);
     // the frame's window onto the stage: all of it, or with the halo on, the halo's rect around the body (haloRect)
     const clip = document.createElement('div');
     clip.className = 'figure-clip';
@@ -162,8 +174,22 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
     let effectStatus = { status: 'unknown', ...readEffectReport(null) };
     const touches = touchGate();
     const waits = new Map();
-    const wordPreviews = new Map();
+    const wordReceipts = new Map();
     const post = (m) => { if (!gone) frame.contentWindow?.postMessage(m, '*'); };
+    function sendWord(type, word, id) {
+      return new Promise((resolve, reject) => {
+        const key = `${type}:${id}`;
+        const finish = (error) => {
+          clearTimeout(timer);
+          wordReceipts.delete(key);
+          if (error) reject(Error(error));
+          else resolve();
+        };
+        const timer = setTimeout(() => finish('The figure did not acknowledge this action'), 2600);
+        wordReceipts.set(key, finish);
+        post({ t: type, word, id });
+      });
+    }
     const configurationReceipts=createModelConfigurationState(post,pack.resource?.configuration);
     const speechReceipts = createSpeechReceiptState(post);
     const inputReceipts = createInputReceiptState(post);
@@ -188,10 +214,10 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
       signal?.removeEventListener('abort', abort);
       removeEventListener('message', onMessage);
       clip.remove();
-      for (const done of waits.values()) done();
+      for (const done of waits.values()) done('角色预览已关闭');
       waits.clear();
-      for (const finish of wordPreviews.values()) finish('角色预览已关闭');
-      wordPreviews.clear();
+      for (const finish of wordReceipts.values()) finish('角色已关闭');
+      wordReceipts.clear();
     }
     function fail(err) {
       if (gone) return;
@@ -207,6 +233,7 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
     }
 
     let modelBehavior = null, wardrobeDraftStatus = null, renderQuality = null, frameRevision = 0, frameScope = 0, reportedFrameScope = 0;
+    let wardrobeRevision = 0;
     const body = {
       pack: pack.id,
       get renderQuality() { return renderQuality; },
@@ -215,7 +242,10 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
       markFrameScope() { return ++frameScope; },
       get modelBehavior() { return structuredClone(modelBehavior); },
       get modelConfiguration() { return configurationReceipts.snapshot(); },
-      previewVisual: (value, request) => post({ t: 'body-visual', value, request }),
+      previewVisual(value, request) {
+        if (pack.kind === 'figure-pack') applyPackageVisual(value ?? pack.figureSettings?.visual);
+        else post({ t: 'body-visual', value, request });
+      },
       configureModel:configuration=>configurationReceipts.send(configuration),
       get layout() { return layout; },
       get z() { return z; },
@@ -223,7 +253,10 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
       get words() { return words; },
       supportsWord(word) { return bodyWords.includes(word); },
       get wardrobeDraftStatus() { return wardrobeDraftStatus; },
-      draftWardrobe: command => post({ t: 'body-draft-wardrobe', command }),
+      draftWardrobe(command, request = `wardrobe-${++wardrobeRevision}`) {
+        wardrobeDraftStatus = { owner: command.owner, request, status: 'pending' };
+        post({ t: 'body-draft-wardrobe', command, request });
+      },
       get draftActionStatus() { return draftActions.snapshot(); },
       draftAction: (command, requestId) => draftActions.send(command, requestId),
       clearDraftAction(owner) { if (draftActions.clear(owner)) post({ t: 'body-clear-draft-action', owner }); },
@@ -252,22 +285,16 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
         post({ t: 'tick', dt, draw, frameScope });
       },
       do: (word) => post({ t: 'do', word }),
+      dispatchWord(word, id) {
+        if (gone || !ready || (words && !words.includes(word))) return Promise.reject(Error('The figure does not support this action'));
+        return sendWord('body-word', word, id);
+      },
       previewWord(word, id) {
         if (!editorPreview || pack.kind !== 'figure-pack' || gone || !ready ||
             !pack.vocab.some(action => action.id === word) || (words && !words.includes(word))) {
           return Promise.reject(Error('The figure does not support this action'));
         }
-        return new Promise((resolve, reject) => {
-          const finish = (error) => {
-            clearTimeout(timer);
-            wordPreviews.delete(id);
-            if (error) reject(Error(error));
-            else resolve();
-          };
-          const timer = setTimeout(() => finish('The figure did not acknowledge this action'), 2600);
-          wordPreviews.set(id, finish);
-          post({ t: 'editor-figure-word', word, id });
-        });
+        return sendWord('editor-figure-word', word, id);
       },
       walk: (x, run, id, y) => post({ t: 'walk', x, run, id, y }),
       /** One of the pack's own targets, `{ to, run, params }` as the World checked it. */
@@ -304,10 +331,12 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
       cue: (kind) => post({ t: 'cue', kind }),
       talk: () => post({ t: 'talk' }),
       setScheme(id, o = {}) {
-        if (gone) return Promise.resolve();
+        if (gone) return editorPreview ? Promise.reject(Error('角色预览已关闭')) : Promise.resolve();
         const s = ++seq;
-        post({ t: 'scheme', id: knownScheme(pack, id), fade: o.fade ?? 0, seq: s });
-        return new Promise((done) => waits.set(s, done));
+        return new Promise((resolve, reject) => {
+          waits.set(s, error => editorPreview && error ? reject(Error(error)) : resolve());
+          post({ t: 'scheme', id: knownScheme(pack, id), fade: o.fade ?? 0, seq: s, editor: editorPreview });
+        });
       },
       /**
        * The light halo behind the body (pet-app's backdrop), as a CSS filter on the frame's window cut down to
@@ -375,7 +404,18 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
         layout = readLayout(m.layout, size);
         if (previewSize) renderQuality = m.renderQuality ?? null;
         z = typeof m.z === 'string' ? m.z : null;
-        if (!presented && (!staged || layout)) complete();
+        if (!presented && layout) {
+          if (frameBounds && frameScope === 0) {
+            // Fit the hidden candidate from its own silhouette and wait for its new frame.
+            try { body.set({ bounds: frameBounds(layout) }); }
+            catch (error) { fail(error); return; }
+            body.markFrameScope();
+            body.tick(0);
+            return;
+          }
+          if (reportedFrameScope !== frameScope) return;
+          complete();
+        }
         for (const s of Array.isArray(m.sounds) ? m.sounds : []) {
           if (typeof s?.name === 'string') onSound?.(s.name.slice(0, 64), typeof s.kind === 'string' ? s.kind : '', ...(Array.isArray(s.args) ? s.args.filter((a) => typeof a === 'number' || typeof a === 'boolean') : []));
         }
@@ -396,7 +436,8 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
           }
         }
       } else if (m.t === 'body-draft-wardrobe') {
-        wardrobeDraftStatus = { owner: m.owner, status: m.status, ...(typeof m.error === 'string' ? { error: m.error.slice(0, 250) } : {}) };
+        if (m.request !== wardrobeDraftStatus?.request || m.owner !== wardrobeDraftStatus?.owner) return;
+        wardrobeDraftStatus = { owner: m.owner, request: m.request, status: m.status, ...(typeof m.error === 'string' ? { error: m.error.slice(0, 250) } : {}) };
       } else if (m.t === 'body-draft-action') {
         draftActions.receive(m);
       } else if (m.t === 'body-framing') {
@@ -409,12 +450,14 @@ export function loadBody({ layer, pack, start, theme, bounds, onEvent, onSound, 
         clearTimeout(effectTimer);
         effectStatus = effectOutcome(requestedEffects, m.report);
         onBodyEffects?.();
-      } else if (m.t === 'editor-figure-word') {
-        wordPreviews.get(m.id)?.(m.ok === true ? undefined : String(m.reason || 'Action unavailable'));
+      } else if (m.t === 'editor-figure-word' || m.t === 'body-word') {
+        wordReceipts.get(`${m.t}:${m.id}`)?.(m.ok === true ? undefined : String(m.reason || 'Action unavailable'));
       } else if (m.t === 'scheme') {
-        if (m.seq === seq && waits.has(m.seq)) modelBehavior = modelBehaviorReport(m.modelBehavior);
-        z = typeof m.z === 'string' ? m.z : null;
-        waits.get(m.seq)?.();
+        if (!m.error) {
+          if (m.seq === seq && waits.has(m.seq)) modelBehavior = modelBehaviorReport(m.modelBehavior);
+          z = typeof m.z === 'string' ? m.z : null;
+        }
+        waits.get(m.seq)?.(m.error);
         waits.delete(m.seq);
       } else if (m.t === 'error') {
         fail(new Error(m.message));

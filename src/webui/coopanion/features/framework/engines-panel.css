@@ -1,0 +1,66 @@
+.pet-studio[data-workspace-panel="engines"] .studio-task {
+  width: min(100%, 880px);
+  margin-inline: auto;
+  gap: 16px;
+}
+
+.pet-studio .studio-engine {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 24px;
+  padding: 20px 24px;
+  border: 1px solid var(--studio-line);
+  border-radius: var(--studio-panel-radius);
+  background: var(--studio-surface);
+}
+
+.pet-studio .studio-engine-header,
+.pet-studio .studio-engine-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pet-studio .studio-engine-header h2 { margin: 0; font-size: 16px; line-height: 24px; }
+.pet-studio .studio-engine-kind { font-size: 12px; color: var(--studio-muted); }
+.pet-studio .studio-engine-description { grid-column: 1; margin: 0; color: var(--studio-muted); }
+.pet-studio .studio-engine-state {
+  grid-area: 1 / 2;
+  justify-self: end;
+  align-self: center;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: end;
+}
+.pet-studio .studio-engine-state[data-state="ready"] { color: var(--studio-ready); }
+.pet-studio .studio-engine-state[data-state="working"] { color: var(--studio-wait); }
+.pet-studio .studio-engine-actions,
+.pet-studio .studio-engine-transfer { grid-column:1 / -1; }
+.pet-studio .studio-engine-transfer {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  block-size:24px;
+  align-items:center;
+  gap:8px;
+}
+.pet-studio .studio-engine-version { margin:0; color:var(--studio-muted); font-size:12px; font-variant-numeric:tabular-nums; }
+.pet-studio .studio-engine-transfer[data-error=true] :is(.studio-engine-version,progress) { visibility:hidden; }
+.pet-studio .studio-engine-transfer progress { grid-area:1 / 2; inline-size:100%; block-size:8px; }
+.pet-studio .studio-engine-actions { margin-top: 4px; }
+.pet-studio .studio-engine-primary { min-inline-size:132px; }
+.pet-studio .studio-engine-actions a { padding: 6px 4px; }
+.pet-studio .studio-engine-error {
+  grid-area:1 / 1 / auto / -1;
+  max-block-size:24px;
+  margin:0;
+  overflow:auto;
+  line-height:20px;
+  color:var(--studio-alert);
+}
+
+@container (max-width: 570px) {
+  .pet-studio .studio-engine { grid-template-columns: minmax(0, 1fr); padding: 16px; gap: 6px; }
+  .pet-studio .studio-engine-state { grid-area: auto; justify-self: start; text-align: start; }
+}

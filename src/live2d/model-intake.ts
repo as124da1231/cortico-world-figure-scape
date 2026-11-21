@@ -10,7 +10,7 @@ import {
 
 interface Candidate {
   id: string;
-  kind: 'live2d' | 'figure';
+  kind: 'live2d' | 'figure' | 'spriter';
   title: string;
   dir: string;
   file: string;
@@ -37,7 +37,7 @@ export function createModelIntake(directory: string) {
   }
 
   async function discover(input: string, signal: AbortSignal): Promise<Discovery> {
-    const result = await findModels(input, { signal, includeFigurePacks: true }) as Discovery;
+    const result = await findModels(input, { signal, includeFigurePacks: true, includeSpriter: true }) as Discovery;
     result.models = result.models.filter(candidate => {
       if (candidate.kind !== 'figure') return true;
       try {
@@ -80,7 +80,7 @@ export function createModelIntake(directory: string) {
       temp = await mkdtemp(join(root, '.import-'));
       await writeImportFiles(temp, files, signal);
       const discovered = await discover(temp, signal);
-      if (!discovered.models.length) throw Error(discovered.problems[0]?.reason ?? 'No supported Live2D model or Coo figure package was found');
+      if (!discovered.models.length) throw Error(discovered.problems[0]?.reason ?? '未找到 Live2D 模型、Coo 形象包或 Spriter 工程');
       signal.throwIfAborted();
       await rename(temp, target);
       return target;

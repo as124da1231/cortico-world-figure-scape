@@ -43,9 +43,9 @@ export async function localFile(root,name,max=4*1048576){
 
 /** Bounded discovery, without executing any model files. Never follows directory links.
  * @param {string | undefined} input
- * @param {{roots?:string[],query?:string,maxDepth?:number,maxEntries?:number,maxModels?:number,signal?:AbortSignal}} options
+ * @param {{roots?:string[],query?:string,maxDepth?:number,maxEntries?:number,maxModels?:number,includeFigurePacks?:boolean,includeSpriter?:boolean,signal?:AbortSignal}} options
  */
-export async function findModels(input,{roots=[],query='',maxDepth=4,maxEntries=10000,maxModels=40,includeFigurePacks=false,signal}={}){
+export async function findModels(input,{roots=[],query='',maxDepth=4,maxEntries=10000,maxModels=40,includeFigurePacks=false,includeSpriter=false,signal}={}){
  const result=[],problems=[];let entries=0,truncated=false;
  const scan=async(dir,depth,entryFile)=>{
   signal?.throwIfAborted();if(result.length>=maxModels||entries>=maxEntries){truncated=true;return;}
@@ -77,14 +77,24 @@ export async function findModels(input,{roots=[],query='',maxDepth=4,maxEntries=
     result.push({id:'model-'+digest(await realpath(file)).slice(0,16),kind:'live2d',title:basename(dir).slice(0,120),dir:await realpath(dir),file:entry.name});
    }catch(e){problems.push({file,reason:e.message});}
   }
-  if(manifests.length||depth>=maxDepth)return;
+  if(includeSpriter)for(const entry of names){
+   if(!entry.isFile()||!/\.scml$/i.test(entry.name)||entryFile&&entry.name!==entryFile)continue;
+   if(result.length>=maxModels){truncated=true;break;}
+   if(query&&!entry.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()))continue;
+   const file=join(dir,entry.name);
+   try{
+    const source=await localFile(dir,entry.name);
+    result.push({id:'spriter-source-'+digest(source).slice(0,16),kind:'spriter',title:basename(entry.name).slice(0,-5).slice(0,120),dir:dirname(source),file:basename(source)});
+   }catch(error){problems.push({file,reason:error.message});}
+  }
+  if(entryFile||manifests.length||depth>=maxDepth)return;
   for(const entry of names){if(entry.isDirectory()&&!entry.isSymbolicLink())await scan(join(dir,entry.name),depth+1);if(truncated)break;}
  };
  const paths=input?[input]:roots;
  for(let path of [...new Set(paths.filter(p=>typeof p==='string'&&isAbsolute(p)))].slice(0,8)){
   const info=await lstat(path).catch(()=>null);
   let entryFile;
-  if(info?.isFile()){if(/\.model3\.json$/i.test(path)||includeFigurePacks&&basename(path).toLowerCase()==='figure.json'){entryFile=basename(path);path=dirname(path);}else{problems.push({file:path,reason:'请选择模型或形象包的入口文件'});continue;}}
+  if(info?.isFile()){if(/\.model3\.json$/i.test(path)||includeFigurePacks&&basename(path).toLowerCase()==='figure.json'||includeSpriter&&/\.scml$/i.test(path)){entryFile=basename(path);path=dirname(path);}else{problems.push({file:path,reason:'请选择模型或形象包的入口文件'});continue;}}
   await scan(resolve(path),0,entryFile);
  }
  return {models:[...new Map(result.map(m=>[m.id,m])).values()],problems:problems.slice(0,20),truncated,entries};

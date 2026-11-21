@@ -39,9 +39,11 @@ export function createTtsService(ports: {
     clips.delete(id);
     clip.controller.abort();
   }
-  function stopAll() {
-    for (const id of clips.keys()) stop(id);
-    if (playback?.status === 'started' || playback?.status === 'preparing') playback = { ...playback, status: 'cancelled' };
+  function stopAll(keep: ReadonlySet<string> = new Set()) {
+    for (const id of clips.keys()) if (!keep.has(id)) stop(id);
+    if (playback && !keep.has(playback.id) && ['started','preparing','paused'].includes(playback.status)) {
+      playback = { ...playback, status: 'cancelled' };
+    }
   }
   const state = () => {
     const active = ports.activeService?.();
@@ -131,7 +133,11 @@ export function createTtsService(ports: {
       if (status === 'preparing') {
         playback = { id, status, duration: 12, startedAt: Date.now() };
       } else if (status === 'started' && Number.isFinite(message.duration) && (message.duration as number) > 0) {
-        playback = { id, status, duration: Math.min(message.duration as number, 120), startedAt: Date.now() };
+        const duration = Math.min(message.duration as number, 120);
+        const offset = typeof message.position === 'number' && Number.isFinite(message.position) ? message.position : 0;
+        playback = { id, status, duration, startedAt: Date.now() - Math.max(0, Math.min(duration, offset)) * 1000 };
+      } else if (status === 'paused') {
+        playback = { id, status };
       } else if (status === 'finished' || status === 'failed' || status === 'cancelled') {
         playback = { id, status, ...(typeof message.reason === 'string' ? { reason: message.reason.slice(0, 200) } : {}) };
         stop(id);

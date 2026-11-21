@@ -1,4 +1,44 @@
 @import "../../../../../web/ui-tokens.css";
 
+.desktop-live2d-native-page.pet-studio {
+  --studio-bg: var(--paper);
+  --studio-surface: var(--sheet);
+  --studio-sunken: var(--sheet-3);
+  --studio-text: var(--ink);
+  --studio-muted: var(--ink-soft);
+  --studio-accent: var(--ink-blue);
+  --studio-brand: var(--accent);
+  --studio-action: color-mix(in srgb, var(--accent) 13%, var(--sheet-2));
+  --studio-hover: var(--hover);
+  --studio-line: var(--line);
+  --studio-control-line: var(--line-2);
+  --studio-surface-edge: var(--line);
+  --studio-alert: var(--danger);
+  --studio-ready: var(--ok);
+  --studio-wait: var(--warn);
+  --studio-focus: var(--accent);
+  --studio-shadow: 0 8px 24px var(--shadow-soft);
+  --studio-control-shadow: none;
+  --studio-backdrop: var(--overlay);
+  --studio-primary-bg: var(--accent);
+  --studio-primary-ink: var(--on-accent, #fff);
+  --studio-primary-edge: var(--studio-primary-bg);
+  --studio-radius: var(--radius-md);
+  --studio-card-radius: var(--radius-lg);
+  --coo-bg: var(--studio-bg);
+  --coo-surface: var(--studio-surface);
+  --coo-text: var(--studio-text);
+  --coo-muted: var(--studio-muted);
+  --coo-line: var(--studio-line);
+  --coo-control-line: var(--studio-control-line);
+  --coo-accent: var(--studio-brand);
+  --coo-accent-ink: var(--studio-accent);
+  --coo-tint: var(--studio-action);
+  --coo-said-bg: var(--bubble-bg);
+  --coo-said-ink: var(--bubble-ink);
+  --coo-shadow: var(--shadow-soft);
+  --coo-warning: var(--warn);
+}
+
 @container (min-width: 960px) { .pet-studio > * { --studio-gutter: 24px; } }
 @container (max-width: 639px) { .pet-studio > * { --studio-gutter: 12px; --studio-control: var(--studio-touch); } }

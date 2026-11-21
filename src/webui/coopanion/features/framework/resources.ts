@@ -4,9 +4,11 @@ import { invokePanelBinary } from '../../base/api.ts';
 import type { PageContext } from '../../base/page.ts';
 import { errorText, studioControls, studioText as t } from './controls.ts';
 import type { NotificationKind } from './notifications.ts';
+import type { CharacterEditorSource } from '../../../../framework/model-contract.ts';
+import { characterOriginLabel } from '../../../../framework/character-source.ts';
 
 type CoverStatus = { phase: 'queued'|'rendering' } | { phase:'failed'; reason:string };
-type Resource = { origin?: 'cabin-world'; builtin?: boolean; coverJob?: CoverStatus; id: string; name: string; kind: string; active: boolean; ready?: boolean; failed?: boolean; failure?: string; loading?: boolean; wardrobe?: boolean; sourceActive?: boolean; source?: string; cover?: string; sourceId?: string };
+type Resource = { editor?: CharacterEditorSource; origin?: 'cabin-world' | 'spriter'; builtin?: boolean; coverJob?: CoverStatus; id: string; name: string; kind: string; active: boolean; ready?: boolean; failed?: boolean; failure?: string; loading?: boolean; wardrobe?: boolean; sourceActive?: boolean; source?: string; cover?: string; sourceId?: string };
 type LibraryOptions = {
   confirm: () => Promise<boolean>;
   changed: () => Promise<void>;
@@ -27,20 +29,22 @@ export function resourceLibrary(ctx: PageContext, options: LibraryOptions) {
   search.type = 'search';
   search.placeholder = t('搜索模型', 'Search models');
   search.setAttribute('aria-label', search.placeholder);
-  header.append(title, search);
+  const libraryState = c.node('div', '', 'studio-resource-state');
+  libraryState.append(title);
+  header.append(libraryState, search);
 
   const grid = c.node('div', '', 'studio-model-grid');
   let retryingCovers = false;
   const retryCovers = c.button(t('重试封面', 'Retry covers'), () => void retryFailedCovers());
   retryCovers.classList.add('studio-cover-retry');
   retryCovers.hidden = true;
-  header.append(retryCovers);
+  libraryState.append(retryCovers);
   const pages = c.node('div', '', 'studio-inline studio-library-pages');
   const previous = c.button(t('上一页', 'Previous'), () => { page--; render(); });
   const next = c.button(t('下一页', 'Next'), () => { page++; render(); });
   const countLabel = c.node('span', '', 'studio-help');
   pages.append(previous, countLabel, next);
-  header.append(pages);
+  libraryState.append(pages);
   element.append(header, grid);
   let rows: Resource[] = [];
   let page = 0;
@@ -167,19 +171,18 @@ export function resourceLibrary(ctx: PageContext, options: LibraryOptions) {
     if (resource.origin) item.dataset.origin = resource.origin;
     const identity = c.node('div', '', 'studio-model-identity');
     const visual = c.node('div', '', 'studio-model-cover');
+    const source = resource.editor ?? { origin: resource.origin ?? (resource.kind === 'figure-pack' ? 'figure-pack' : 'live2d-model'), builtin: resource.builtin };
+    const originLabel = characterOriginLabel(source,t('zh','en') === 'en');
     visual.append(
       c.node('span', '', 'studio-cover-status'),
-      c.node('span', resource.builtin ? t('内置形象包', 'Built-in figure') : resource.origin === 'cabin-world' ? t('小屋世界 · Cabin World', 'Cabin World')
-        : resource.kind === 'figure-pack' ? t('Coo 形象包', 'Coo figure') : t('原始 Live2D', 'Live2D source'), 'studio-model-source'),
+      c.node('span', originLabel, 'studio-model-source'),
     );
     item.append(visual);
     syncCover(item,resource);
     const info = c.node('div', '', 'studio-model-info');
     const name = c.node('h3', resource.name);
     name.title = resource.name;
-    const originLabel = resource.builtin ? t('内置形象包', 'Built-in figure') : resource.origin === 'cabin-world' ? t('小屋世界 · Cabin World', 'Cabin World')
-      : resource.source ?? (resource.kind === 'figure-pack' ? t('Coo 形象包', 'Coo figure') : t('原始 Live2D 模型', 'Original Live2D model'));
-    item.title = originLabel;
+    item.title = resource.source ?? originLabel;
     info.append(name);
     if (resource.failed && resource.failure) info.append(c.node('p', resource.failure, 'studio-help studio-model-failure'));
     identity.append(info);

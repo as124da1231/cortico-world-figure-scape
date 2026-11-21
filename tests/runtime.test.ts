@@ -3,7 +3,7 @@
  * first source that has it, checksum rejection, falling back to the second source, the `.partial`
  * protocol, and archive unpacking for the Electron runtime. Nothing reaches the network.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -105,6 +105,35 @@ describe('the FunASR model', () => {
 });
 
 describe.skipIf(process.platform !== 'win32' && process.platform !== 'darwin')('the Electron runtime', () => {
+  it('reports the download size before starting and shares a cancellable download with retry', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pet-rt-'));
+    let attempts = 0;
+    const fetchImpl: typeof fetch = async (_url, options) => {
+      if (++attempts > 1) return new Response(null, { status:404 });
+      return new Promise((_resolve,reject) => options!.signal!.addEventListener('abort', () => reject(options!.signal!.reason), {once:true}));
+    };
+    const store = new RuntimeStore({ runtimesRoot: () => root, modelsDir: () => root, fetchImpl });
+    expect(store.electron.state().total).toBeGreaterThan(100_000_000);
+    const first = store.electron.install();
+    expect(store.electron.install()).toBe(first);
+    expect(store.electron.state()).toMatchObject({phase:'working', stage:'downloading'});
+    await store.electron.cancel();
+    expect(store.electron.state()).toMatchObject({phase:'absent', cancelled:true});
+    expect(existsSync(`${store.electron.dir}.partial`)).toBe(false);
+    await store.electron.install();
+    expect(store.electron.state()).toMatchObject({phase:'error', cancelled:false, detail:'HTTP 404'});
+    expect(attempts).toBe(2);
+  });
+
+  it('rejects a truncated archive before extraction', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pet-rt-'));
+    const fetchImpl = vi.fn(async () => new Response('short file'));
+    const store = new RuntimeStore({ runtimesRoot: () => root, modelsDir: () => root, fetchImpl });
+    await store.electron.install();
+    expect(store.electron.state()).toMatchObject({phase:'error', detail:'invalid-archive-size'});
+    expect(existsSync(`${store.electron.dir}.partial`)).toBe(false);
+  });
+
   it('reports an HTTP failure as an error state and leaves no partial directory', async () => {
     const a = await fileServer({});
     try {

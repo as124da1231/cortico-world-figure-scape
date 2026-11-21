@@ -45,7 +45,8 @@
   display:inline-flex; align-items:center; justify-content:center; gap:6px;
   min-block-size:33px; padding:4px 9px; font:inherit; font-size:12px;
   color:var(--coo-muted); background:var(--coo-surface); border:1.5px solid var(--coo-line);
-  border-radius:8px; cursor:pointer;
+  border-radius:var(--studio-radius); cursor:pointer;
+  transition:background-color var(--studio-motion), border-color var(--studio-motion), box-shadow var(--studio-motion);
 }
 .landscape-chat :is(button,textarea):focus-visible { outline:2px solid var(--coo-accent); outline-offset:1px; }
 .landscape-chat button:disabled { opacity:.55; cursor:default; }
@@ -61,7 +62,11 @@
   padding:7px; resize:none; font:inherit; font-size:13px; line-height:18px;
   color:inherit; background:var(--coo-bg); border:0; border-radius:7px; box-sizing:border-box;
 }
-.landscape-chat-form .landscape-chat-send { background:var(--coo-text); color:var(--coo-surface); border-color:transparent; }
+.landscape-chat-form .landscape-chat-send { background:var(--studio-primary-bg); color:var(--studio-primary-ink); border-color:var(--studio-primary-edge); }
+.landscape-chat-form .landscape-chat-send:hover:not(:disabled) { background:var(--studio-primary-hover); }
+.landscape-chat-form button:active:not(:disabled) { box-shadow:var(--studio-pressed-shadow); }
+.live2d-surface[data-appearance="mint"] .landscape-chat-send { background:var(--skin-ink); color:var(--coo-surface); border-color:var(--skin-ink); }
+.live2d-surface[data-appearance="mint"] .landscape-chat-send:hover:not(:disabled) { background:var(--skin-eye); border-color:var(--skin-eye); }
 .landscape-chat-form .landscape-chat-mic:is(.on,.holding,.live) { color:var(--coo-accent); }
 .landscape-chat-form .landscape-chat-mic { padding:0; inline-size:33px; }
 
@@ -89,4 +94,15 @@
 .pet-space-room .scene-exit button:focus-visible { outline-color:#d29980; }
 .pet-phone-chat .phone-chat-message:not([hidden]) { font-size:calc(13px * var(--bubble-font, 1)); }
 .pet-phone-chat .phone-chat-dock .phone-chat-input::placeholder { color:var(--phone-soft); }
+
+.live2d-surface[data-appearance] .pet-space-phone {
+  background:radial-gradient(ellipse at 54% 30%,var(--studio-action),transparent 70%),
+    linear-gradient(155deg,var(--studio-bg),var(--studio-sunken));
+}
+.live2d-surface[data-appearance] .pet-space-room .scene-exit button {
+  color:var(--studio-accent);
+  background:var(--studio-surface);
+  border-color:var(--studio-line);
+}
+.live2d-surface[data-appearance] .pet-space-room .scene-exit button:hover { background:var(--studio-action); }
 

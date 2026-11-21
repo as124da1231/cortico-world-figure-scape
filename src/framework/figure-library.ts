@@ -5,16 +5,19 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { readManifest, type FigureManifest, type FigurePack } from '../packs.ts';
 import { MODEL_BUNDLE_LIMIT } from '../live2d/import-files.ts';
 import { assertTouchAreaChange, readTouchProfile } from '../../web/framework/touch-geometry.js';
+// @ts-expect-error Shared renderer-side visual settings validator.
+import { visualSettings } from '../../web/body-visual-contract.js';
 import type { FigureSettings, FigureSettingsPatch } from './model-contract.ts';
 export type { FigureSettings } from './model-contract.ts';
 
 const ID = /^figure-[a-f0-9]{24}$/;
 function revisionOf(settings: FigureSettings): string {
-  return createHash('sha256').update(JSON.stringify([settings.scheme || '', settings.touch ?? null])).digest('hex');
+  const fields = [settings.scheme || '', settings.touch ?? null, ...(settings.visual ? [settings.visual] : [])];
+  return createHash('sha256').update(JSON.stringify(fields)).digest('hex');
 }
 
 export function figureSchemes(manifest: FigureManifest) {
-  return manifest.presets.map(preset => ({ id: preset.id, name: preset.name ?? { zh: preset.id, en: preset.id } }));
+  return manifest.presets.map(preset => ({ id: preset.id, name: preset.name ?? { zh: preset.id, en: preset.id }, pick: preset.pick }));
 }
 
 export function validateFigureScheme(manifest: FigureManifest, value: unknown): string {
@@ -95,6 +98,11 @@ export function createFigureLibrary(directory: string, builtin?: { id: string; d
         if (update.touch == null) delete value.touch;
         else value.touch = update.touch;
       }
+      if ('visual' in update) {
+        const visual = update.visual == null ? null : visualSettings(update.visual);
+        if (visual && (visual.hue !== 0 || visual.brightness !== 1)) value.visual = visual;
+        else delete value.visual;
+      }
       if (value.touch !== undefined) {
         value.touch = readTouchProfile(value.touch);
         assertTouchAreaChange(value.touch.areas, previous.touch?.areas);
@@ -160,8 +168,8 @@ export function createFigureLibrary(directory: string, builtin?: { id: string; d
     } finally { await rm(temp, { recursive: true, force: true }); }
   }
 
-  async function importGenerated(generate: (directory: string, signal: AbortSignal) => Promise<void>) {
-    const signal = new AbortController().signal;
+  async function importGenerated(generate: (directory: string, signal: AbortSignal) => Promise<void>, signal = new AbortController().signal) {
+    signal.throwIfAborted();
     await mkdir(root, { recursive:true });
     const directory = await mkdtemp(join(root, '.generated-'));
     try {

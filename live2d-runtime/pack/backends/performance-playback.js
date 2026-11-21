@@ -112,11 +112,13 @@ export function createPerformancePlayback({ model, paramIndex, protectedIds }) {
         const duration = Math.min(120, Number(command.duration));
         if (!(duration > 0)) return;
         const startedAt = Date.now();
+        const position = Number.isFinite(command.position) ? bounded(command.position, 0, duration) : 0;
         for (const [ticket, expiry] of used) if (expiry <= startedAt) used.delete(ticket);
-        if (collect({ ticket: 'media-' + command.id, startedAt, expiresAt: startedAt + (duration + 1) * 1000,
+        if (position > 0 && active?.media !== command.id) used.delete('media-' + command.id);
+        if (collect({ ticket: 'media-' + command.id, startedAt: startedAt - position * 1000, expiresAt: startedAt + (duration - position + 1) * 1000,
           cues: command.cues, resources, face: command.face, speechMs: duration * 1000 })) {
           active.media = command.id;
-          active.position = 0;
+          active.position = position;
         }
       } else if (active?.media === command.id) {
         if (command.kind === 'stop') active = undefined;

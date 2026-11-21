@@ -1,19 +1,21 @@
-.control-toggle {
+:is(.control-toggle, .pet-studio input[role=switch]) {
   appearance:none; position:relative; display:block; flex:none;
   inline-size:34px; block-size:20px; margin:0;
   border:0; border-radius:99px; background:var(--coo-control-line);
+  cursor:pointer;
   transition:background var(--studio-motion);
 }
-.control-toggle::after {
+:is(.control-toggle, .pet-studio input[role=switch])::after {
   content:""; position:absolute; inset-block-start:2px; inset-inline-start:2px;
   inline-size:16px; block-size:16px; border-radius:50%;
   background:#fff; box-shadow:0 1px 2px #0004;
   transition:inset-inline-start var(--studio-motion);
 }
-.control-toggle:is(:checked,[data-checked=true]), [aria-checked=true] > .control-toggle {
+:is(.control-toggle, .pet-studio input[role=switch]):is(:checked,[data-checked=true]), [aria-checked=true] > .control-toggle {
   background:var(--coo-accent);
 }
-.control-toggle:is(:checked,[data-checked=true])::after, [aria-checked=true] > .control-toggle::after {
+:is(.control-toggle, .pet-studio input[role=switch]):is(:checked,[data-checked=true])::after, [aria-checked=true] > .control-toggle::after {
   inset-inline-start:16px;
 }
-.control-toggle:focus-visible { outline:2px solid var(--coo-accent-ink); outline-offset:2px; }
+:is(.control-toggle, .pet-studio input[role=switch]):focus-visible { outline:2px solid var(--studio-focus); outline-offset:2px; }
+:is(.control-toggle, .pet-studio input[role=switch]):disabled { opacity:.5; cursor:default; }

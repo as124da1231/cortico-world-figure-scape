@@ -16,7 +16,10 @@ export function studioControls(ctx: PageContext) {
     return el;
   }
   function button(text: string, run: () => void, primary = false) {
-    const el = node('button', text, primary ? 'studio-button is-primary' : 'studio-button');
+    const hosted = ctx.root.classList.contains('desktop-live2d-native-page');
+    const el = hosted ? ctx.ui.button(text, { variant:primary ? 'primary' : 'plain' }) : node('button', text);
+    el.classList.add('studio-button');
+    if (primary) el.classList.add('is-primary');
     el.type = 'button';
     el.addEventListener('click', run, { signal: ctx.signal });
     return el;
@@ -96,8 +99,10 @@ export function studioControls(ctx: PageContext) {
     }
     return { element, heading, body, close, open };
   }
-  function call<T>(method: string, args: unknown[] = []) {
-    return invokePanel<T>(WORKSPACE_PROVIDER, 'framework', method, args, { signal: ctx.signal });
+  function call<T>(method: string, args: unknown[] = [], signal?: AbortSignal) {
+    return invokePanel<T>(WORKSPACE_PROVIDER, 'framework', method, args, {
+      signal: signal ? AbortSignal.any([ctx.signal, signal]) : ctx.signal,
+    });
   }
   function keepalive(method: string, args: unknown[]) {
     void invokePanel(WORKSPACE_PROVIDER, 'framework', method, args, { keepalive: true }).catch(() => {});

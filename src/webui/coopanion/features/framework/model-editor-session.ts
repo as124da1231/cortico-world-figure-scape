@@ -4,7 +4,7 @@ import { modelEditor } from './model-editor.ts';
 type EditorSession = {
   editor: ReturnType<typeof modelEditor>;
   dialogs: HTMLElement;
-  preview?: (kind: string, input?: Record<string, unknown>) => Promise<void> | undefined;
+  preview?: (kind: string, input?: Record<string, unknown>) => Promise<Record<string, unknown>> | undefined;
 };
 
 const sessions = new WeakMap<Document, EditorSession>();

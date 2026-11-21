@@ -5,9 +5,17 @@
   position:relative; display:grid; place-content:center; justify-items:center; align-content:center;
   justify-content:stretch; gap:5px; padding:5px 4px; aspect-ratio:1; min-width:0; min-height:0;
   background:var(--control-app-surface); color:var(--control-app-ink); text-align:center; font-size:11px; line-height:1.18;
-  border:1px solid var(--control-app-line); border-radius:10px; box-shadow:none;
+  border:1px solid var(--control-app-line); border-radius:10px;
+  box-shadow:inset 0 1px 0 light-dark(#FFFFFFAA,#FFFFFF0B), 0 1px 2px color-mix(in srgb,var(--control-app-ink) 8%,transparent);
+  transition:background-color var(--studio-motion,140ms), border-color var(--studio-motion,140ms), box-shadow var(--studio-motion,140ms);
 }
-.control-app-grid > .control-app-tile:not(:disabled):hover { background:var(--control-app-hover); }
+.control-app-grid > .control-app-tile:not(:disabled):hover {
+  background:var(--control-app-hover);
+  border-color:color-mix(in srgb,var(--control-app-accent) 28%,var(--control-app-line));
+}
+.control-app-grid > .control-app-tile:not(:disabled):active {
+  box-shadow:inset 0 1px 3px color-mix(in srgb,var(--control-app-ink) 16%,transparent);
+}
 .control-app-grid > .control-app-tile:focus-visible { outline:2px solid var(--control-app-accent); outline-offset:-2px; }
 .control-app-grid > .control-app-tile > :is(.ic,.layout-icon):first-child {
   width:clamp(26px,42%,34px); aspect-ratio:1; min-width:26px; height:auto;

@@ -2,6 +2,7 @@ import type { PageContext } from '../../base/page.ts';
 import type { CabinState } from '../../../../framework/cabin-world.ts';
 import { errorText, studioControls, studioText as t } from './controls.ts';
 import { sceneTile } from './scene-workspace.ts';
+import { SCENE_CHAT_TEXT_MAX, chatTextLengthNote } from '../../../../../web/framework/chat-text.js';
 
 type GameStatus = { position?: { place?: string }; doing?: { label?: string }; wallet?: number; connected?: boolean };
 type Receipt = { taskId?: string; status?: string; label?: string; error?: string; ok?: boolean };
@@ -10,7 +11,9 @@ export function cabinPanel(ctx: PageContext, refreshRuntime: () => Promise<void>
   const c = studioControls(ctx);
   const title = t('小屋世界', 'Cabin World');
   const hint = t('在像素世界里串门、游玩和生活', 'Visit, play and live in a pixel world');
-  const section = c.section(t('住户与活动', 'Residents and activities'));
+  const setupTitle = t('连接状态', 'Connection status');
+  const section = c.section(setupTitle);
+  const heading = section.querySelector('h2')!;
   section.classList.add('studio-cabin', 'studio-scene-settings');
   const {button:card, chip} = sceneTile(ctx, 'cabin', title, hint, openSettings);
 
@@ -19,22 +22,21 @@ export function cabinPanel(ctx: PageContext, refreshRuntime: () => Promise<void>
   const status = c.status();
   const failure = c.status();
   failure.hidden = true;
-  const choose = c.button(t('选择 CabinWorld.exe','Choose CabinWorld.exe'),() => void chooseInstall());
-  const official = c.node('a',t('获取小屋世界 1.1','Get Cabin World 1.1'),'studio-link');
-  official.href = 'https://github.com/BabyBus2022/cabin-world/releases/tag/V1.1.0';
-  official.target = '_blank';
-  official.rel = 'noopener noreferrer';
+  const setup = c.link(t('安装小屋组件','Install Cabin World'),'engines','cabin');
   const open = c.button(t('进入小屋世界','Enter Cabin World'),() => void change('enter'),true);
   open.disabled = true;
   const leave = c.button(t('离开小屋世界','Leave Cabin World'),() => void change('leave'));
   leave.hidden = true;
+  const downloadMeter = c.node('progress');
+  downloadMeter.setAttribute('aria-label', t('小屋世界下载进度', 'Cabin World download progress'));
+  downloadMeter.hidden = true;
   const conversation = c.button(t('对话','Conversation'),() => {
     chat.hidden = !chat.hidden;
     conversation.setAttribute('aria-expanded',String(!chat.hidden));
     if (!chat.hidden) { input.focus(); void readChat().catch(report); }
   });
   conversation.setAttribute('aria-expanded','false');
-  commands.append(choose,official,conversation);
+  commands.append(setup,conversation);
   action.append(open,leave);
   const reloadResidents = c.button(t('刷新住户','Refresh residents'),() => void change('residents'));
 
@@ -42,6 +44,12 @@ export function cabinPanel(ctx: PageContext, refreshRuntime: () => Promise<void>
   const residentField = c.field(t('切换住户','Change resident'),resident);
   const activeResident = c.node('strong');
   const residentName = c.field(t('当前角色','Current character'),activeResident);
+  const bodyActions = c.node('span');
+  const bodyActionsField = c.field(t('动作控制','Action control'),bodyActions);
+  bodyActionsField.hidden = true;
+  const actionResult = c.node('span');
+  const actionResultField = c.field(t('最近动作','Latest action'),actionResult);
+  actionResultField.hidden = true;
   resident.addEventListener('change',() => void change('actor',[resident.value]),{signal:ctx.signal});
   const play = c.node('div','','studio-inline');
   const place = c.node('select');
@@ -64,7 +72,6 @@ export function cabinPanel(ctx: PageContext, refreshRuntime: () => Promise<void>
   const form = c.node('form','','studio-cabin-compose');
   const input = c.node('textarea');
   input.rows = 2;
-  input.maxLength = 500;
   input.setAttribute('aria-label',t('给 Coo 发消息','Message Coo'));
   input.placeholder = t('给 Coo 发消息…','Message Coo…');
   const send = c.node('button',t('发送','Send'),'studio-button is-primary');
@@ -73,10 +80,18 @@ export function cabinPanel(ctx: PageContext, refreshRuntime: () => Promise<void>
   const chatStatus = c.status();
   form.append(input,send);
   chat.append(messages,form,chatStatus);
-  section.append(status,commands,residentName,residentField,play,taskStatus,chat,failure);
+  section.append(status,downloadMeter,commands,residentName,bodyActionsField,actionResultField,residentField,play,taskStatus,chat,failure);
   let sending = false, chatKey = '';
   let draft: {value:string; id:string} | undefined;
-  input.addEventListener('input',() => { send.disabled = sending || !input.value.trim(); },{signal:ctx.signal});
+  function updateComposer() {
+    const lengthNote = chatTextLengthNote(input.value, SCENE_CHAT_TEXT_MAX, t);
+    send.disabled = sending || !!lengthNote || !input.value.trim();
+    return lengthNote;
+  }
+  input.addEventListener('input',() => {
+    const lengthNote = updateComposer();
+    if (!sending || lengthNote) chatStatus.textContent = lengthNote;
+  },{signal:ctx.signal});
   input.addEventListener('keydown',event => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
       event.preventDefault();
@@ -91,6 +106,8 @@ export function cabinPanel(ctx: PageContext, refreshRuntime: () => Promise<void>
   async function sendChat() {
     const value = input.value.trim();
     if (!value || sending) return;
+    const lengthNote = updateComposer();
+    if (lengthNote) { chatStatus.textContent = lengthNote; return; }
     if (draft?.value !== value) draft = {value,id:c.doc.defaultView!.crypto.randomUUID()};
     sending = send.disabled = true;
     chatStatus.textContent = t('正在发送…','Sending…');
@@ -104,7 +121,8 @@ export function cabinPanel(ctx: PageContext, refreshRuntime: () => Promise<void>
       if (!ctx.signal.aborted) chatStatus.textContent = errorText(error);
     } finally {
       sending = false;
-      send.disabled = !input.value.trim();
+      const lengthNote = updateComposer();
+      if (lengthNote) chatStatus.textContent = lengthNote;
     }
   }
 
@@ -138,20 +156,56 @@ export function cabinPanel(ctx: PageContext, refreshRuntime: () => Promise<void>
     const active = isOpen();
     const switching = next.phase === 'active' && next.presented === false;
     const connecting = next.phase === 'connecting' || switching || !active && pending === 'enter';
-    chip.textContent = active ? t('使用中','In use') : connecting ? t('正在准备','Preparing')
-      : next.bundled ? t('内置','Built in') : next.configured ? '' : t('待连接','Setup needed');
+    const resources = next.resources;
+    const needsDownload = resources?.phase === 'needed';
+    const needsInstall = !!resources && resources.phase !== 'ready';
+    const canEnter = next.canEnter ?? (next.configured && !needsInstall);
+    const downloading = resources?.phase === 'downloading' || resources?.phase === 'verifying';
+    const preparing = downloading || resources?.phase === 'installing';
+    heading.textContent = active ? t('住户与活动', 'Residents and activities') : setupTitle;
+    chip.textContent = active ? t('使用中','In use') : resources?.phase === 'downloading' ? t('正在下载','Downloading')
+      : resources?.phase === 'verifying' ? t('正在校验','Verifying')
+      : next.externalUnavailable ? t('安装不可用','Installation unavailable')
+      : connecting || preparing || next.preparing ? t('正在准备','Preparing')
+      : resources?.repair ? t('待修复','Repair needed')
+      : needsDownload ? t('可下载','Download available') : needsInstall ? t('待安装','Install needed')
+      : next.configured ? t('已安装','Installed') : t('待连接','Setup needed');
     card.dataset.current = String(active);
-    choose.hidden = official.hidden = active || connecting || !!next.bundled;
-    choose.disabled = !!pending;
-    open.hidden = active || connecting || !next.configured;
+    setup.hidden = active || connecting;
+    setup.textContent = next.externalUnavailable ? t('重新选择已有安装','Choose installation again')
+      : preparing || next.preparing ? t('查看安装进度','View installation progress')
+        : resources?.repair ? t('修复安装','Repair installation')
+        : canEnter ? t('管理安装','Manage installation') : t('安装小屋组件','Install Cabin World');
+    open.hidden = active || connecting || next.phase === 'leaving' || !canEnter || !!next.preparing;
     open.disabled = !!pending;
     leave.hidden = !active && !connecting;
     leave.disabled = pending === 'leave';
     leave.textContent = connecting ? t('取消进入','Cancel entry') : t('离开小屋世界','Leave Cabin World');
+    downloadMeter.hidden = !preparing;
+    if (resources?.total) {
+      downloadMeter.max = resources.total;
+      downloadMeter.value = resources.done;
+    } else downloadMeter.removeAttribute('value');
     conversation.hidden = residentName.hidden = play.hidden = !active;
     if (!active) { chat.hidden = true; conversation.setAttribute('aria-expanded','false'); }
     residentField.hidden = reloadResidents.hidden = !active || next.residents.length < 2;
     activeResident.textContent = active ? next.residents.find(item => item.key === next.actor)?.name ?? '' : '';
+    bodyActionsField.hidden = !active || !next.body;
+    bodyActions.textContent = next.body?.kind === 'figure'
+      ? next.body.wordSource === 'renderer'
+        ? t(`梦境角色 · ${next.body.words.length} 个可用动作`, `Figure Scape · ${next.body.words.length} available actions`)
+        : t(`梦境角色 · 形象包声明 ${next.body.words.length} 个动作`, `Figure Scape · ${next.body.words.length} declared actions`)
+      : t('小屋世界原生活动', 'Cabin World activities');
+    actionResultField.hidden = !active || !next.action;
+    if (next.action) {
+      const labels = {
+        queued:t('排队中','Queued'), running:t('正在播放','Playing'), completed:t('身体已报告结束','Body reported completion'),
+        elapsed:t('已到预计时长','Estimated time elapsed'), failed:t('播放失败','Playback failed'),
+        interrupted:t('已中断','Interrupted'), unconfirmed:t('未确认完成','Completion unconfirmed'),
+      };
+      const label = `${labels[next.action.status]} · ${next.action.words.join(' → ')}`;
+      if (actionResult.textContent !== label) actionResult.textContent = label;
+    }
     resident.disabled = !!pending;
     const canGo = active && next.tools?.includes('cabin_go') !== false;
     const canStop = active && next.tools?.includes('cabin_stop') !== false;
@@ -166,11 +220,21 @@ export function cabinPanel(ctx: PageContext, refreshRuntime: () => Promise<void>
       }));
     }
     if (next.actor) resident.value = next.actor;
+    const totalMB = Math.ceil((resources?.total ?? 0) / 1_000_000);
+    const doneMB = Math.floor((resources?.done ?? 0) / 1_000_000);
+    const preparingText = resources?.phase === 'downloading' ? t('正在下载小屋世界', 'Downloading Cabin World') + ` · ${doneMB} / ${totalMB} MB`
+      : resources?.phase === 'verifying' ? t('正在校验小屋资源…', 'Verifying Cabin World resources…')
+      : t('正在安装小屋世界…', 'Installing Cabin World…');
     if (!active || !section.isConnected) status.textContent = active ? t('小屋世界已连接','Cabin World connected')
       : switching ? t('正在切换窗口…','Switching windows…')
+      : preparing ? preparingText
       : connecting ? t('等待游戏窗口和住户就绪…','Waiting for the game and resident…')
+      : next.externalUnavailable ? t('请在引擎页重新选择小屋世界的安装。','Choose the Cabin World installation again in Engines.')
+      : resources?.failure ? t('组件未安装完成，请到引擎页查看和重试。','Setup did not finish. See details and retry in Engines.')
+      : needsDownload && !next.detail ? t('请到引擎页安装 · ', 'Install from Engines · ') + `${totalMB} MB`
+      : needsInstall && !next.detail ? t('请在引擎页完成安装。','Complete setup from Engines.')
       : next.detail ?? (next.configured ? t('进入后可切换住户和安排活动。','Enter to switch residents and choose activities.')
-        : t('解压小屋世界 1.1 后，选择 CabinWorld.exe。','Extract Cabin World 1.1 and choose CabinWorld.exe.'));
+        : t('请在引擎页选择小屋世界的安装来源。','Choose an installation from Engines.'));
     if (!active) { taskId = undefined; taskStatus.textContent = ''; }
   }
 
@@ -220,13 +284,6 @@ export function cabinPanel(ctx: PageContext, refreshRuntime: () => Promise<void>
       await reading;
       await Promise.all([refresh(),refreshRuntime()]);
     }
-  }
-
-  async function chooseInstall() {
-    try {
-      const file = await ctx.pickPath?.({kind:'file',title:t('选择 CabinWorld.exe','Choose CabinWorld.exe'),extensions:['.exe']});
-      if (file) await change('configure',[file]);
-    } catch (error) { report(error); }
   }
 
   async function run(tool: string,args: Record<string,unknown>) {

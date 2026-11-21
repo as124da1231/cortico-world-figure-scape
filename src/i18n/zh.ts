@@ -274,8 +274,8 @@ export default {
     hideWhenFullscreen: { title: '全屏时自动隐藏', description: '开着时，前台窗口全屏铺满桌宠所在的那块屏（游戏、全屏视频、浏览器全屏）就把 Coo 藏起来，退出全屏放回来；最大化的窗口不算。关着时一直浮在上面。' },
     passWhenFullscreen: { title: "全屏时鼠标穿透", description: "开着时，前台窗口全屏铺满桌宠所在的那块屏期间 Coo 照常显示，点击全部穿过 Coo 落到下面的窗口，退出全屏后恢复；最大化的窗口不算。和全屏时自动隐藏同时开着时 Coo 会隐藏。" },
     exportOverlay: { title: 'OBS 画面', description: '在 /overlay 提供桌宠窗口的透明画面，供 OBS「浏览器」来源使用；关闭时不提供。' },
-    electronFile: { title: 'Electron 程序', description: '留空时依次用 CORTICO_DESKTOP_PET_HOST 和面板里安装的运行时。' },
-    port: { title: '页面端口', description: '被占用时向上顺延。' },
+    electronFile: { title: '自定义窗口程序', description: '留空时自动选择窗口程序。' },
+    port: { title: '本地页面端口', description: '端口被占用时会尝试下一个端口。' },
     touchEnabled: { title: '互动发成事件', description: '戳、摸、拎起来甩出去。' },
     touchWakeOn: { title: '回应模式', description: 'poke：只有戳一下马上回应，其余互动等下次回应时一并送达；all：所有互动都马上回应；none：所有互动都等下次回应时一并送达；custom：按「习惯」页勾选的互动马上回应。一次互动得到回应之后、本轮结束之前的互动，都等下次回应时一并送达。' },
     sound: { title: '音效总开关', description: '桌宠菜单里的音效按钮切的就是这个。' },
@@ -310,8 +310,8 @@ export default {
   /** 桌宠窗口没有打开的原因，显示在状态灯和桌宠面板上 */
   windowReason: {
     badHostEnv: (env: string) => `${env} 不是 JSON 字符串数组`,
-    noElectronFile: (file: string) => `Electron 程序不存在：${file}`,
-    noElectron: '没有可用的 Electron：在桌宠面板安装窗口运行时，或在配置里指定 Electron 程序',
+    noElectronFile: (file: string) => `找不到自定义窗口程序 ${file}。请在高级启动设置里重新选择程序，或清空该路径。`,
+    noElectron: '缺少窗口组件。请在「引擎 → 桌宠窗口」安装。',
     startFailed: (why: string) => `启动失败：${why}`,
     closed: '窗口已关闭',
     exited: (code: number | null) => `窗口进程退出（退出码 ${code}）`,

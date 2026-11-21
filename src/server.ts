@@ -35,6 +35,8 @@ import { BUNDLE_TYPE, MODEL_ARCHIVE_LIMIT, MODEL_BUNDLE_LIMIT } from './live2d/i
 import { petText, type PetText } from './i18n/index.ts';
 import type { SpeechUnit } from './speech/index.ts';
 import type { ModelResources } from './framework/model-contract.ts';
+import { EditorDraftConflict } from './framework/editor-backend.ts';
+import { appearancePreset, type AppearancePreset } from './framework/appearance.ts';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -87,6 +89,7 @@ export interface PetServerOptions {
   /** A dressing page saved a skin. */
   onSkin(skin: unknown): void | Promise<void>;
   editorInvoke?(method: string, args: unknown[]): Promise<unknown>;
+  appearance?(): AppearancePreset;
   media?(id: string): Promise<{ bytes: Buffer; mime: string } | null>;
   mediaPlan?(id: string): Promise<unknown[] | null>;
   importModels?(kind: 'zip' | 'bundle', bytes: Uint8Array): Promise<unknown>;
@@ -98,6 +101,7 @@ export interface PetServerOptions {
   packs?(): FigurePack[];
   figureAsset?(id: string, path: string): string | null | undefined;
   figureSettings?(id: string): FigureSettings | undefined;
+  previewScheme?(id: string): string | undefined;
   models?: ModelResources;
   coverJobs?: {
     authorized(id: string, token: unknown): boolean;
@@ -228,6 +232,11 @@ export class PetServer {
     for (const ws of [this.pet, ...this.dressers]) if (ws && ws.readyState === ws.OPEN) ws.send(text);
   }
 
+  announceAppearance(): void {
+    const event = JSON.stringify({ t: 'appearance', appearance: appearancePreset(this.opts.appearance?.()) });
+    for (const ws of this.modelPreviews) if (ws.readyState === ws.OPEN) ws.send(event);
+  }
+
   /** Follows `overlay()`: off closes the overlay pages; the source streams while it is on and a page watches. */
   syncOverlay(): void {
     if (!this.overlayEnabled) for (const ws of this.overlayViewers) ws.close(4003, 'overlay off');
@@ -266,7 +275,7 @@ export class PetServer {
       if (!release) { ws.close(4004, 'model unavailable'); return; }
       this.modelPreviews.add(ws);
       ws.on('close', () => { this.modelPreviews.delete(ws); release(); });
-      ws.send(JSON.stringify({ t: 'preview-retained' }));
+      ws.send(JSON.stringify({ t: 'preview-retained', appearance: appearancePreset(this.opts.appearance?.()) }));
       return;
     }
     if (params.get('role') === 'overlay-source') return this.acceptOverlaySource(ws);
@@ -409,6 +418,7 @@ export class PetServer {
         if (typeof method !== 'string' || !Array.isArray(args)) return json(res, 400, { error: 'Invalid editor request' });
         return json(res, 200, await this.opts.editorInvoke(method, args) ?? null);
       } catch (error) {
+        if (error instanceof EditorDraftConflict) return json(res, 409, { error: error.message, code: 'draft-conflict' });
         return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
       }
     }
@@ -422,7 +432,7 @@ export class PetServer {
         };
         const html = (await readFile(join(this.opts.webDir, 'model-editor.html'), 'utf8'))
           .replace('EDITOR_JS', entry('script', 'js')).replace('EDITOR_CSS', entry('style', 'css'))
-          .replace('lang="zh-CN"', `lang="${languageTag(this.opts.language?.() ?? 'zh')}"`);
+          .replace('lang="zh-CN"', this.pageAttributes());
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'same-origin', 'content-security-policy': PAGE_CSP }).end(html);
       } catch {
         res.writeHead(503).end('Build the Live2D editor first');
@@ -480,8 +490,9 @@ export class PetServer {
       const m=pack.manifest;
       if (req.headers.origin === 'null') { res.writeHead(403).end(); return; }
       const settings = pack.rawModel ? undefined : this.opts.figureSettings?.(id);
+      const previewScheme = pack.rawModel && url.searchParams.get('editor') === '1' ? this.opts.previewScheme?.(id) : undefined;
       return json(res,200,{id:pack.id,kind:pack.rawModel?'live2d-model':'figure-pack',base:pack.base,name:m.name,version:m.version,entry:m.entry,export:m.export,model:m.model??null,
-        resource:pack.rawModel??null, figureSettings:settings,axes:m.axes,presets:m.presets,vocab:m.vocab,sounds:m.sounds,can:m.can,needs:m.needs,voice:m.voice,effects:m.effects,bubble:m.bubble??null});
+        resource:pack.rawModel??null, figureSettings:settings,previewScheme,axes:m.axes,presets:m.presets,vocab:m.vocab,sounds:m.sounds,can:m.can,needs:m.needs,voice:m.voice,effects:m.effects,bubble:m.bubble??null});
     }
     if(req.method==='GET'&&path==='/model-frame'){
       const id = url.searchParams.get('model');
@@ -575,14 +586,18 @@ export class PetServer {
 
   /** A page, its `<html lang>` set to the app language (`zh` as `zh-CN`). */
   private async sendPage(res: ServerResponse, full: string): Promise<void> {
-    const lang = languageTag(this.opts.language?.() ?? 'zh');
     try {
-      const html = readTextFile(full).replace(/<html lang="[^"]*"/, `<html lang="${lang}"`);
+      const html = readTextFile(full).replace(/<html lang="[^"]*"/, `<html ${this.pageAttributes()}`);
       res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-cache', 'content-security-policy': PAGE_CSP });
       res.end(html);
     } catch {
       res.writeHead(404).end();
     }
+  }
+
+  private pageAttributes(): string {
+    const lang = languageTag(this.opts.language?.() ?? 'zh');
+    return `lang="${lang}" data-appearance="${appearancePreset(this.opts.appearance?.())}"`;
   }
 
   /** A file with the pages' CSP (or `csp`); `frame` answers the figure frame's CORS request. */

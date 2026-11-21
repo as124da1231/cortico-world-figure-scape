@@ -14,6 +14,11 @@ export function createMic({ prefs, send, sendAudio }) {
   /** null, `{ starting }` while opening, or the open capture. */
   let mic = null;
   let retry = false;
+  let state = 'off';
+  function report(next, detail) {
+    state = next;
+    send({ t: 'mic', state: next, ...(detail !== undefined ? { detail } : {}) });
+  }
 
   /**
    * Reports the inputs to the World and returns the capture's target: `deviceId` is the chosen device,
@@ -38,9 +43,10 @@ export function createMic({ prefs, send, sendAudio }) {
   }
 
   async function start() {
-    if (mic) return;
+    if (mic || state === 'denied' || state === 'error') return;
     retry = false;
     const opening = mic = { starting: true };
+    report('opening');
     // 拿到一半就失败时也要停麦关声卡,否则录音指示灯常亮到页面刷新
     let stream = null, ctx = null;
     try {
@@ -58,7 +64,7 @@ export function createMic({ prefs, send, sendAudio }) {
       // closed, or closed and opened again, while this one was opening
       if (mic !== opening) { stream.getTracks().forEach((t) => t.stop()); ctx.close(); return; }
       const node = new AudioWorkletNode(ctx, 'pet-mic');
-      const active = mic = { stream, ctx, node, deviceId, key: target?.key };
+      const active = { stream, ctx, node, deviceId, key: target?.key };
       // chunks a replaced capture still had queued are dropped
       node.port.onmessage = (e) => { if (mic === active) sendAudio(e.data); };
       ctx.createMediaStreamSource(stream).connect(node);
@@ -69,7 +75,8 @@ export function createMic({ prefs, send, sendAudio }) {
           if (prefs.mic) void start();
         });
       }
-      send({ t: 'mic', state: 'on', detail: stream.getAudioTracks()[0]?.label || null });
+      mic = active;
+      report('on', stream.getAudioTracks()[0]?.label || null);
       // the labels are readable now; a change while opening may have moved the target away from this capture
       void follow();
     } catch (err) {
@@ -79,7 +86,7 @@ export function createMic({ prefs, send, sendAudio }) {
       mic = null;
       const denied = err?.name === 'NotAllowedError';
       retry = !denied;
-      send({ t: 'mic', state: denied ? 'denied' : 'error', detail: String(err?.message || err) });
+      report(denied ? 'denied' : 'error', String(err?.message || err));
       // access was granted, so the labels are readable: list the devices, another one may open where this one did not
       if (!denied) void reportDevices();
     }
@@ -102,14 +109,15 @@ export function createMic({ prefs, send, sendAudio }) {
     const m = mic;
     mic = null;
     retry = false;
-    if (!m || m.starting) return;
-    m.stream.getTracks().forEach((t) => t.stop());
-    m.ctx.close();
-    send({ t: 'mic', state: 'off' });
+    if (m && !m.starting) {
+      m.stream.getTracks().forEach((t) => t.stop());
+      m.ctx.close();
+    }
+    if (state !== 'off') report('off');
   }
 
   media?.addEventListener('devicechange', () => {
-    if (!mic) { if (prefs.mic && retry) void start(); }
+    if (!mic) { if (prefs.mic && retry) { stop(); void start(); } }
     else if (!mic.starting) void follow();
   });
 

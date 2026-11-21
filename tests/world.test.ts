@@ -60,13 +60,49 @@ async function mounted(patch?: (c: DesktopPetConfigSection) => void, extra?: Par
 
 it('keeps configuration and the environment prompt while exposing native tabs and the shared domain adapter',async()=>{
   const {world}=await mounted();const declaration=world.webUi();
-  expect(declaration.panels?.map(panel=>panel.id)).toEqual(['framework','sound','desktop','interaction','controls','display','permissions','services']);
+  expect(declaration.panels?.map(panel=>panel.id)).toEqual(['framework','sound','desktop','interaction','controls','display','appearance','permissions','services','engines']);
   expect(declaration.config?.map(group=>group.id)).toEqual(['world:desktop-live2d-pet','world:desktop-live2d-pet:sound','world:desktop-live2d-pet:asr']);
   expect(declaration.promptDocs?.[0]?.role).toBe('envPrompt');
   expect(await declaration.invoke!('framework','runtime.state',[])).toHaveProperty('skin');
   expect(await declaration.invoke!('framework','voice.state',[])).toHaveProperty('engine');
   expect(await declaration.invoke!('framework','resources',[])).toEqual(expect.arrayContaining([expect.objectContaining({id:testModel.id})]));
   await expect(declaration.invoke!('framework','selectResource',['missing-resource'])).rejects.toThrow('no longer available');
+});
+
+it('saves the interface appearance independently of the model and sends it to open surfaces', async () => {
+  const { world, cfg } = await mounted();
+  const invoke = world.webUi().invoke!;
+  const page = await FakePage.open(origin(world));
+  cleanup.push(() => page.close());
+  const skin = structuredClone(cfg.skin);
+  expect(page.init.appearance).toBe('rose');
+  await expect(invoke('framework', 'appearance.set', ['bad-id'])).rejects.toThrow('Unknown appearance preset');
+  await expect(invoke('framework', 'appearance.set', ['mint'])).resolves.toEqual({ appearance:'mint' });
+  await page.next(message => message.t === 'prefs' && message.appearance === 'mint');
+  expect(cfg.appearance).toBe('mint');
+  expect(cfg.skin).toEqual(skin);
+  expect(cfg.theme).toBe('dark');
+  await expect(invoke('framework', 'runtime.state', [])).resolves.toHaveProperty('appearance', 'mint');
+  expect(await (await fetch(origin(world) + '/model-preview')).text()).toContain('data-appearance="mint"');
+});
+
+it('cancels a pending Cabin entry when the user switches to another scene', async () => {
+  let download: AbortSignal | undefined;
+  const { world, cfg } = await mounted(undefined, {
+    cabinRuntime: { root: 'cabin-fixture', dataDir: 'cabin-fixture-data' },
+    ensureCabinRuntime(signal) {
+      download = signal;
+      return new Promise<void>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    },
+  });
+  const invoke = world.webUi().invoke!;
+  await expect(invoke('framework', 'cabin.enter', [])).resolves.toMatchObject({ phase:'connecting' });
+  await expect(invoke('framework', 'presentation.select', ['phone', 'supersede-cabin'])).resolves.toMatchObject({ phase:'completed' });
+  expect(download?.aborted).toBe(true);
+  await expect(invoke('framework', 'cabin.state', [])).resolves.toMatchObject({ phase:'idle' });
+  expect(cfg.presentationMode).toBe('phone');
 });
 
 it('preselects a wallpaper without entering or closing the current scene', async () => {
@@ -177,8 +213,9 @@ it('opens Live2D independently, announces first frame and rejects output once hi
   const page = await windowPage(world);
   cleanup.push(() => page.close());
   page.send({ t: 'figure', id: testModel.id, scheme: 'alternate', ok: true, words: [] });
+  page.send({ t: 'presentation-result', request: null, figure: testModel.id, mode: 'desktop', ok: true });
   const status = async () => JSON.parse((await tool(world, 'live2d_pet_status').handler({}, ctx) as { text: string }).text);
-  await expect.poll(status).toMatchObject({ ready: true, visible: true, model: testModel.id, modelName: testModel.title, outfit: '备用' });
+  await expect.poll(status).toMatchObject({ activeScene: 'desktop', ready: true, visible: true, model: testModel.id, modelName: testModel.title, outfit: '备用' });
   page.send({ t: 'text', text: '现在用哪个身体？' });
   await expect.poll(() => host.events.find(event => event.type === 'desktop-live2d-pet.message')).toMatchObject({
     source: 'desktop-live2d-pet',
@@ -203,6 +240,76 @@ it('opens Live2D independently, announces first frame and rejects output once hi
     meta: { performance: { figure: testModel.id, cues } } });
   expect(page.messages.some(message => message.t === 'say')).toBe(false);
   expect(host.events.flatMap(event => typeof event.meta?.ready === 'boolean' ? [event.meta.ready] : [])).toEqual([true, false]);
+});
+
+it('holds Cabin World until the covered desktop renderer confirms the new scene', async () => {
+  const { world } = await mounted(c => { c.window.enabled = true; });
+  const page = await windowPage(world);
+  cleanup.push(() => page.close());
+  page.send({ t: 'figure', id: testModel.id, scheme: 'default', ok: true, words: [] });
+  page.send({ t: 'presentation-result', request: null, figure: testModel.id, mode: 'desktop', ok: true });
+  await expect.poll(() => world.petState()).toMatchObject({ activeScene: 'desktop' });
+  page.send({ t: 'visibility', hidden: true });
+  await expect.poll(() => world.petState()).toMatchObject({ onDesktop: false });
+  const cabin = (world as unknown as {cabinWorld:{state():{phase:string;presented?:boolean};leave():Promise<unknown>}}).cabinWorld;
+  const state = vi.spyOn(cabin,'state').mockReturnValue({phase:'active',presented:true});
+  const leave = vi.spyOn(cabin,'leave').mockImplementation(async () => ({phase:'idle'}));
+  const rpc = (request: string) => world.webUi().invoke!('framework','presentation.select',['phone',request]);
+  try {
+    const failed = rpc('cabin-first');
+    const first = await page.next(message => message.t === 'presentation-apply');
+    expect(first).toMatchObject({mode:'phone',whileHidden:true});
+    page.send({t:'presentation-result',request:first.request,figure:testModel.id,mode:'phone',ok:false,reason:'first-frame'});
+    await expect(failed).resolves.toMatchObject({phase:'failed',applied:false});
+    expect(leave).not.toHaveBeenCalled();
+    expect(world.petState()).toMatchObject({activeScene:'cabin-world'});
+
+    const retry = rpc('cabin-retry');
+    const second = await page.next(message => message.t === 'presentation-apply' && message.request !== first.request);
+    page.send({t:'presentation-ready',request:second.request,figure:testModel.id,mode:'phone'});
+    await page.next(message => message.t === 'presentation-confirm' && message.request === second.request);
+    expect(leave).not.toHaveBeenCalled();
+    page.send({t:'presentation-result',request:second.request,figure:testModel.id,mode:'phone',ok:true});
+    await expect(retry).resolves.toMatchObject({phase:'completed',applied:true});
+    expect(leave).toHaveBeenCalledOnce();
+  } finally { leave.mockRestore(); state.mockRestore(); }
+});
+
+it('sends a reply to the body that took over while its conversation record was saving', async () => {
+  const {world,host} = await mounted(c => { c.window.enabled = true; });
+  const page = await windowPage(world);
+  cleanup.push(() => page.close());
+  page.send({t:'figure',id:testModel.id,ok:true,words:['happy','wink']});
+  page.send({t:'presentation-result',request:null,figure:testModel.id,mode:'desktop',ok:true});
+  await expect.poll(() => world.petState()).toMatchObject({activeScene:'desktop'});
+
+  const cabin = world['cabinWorld'];
+  const originalState = cabin.state();
+  const state = vi.spyOn(cabin,'state');
+  const figure = vi.spyOn(cabin,'speechFigure');
+  const speak = vi.spyOn(cabin,'speak').mockReturnValue(true);
+  const originalPush = host.pushEvent.bind(host);
+  const push = vi.spyOn(host,'pushEvent').mockImplementation(async (event,options) => {
+    const saved = await originalPush(event,options);
+    if (event.type === 'desktop-live2d-pet.self') {
+      state.mockReturnValue({...originalState,phase:'active',presented:true});
+      figure.mockReturnValue('cabin-figure');
+    }
+    return saved;
+  });
+  try {
+    await tool(world,'live2d_pet_say').handler({script:'【开心】切换时<眨眼>收到的回复。'},ctx);
+    const records = host.stored.filter(event => event.type === 'desktop-live2d-pet.self');
+    expect(records).toHaveLength(1);
+    expect(speak).toHaveBeenCalledOnce();
+    expect(speak).toHaveBeenCalledWith(expect.objectContaining({figure:'cabin-figure',cursor:records[0].cursor,
+      beats:[{text:'切换时收到的回复。',actions:[],anchors:[]}]}));
+  } finally {
+    push.mockRestore();
+    state.mockRestore();
+    figure.mockRestore();
+    speak.mockRestore();
+  }
 });
 
 describe('direct Live2D models', () => {
@@ -342,8 +449,8 @@ describe('English model text', () => {
 });
 
 describe('tools without a page', () => {
-  async function deliveredChat(world: DesktopPetWorld, host: FakeHost) {
-    const event = await host.pushEvent({ type: 'desktop-live2d-pet.message', source: world.id, ts: new Date().toISOString(),
+  async function deliveredChat(world: DesktopPetWorld, host: FakeHost, source = world.id) {
+    const event = await host.pushEvent({ type: `${source}.message`, source, ts: new Date().toISOString(),
       text: '测试', meta: { text: '测试', via: 'chat' } });
     world.onRunPhase({ state: 'delivering', running: [], enteredAt: event.ts });
     world.onEventsSettled([event], 'delivered');
@@ -389,7 +496,7 @@ describe('tools without a page', () => {
   });
   it('retains the original speech text if the original window produced no chat record', async () => {
     const {world,host} = await mounted();
-    await deliveredChat(world,host);
+    await deliveredChat(world,host,'desktop-pet');
     const tap = world.outputTap();
     tap.onEvent({type:'response.completed',response:{output:[
       {type:'function_call',name:'pet_say',arguments:JSON.stringify({script:'【开心】这条应当出现在对话里。'})},
@@ -399,16 +506,73 @@ describe('tools without a page', () => {
     await expect.poll(() => host.stored.filter(event => event.meta?.kind === 'say').map(event => event.text))
       .toEqual(['这条应当出现在对话里。']);
   });
+  it('recovers a native-page reply only after the native World records delivery', async () => {
+    const { world, host } = await mounted();
+    const ts = new Date().toISOString();
+    const input = await host.pushEvent({ type:'desktop-pet.message', source:'desktop-pet', ts,
+      text:'在原版对话发言', meta:{ via:'chat', text:'在原版对话发言' } });
+    // Core sends the settled callback only to the World that owns the event.
+    world.onRunPhase({ state:'delivering', running:[], enteredAt:ts });
+    finishWithText(world, '仍在排队时不能绑定回复。');
+    expect(host.stored.filter(event => event.meta?.kind === 'say')).toHaveLength(0);
+    world.onRunPhase({ state:'delivering', running:[], enteredAt:ts });
+    await host.pushEvent({ type:'desktop-pet.self', source:'desktop-pet', ts, text:'已送达',
+      meta:{ kind:'delivered', cursors:[input.cursor] } }, { deliver:false });
+    finishWithText(world, '原版提问的完整答复。\n第二段。');
+    await expect.poll(() => host.stored.filter(event => event.meta?.kind === 'say').map(event => event.text))
+      .toEqual(['原版提问的完整答复。\n第二段。']);
+  });
+  it('uses the native reply record when it exists and preserves final text in Dream history otherwise', async () => {
+    const { world, host } = await mounted();
+    const chat = chatSocket(world);
+    chat.send({ t: 'hello' });
+    await deliveredChat(world, host, 'desktop-pet');
+    await host.pushEvent({ type: 'desktop-pet.self', source: 'desktop-pet', ts: new Date().toISOString(),
+      text: '原生回复', meta: { kind: 'say', beats: [{ text: '原生回复' }] } }, { deliver: false });
+    finishWithText(world, '原生回复');
+    expect(host.stored.filter(event => event.source === world.id && event.meta?.kind === 'say')).toHaveLength(0);
+
+    await deliveredChat(world, host, 'desktop-pet');
+    finishWithText(world, '第一段正文。\n第二段也保留。');
+    await expect.poll(() => host.stored.filter(event => event.source === world.id && event.meta?.kind === 'say').map(event => event.text))
+      .toEqual(['第一段正文。\n第二段也保留。']);
+    expect(host.stored.filter(event => event.source === 'desktop-pet' && event.meta?.kind === 'say')).toHaveLength(1);
+    expect(chat.last('item')).toMatchObject({ item: { kind: 'say', beats: [{ text: '第一段正文。\n第二段也保留。' }] } });
+  });
+  it('retains the final reply after a native action-only speech record', async () => {
+    const { world, host } = await mounted();
+    const chat = chatSocket(world);
+    chat.send({ t: 'hello' });
+    await deliveredChat(world, host, 'desktop-pet');
+    await host.pushEvent({ type: 'desktop-pet.self', source: 'desktop-pet', ts: new Date().toISOString(),
+      text: '', meta: { kind: 'say', beats: [{ text: '', mood: { zh: '开心' } }] } }, { deliver: false });
+    finishWithText(world, '动作后的完整回复。\n第二段。');
+    await expect.poll(() => host.stored.filter(event => event.source === world.id && event.meta?.kind === 'say').map(event => event.text))
+      .toEqual(['动作后的完整回复。\n第二段。']);
+    expect(chat.last('item')).toMatchObject({ item: { kind: 'say', beats: [{ text: '动作后的完整回复。\n第二段。' }] } });
+  });
   it('records a Cabin message once and returns it with the scene reply', async () => {
     const {world,host} = await mounted();
-    const cabin = (world as unknown as {cabinWorld:{state():{phase:string;actor:string;presented?:boolean}}}).cabinWorld;
-    const handoff = {phase:'active',actor:'figure-scape-test',presented:false,residents:[{key:'figure-scape-test',name:'Coo · 重刀断岳'}]};
+    const cabin = (world as unknown as {cabinWorld:{
+      state():{phase:string;actor:string;presented?:boolean}; speechFigure(): string | null; speak(value: unknown): boolean;
+      enqueueAction(value: unknown): Promise<'queued' | 'rejected' | 'unconfirmed'>;
+    }}).cabinWorld;
+    const handoff = {phase:'active',actor:'figure-scape-test',presented:false,residents:[{key:'figure-scape-test',name:'Coo · 重刀断岳'}],
+      get body() { return this.presented ? {kind:'figure',figure:testModel.id,generation:'first',words:['wink']} : undefined; }};
     const state = vi.spyOn(cabin,'state').mockReturnValue(handoff);
+    const figure = vi.spyOn(cabin,'speechFigure').mockImplementation(() => handoff.presented ? testModel.id : null);
+    const speak = vi.spyOn(cabin,'speak').mockImplementation(() => {
+      expect(host.stored.at(-1)).toMatchObject({type:'desktop-live2d-pet.self',text:'我准备好了。'});
+      return true;
+    });
+    const queued = vi.spyOn(cabin,'enqueueAction').mockResolvedValue('queued');
     try {
       const panel = world.webUi().invoke!;
       await expect(panel('framework','cabin.sendMessage',['req-1','去公园'])).rejects.toThrow('尚未就绪');
+      expect((await world.envPromptVars())['pet.body']).toContain('没有已确认的场景');
       expect(host.events.filter(event => event.meta?.scene === 'cabin-world')).toHaveLength(0);
       handoff.presented = true;
+      expect((await world.envPromptVars())['pet.body']).toContain('小屋世界。当前角色是Coo · 重刀断岳');
       const first = await panel('framework','cabin.sendMessage',['req-1','去公园']);
       const retry = await panel('framework','cabin.sendMessage',['req-1','去公园']);
       expect(retry).toEqual(first);
@@ -421,10 +585,19 @@ describe('tools without a page', () => {
         meta: { body: { scene:'cabin-world', actor:'figure-scape-test', name:'Coo · 重刀断岳' } },
       });
       await tool(world,'live2d_pet_say').handler({script:'我准备好了。'},ctx);
+      expect(speak).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        figure:testModel.id,beats:[{text:'我准备好了。',actions:[],anchors:[]}],clips:[null],
+      }));
       expect(await panel('framework','cabin.conversation',[])).toMatchObject({messages:[
         {side:'user',text:'去公园'},{side:'pet',text:'我准备好了。'},
       ]});
-    } finally { state.mockRestore(); }
+      await expect(tool(world,'live2d_pet_act').handler({actions:['wink']},ctx)).resolves.toMatchObject({text:expect.stringContaining('动作已排队')});
+      expect(queued).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        figure:testModel.id,beats:[{text:'',actions:['wink'],anchors:[]}],clips:[],
+      }));
+      queued.mockResolvedValue('unconfirmed');
+      await expect(tool(world,'live2d_pet_act').handler({actions:['wink']},ctx)).resolves.toMatchObject({failed:true,text:expect.stringContaining('没有确认')});
+    } finally { queued.mockRestore(); speak.mockRestore(); figure.mockRestore(); state.mockRestore(); }
   });
   it('skips final text after explicit speech and after a newer original-body input', async () => {
     const { world, host } = await mounted();
@@ -454,7 +627,7 @@ describe('tools without a page', () => {
     chat.send({ t: 'hello' });
     const out = await tool(world, 'live2d_pet_say').handler({ script: '你好' }, ctx);
     expect(out).not.toMatchObject({ failed: true });
-    expect(out).toMatchObject({ text: expect.stringContaining('回复已写入') });
+    expect(out).toMatchObject({ text: expect.stringContaining('回复已写入梦境的对话记录') });
     expect(host.stored.filter(event => event.meta?.kind === 'say')).toHaveLength(1);
     expect(chat.last('item')).toMatchObject({ item: { kind: 'say', beats: [{ text: '你好' }] } });
     expect(await tool(world, 'live2d_pet_say').handler({ script: '【开心】' }, ctx)).toMatchObject({ failed: true });
@@ -660,6 +833,32 @@ describe('with a pet page', () => {
     expect(host.pushOpts.map((o) => o?.trigger)).toEqual(['piggyback', 'piggyback', 'debounce', 'piggyback', 'debounce']);
   });
 
+  it('keeps the scene of a queued touch when the same character enters another scene', async () => {
+    const { world, host } = await mounted(c => { c.window.enabled = true; });
+    const page = await windowPage(world);
+    cleanup.push(() => page.close());
+    const touches = () => host.events.filter(event => event.type === 'desktop-live2d-pet.touch');
+    page.send({ t:'figure', id:testModel.id, ok:true, words:[] });
+    page.send({ t:'presentation-result', request:null, mode:'desktop', figure:testModel.id, ok:true });
+    await expect.poll(() => world.petState().activeScene).toBe('desktop');
+    page.send({ t:'touch', kind:'poke', region:'head', figure:testModel.id, reaction:'played' });
+
+    const switching = world.webUi().invoke!('framework','presentation.select',['room','touch-origin']);
+    const apply = await page.next(message => message.t === 'presentation-apply');
+    page.send({ t:'presentation-ready', request:apply.request, mode:'room', figure:testModel.id });
+    await page.next(message => message.t === 'presentation-confirm' && message.request === apply.request);
+    page.send({ t:'presentation-result', request:apply.request, mode:'room', figure:testModel.id, ok:true });
+    await expect(switching).resolves.toMatchObject({ applied:true });
+    page.send({ t:'touch', kind:'poke', region:'head', figure:testModel.id, reaction:'played' });
+    await expect.poll(touches, { timeout:6000 }).toHaveLength(2);
+    expect(touches()).toMatchObject([
+      { text:expect.stringContaining('触碰发生在桌面'), meta:{ touch:{ count:1, scene:'desktop', figure:testModel.id, reaction:'played' } } },
+      { meta:{ touch:{ count:1, scene:'room', figure:testModel.id, reaction:'played' } } },
+    ]);
+    const status = host.events.filter(event => event.type === 'desktop-live2d-pet.availability');
+    expect(status.at(-1)?.meta).toMatchObject({ body:{ scene:'room', figure:testModel.id } });
+  });
+
   it('reports a throw that ends in a crash as one event', async () => {
     const { world, host } = await mounted();
     const page = await FakePage.open(origin(world));
@@ -742,6 +941,21 @@ describe('with a pet page', () => {
     await next.close();
     await again.world.stop();
     expect(again.persisted).toEqual([{ petX: 0.5, petY: null }]);
+  });
+
+  it('restores the last position in a replacement window before the World writes it to disk', async () => {
+    const { world, host, persisted } = await mounted((c) => { c.rememberPosition = true; c.petX = 0.25; c.petY = 0.4; });
+    const page = await windowPage(world);
+    page.send({ t: 'position', x: 0.65 });
+    page.send({ t: 'text', text: 'ping' });
+    await expect.poll(() => host.events.length).toBe(1);
+    await page.close();
+    await world.webUi().invoke!('framework','runtime.closeWindow',[]);
+
+    const replacement = await windowPage(world);
+    cleanup.push(() => replacement.close());
+    expect(replacement.init).toMatchObject({ startX: 0.65, startY: null });
+    expect(persisted).toEqual([]);
   });
 
   it('with rememberPosition off the page gets no start position and a saved one is cleared on stop', async () => {
@@ -1055,6 +1269,29 @@ function chatSocket(world: DesktopPetWorld, panel = 'chat') {
 }
 
 describe('chat page', () => {
+  it('does not confirm a message that Coo archived without handing it to the conversation', async () => {
+    const { world, host } = await mounted();
+    const chat = chatSocket(world, 'framework');
+    chat.send({ t:'hello' });
+    const original = host.pushEvent.bind(host);
+    const archiveOnly = vi.spyOn(host, 'pushEvent').mockImplementation((event, options) => original(event,
+      event.type === 'desktop-live2d-pet.message' ? { ...options, deliver:false } : options));
+    const message = { t:'send', id:'retry-after-archive-only', text:'等待投递' };
+    try {
+      chat.send(message);
+      await expect.poll(() => chat.last('rejected')).toMatchObject({ id:message.id });
+      expect(chat.last('sent')).toBeUndefined();
+      expect(chat.last('item')).toBeUndefined();
+    } finally { archiveOnly.mockRestore(); }
+    chat.send(message);
+    await expect.poll(() => chat.last('sent')).toMatchObject({ id:message.id });
+    expect(host.events.filter(event => event.type === 'desktop-live2d-pet.message')).toHaveLength(1);
+    const reopened = chatSocket(world, 'framework');
+    reopened.send({ t:'hello' });
+    expect(reopened.last('init')?.items).toMatchObject([{ kind:'user', text:message.text }]);
+    expect(reopened.last('init')?.items).toHaveLength(1);
+  });
+
   it('delivers a desktop bubble reply to the shared workbench stream and preserves it after reconnect', async () => {
     const {world, host} = await mounted();
     const page = await windowPage(world);
@@ -1086,6 +1323,9 @@ describe('chat page', () => {
     const message = {t:'phone-message',request:'same-scene-message',text:'场景对话',scene:mode};
     page.send({...message,scene:'phone'});
     expect(await page.next(m=>m.t==='phone-message-result')).toMatchObject({ok:false,reason:'unavailable'});
+    page.send({...message,text:'长'.repeat(501)});
+    expect(await page.next(m=>m.t==='phone-message-result')).toMatchObject({ok:false,reason:'text-too-long'});
+    expect(host.events.filter(event=>event.type==='desktop-live2d-pet.message')).toHaveLength(0);
     page.send(message);
     const sent = await page.next(m=>m.t==='phone-message-result');
     expect(sent).toMatchObject({ok:true});
@@ -1151,6 +1391,10 @@ describe('chat page', () => {
     const page = await FakePage.open(origin(world));
     cleanup.push(() => page.close());
     const chat = chatSocket(world);
+
+    chat.send({ t: 'send', id: 'too-long', text: '长'.repeat(4001) });
+    await expect.poll(() => chat.last('rejected')).toMatchObject({ id: 'too-long', reason: expect.stringContaining('4000') });
+    expect(host.events.filter(event=>event.type==='desktop-live2d-pet.message')).toHaveLength(0);
 
     chat.send({ t: 'send', id: 1, text: '帮我看看这个报错' });
     await expect.poll(() => chat.last('sent')).toMatchObject({ id: 1 });

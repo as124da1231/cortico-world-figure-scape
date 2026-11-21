@@ -36,6 +36,7 @@ export function createPetRuntime(definition, registry, ports) {
   let activeStage;
   const positions = {};
   const framePlacements = {};
+  let pendingFramePosition = null;
   const scenePort = new Proxy({}, { get(_target, key) { return scene[key]?.bind(scene); } });
   const presentationPort = new Proxy({}, { get(_target, key) { return presentation[key]?.bind(presentation); } });
   const movement = createSceneMovement({ current: () => scene, body: { get body() { return body?.body; } }, receipt: message => ports.receipt?.(message) });
@@ -53,6 +54,12 @@ export function createPetRuntime(definition, registry, ports) {
     const point = (useCurrent ? positions[nextMode] : undefined) ?? fallback;
     const position = scene.restore(point?.x, point?.y);
     if (Number.isFinite(position.x)) body.body?.place(position.x, point?.facing, position.y, true);
+  }
+  function currentFrameCharacter() {
+    const figure = body.body, pending = pendingFramePosition;
+    if (pending && pending.body === figure && pending.scene === scene && figure.reportedFrameScope < pending.scope) return pending.character;
+    pendingFramePosition = null;
+    return figure?.layout;
   }
   try {
     body = mount('body', () => createBodyRuntime(defineBodyAssembly({ createBody: registry.body[ids.body], presentations: definition.presentations, defaultPresentation: definition.defaultPresentation })));
@@ -105,6 +112,7 @@ export function createPetRuntime(definition, registry, ports) {
   };
   function committed(pack) {
     movement.reset('body-replaced');
+    pendingFramePosition = null;
     framingOwner = framingRequest = null;
     wardrobePreview = wardrobeDraft = visualPreview = null;
     speech.stop('body-changed');
@@ -121,9 +129,13 @@ export function createPetRuntime(definition, registry, ports) {
     refreshPresentation() {
       presentation.refresh();
       if (mode !== 'desktop' && !switching && body.body) {
+        pendingFramePosition = null;
         movement.cancel('viewport-changed');
         restorePosition(mode);
       }
+    },
+    sceneFrameOrigin() {
+      return { frame: scene.rect?.(), body: body.body, character: currentFrameCharacter(), moved: false };
     },
     transformSceneFrame(change, origin) {
       if (switching || !scene.moveFrame || body.body !== origin.body) return false;
@@ -139,9 +151,16 @@ export function createPetRuntime(definition, registry, ports) {
       }
       presentation.refresh();
       if (origin.body && origin.character) {
-        const { x, y, facing } = origin.character;
-        origin.body.place(next.x + (x - origin.frame.x) * next.w / origin.frame.w, facing,
-          typeof y === 'number' ? next.y + (y - origin.frame.y) * next.h / origin.frame.h : y, true);
+        const { x, y, facing, mode } = origin.character;
+        const bounds = presentation.bounds();
+        const expectedX = next.x + (x - origin.frame.x) * next.w / origin.frame.w;
+        const character = {
+          x: Math.max(bounds.minX ?? 0, Math.min(bounds.maxX ?? bounds.W, expectedX)),
+          y: typeof y === 'number' ? next.y + (y - origin.frame.y) * next.h / origin.frame.h : y, facing, mode,
+        };
+        origin.body.place(character.x, facing, character.y, true);
+        const scope = origin.body.markFrameScope?.();
+        if (Number.isSafeInteger(scope)) pendingFramePosition = { body: origin.body, scene, scope, character };
       }
       return true;
     },
@@ -155,7 +174,8 @@ export function createPetRuntime(definition, registry, ports) {
       signal?.throwIfAborted();
       const candidate = stage(nextMode,wallpaper), previous = activeStage, previousMode = mode;
       switching = true;
-      const figure = body.body, layout = figure.layout;
+      const figure = body.body, layout = currentFrameCharacter();
+      pendingFramePosition = null;
       let previousSuspended = false;
       if (layout) positions[mode] = { ...scene.normalize(layout), facing: layout.facing };
       try {
@@ -181,6 +201,8 @@ export function createPetRuntime(definition, registry, ports) {
         restorePosition(nextMode, nextMode === 'desktop' ? { x: .7 } : undefined, nextMode !== 'wallpaper');
         figure.set({ roam: nextMode === 'desktop' ? roam : 'off' });
         const scope = figure.markFrameScope?.();
+        // Request the scoped frame after placement even if the display callback is delayed.
+        if (ready) figure.tick?.(0, true);
         await ready?.(figure, revision, presentation.bounds(), signal, scope);
         await confirm?.();
         signal?.throwIfAborted();
@@ -230,7 +252,7 @@ export function createPetRuntime(definition, registry, ports) {
       if (body.body?.pack !== command.figure || body.snapshot().swappingBody) return;
       if (wardrobeDraft && wardrobeDraft.owner !== command.owner) return;
       wardrobeDraft = { owner: command.owner, status: 'pending' };
-      body.body.draftWardrobe?.({ kind: 'preview', owner: command.owner, groups: command.groups, bindings: command.bindings, picks: command.picks });
+      body.body.draftWardrobe?.({ kind: 'preview', owner: command.owner, groups: command.groups, bindings: command.bindings, picks: command.picks }, command.requestId);
     },
     async previewAppearance(figure, owner, scheme, currentScheme) {
       const active = body.body;
@@ -272,7 +294,7 @@ export function createPetRuntime(definition, registry, ports) {
     },
     async swapBody(options, hooks) {
       let candidate = null;
-      const next = await body.swapBody({ ...options, bounds: presentation.bounds(), onEvent(kind, detail) {
+      const next = await body.swapBody({ ...options, bounds: presentation.bounds(), frameBounds: presentation.frameBounds, onEvent(kind, detail) {
         if (!candidate || body.body !== candidate || disposed) return;
         if (kind === 'visual-preview' && visualPreview && visualPreview.request === detail.request) {
           visualPreview.status = detail.ok ? 'applied' : 'failed';

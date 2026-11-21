@@ -21,7 +21,6 @@ export function createLandscapeChat({ doc, bubble, text, send, connectMic, syncM
     form.id = 'landscape-compose-' + mode;
     const input = node('textarea','landscape-chat-input');
     input.rows = 1;
-    input.maxLength = 500;
     input.autocomplete = 'off';
     const submit = node('button','landscape-chat-send');
     submit.type = 'submit';

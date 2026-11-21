@@ -28,7 +28,7 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
   const c = studioControls(ctx), win = c.doc.defaultView!;
   let state: Catalog | undefined, busy = false;
   let removal: Item | undefined, operation: string | undefined, upload: string | undefined;
-  let cancelled = false, currentRender = 0, page = 0;
+  let cancelled = false, currentRender = 0, page = 0, libraryScroll = 0;
   let wallpaperMode = false, wallpaperError = false, activeWallpaper: string | undefined;
   let catalogKey = '';
   const covers = new Map<string, Promise<string>>();
@@ -185,6 +185,7 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
     void uploadFiles(() => readTransferredFiles(transfer));
   }, {signal:ctx.signal});
   function closeLibrary() {
+    libraryScroll = workspace.viewport.scrollTop;
     removal = undefined;
     if (operation || upload) void cancelWork();
     for (const cover of covers.values()) void cover.then(url => win.URL.revokeObjectURL(url), () => {});
@@ -332,9 +333,9 @@ export function wallpaperPanel(ctx: PageContext, refreshRuntime: () => Promise<v
     if (libraryOpen()) return;
     workspace.open(libraryPage, opener);
     clearRemoval();
-    search.value = ''; page = 0;
     dialogStatus.textContent = '';
     buildCards();
+    workspace.viewport.scrollTop = libraryScroll;
     void refresh().catch(error => { if (!ctx.signal.aborted) dialogStatus.textContent = message(error); });
   }
 

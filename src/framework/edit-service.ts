@@ -24,7 +24,7 @@ export function createEditService(ports: {
   appearance: ReturnType<typeof createAppearanceDomain>;
   previewVisual: (figure: string, owner: string, value: ModelProfile['visual']) => string;
   previewAppearance: (figure: string, owner: string, scheme: string) => boolean;
-  previewDraftWardrobe: (figure: string, owner: string, profile: ModelProfile, picks: Record<string, string>) => boolean;
+  previewDraftWardrobe: (figure: string, owner: string, profile: ModelProfile, picks: Record<string, string>, requestId: string) => boolean;
   selected: () => string;
   release: (figure: string, owner: string) => void;
 }) {
@@ -106,8 +106,9 @@ export function createEditService(ports: {
             }
             picks[id] = option;
           }
-          if (!ports.previewDraftWardrobe(target.figure, target.id, profile, picks)) throw Error('The main window is not connected');
-          return { accepted: true, owner: target.id };
+          const requestId = randomUUID();
+          if (!ports.previewDraftWardrobe(target.figure, target.id, profile, picks, requestId)) throw Error('The main window is not connected');
+          return { accepted: true, owner: target.id, requestId };
         }
         case 'edit.previewVisual': {
           const target = get(args[0], true);

@@ -109,16 +109,16 @@ const zh = {
   },
 
   sayEmpty: '[live2d_pet_say 没执行] 脚本是空的,也没带图片。不想说话就不调用。',
-  saySavedOnly: '回复已写入 Coo 对话。梦境窗口当前无法播放气泡、声音和动作。',
+  saySavedOnly: '回复已写入梦境的对话记录。梦境窗口当前无法播放气泡、声音和动作。',
   saySaveFailed: '[live2d_pet_say 没执行] 无法保存对话回复。',
   sayReceipt: (r: SayReceipt) => `${r.waitSec > .5 ? `已交给桌宠排队，预计还需 ${Math.round(r.waitSec)} 秒` : '已交给桌宠，等待显示'}。这段约 ${Math.round(r.selfSec)} 秒。`
-    + (r.chatOpen ? '对话页开着,这段也显示在那里。' : '')
-    + (r.images ? `附带的 ${r.images} 张图片只显示在对话页。` : '')
+    + (r.chatOpen ? '梦境的对话记录已收到正文。' : '')
+    + (r.images ? `附带的 ${r.images} 张图片已保存到梦境的对话记录。` : '')
     + (r.replaced !== null ? `替换了还没回答的提问「${r.replaced}」。` : '')
     + (r.dropped.length ? `\n[执行参数] 当前形象的词表里没有这些标记,已略过:${r.dropped.join('、')}。` : ''),
 
   /** `live2d_pet_say` with images and an empty script. */
-  imagesShown: (n: number, chatOpen: boolean) => `${n} 张图片已显示在对话页${chatOpen ? '' : ',对话页现在没有打开'}。`,
+  imagesShown: (n: number, chatOpen: boolean) => `${n} 张图片已保存到梦境的对话记录${chatOpen ? '' : '，记录页当前未打开'}。`,
   /** fallbackText of an image `live2d_pet_say` showed; that event is stored, never delivered. */
   shownImage: (i: number, total: number) => `[对话页上展示的图片 ${i}/${total}]`,
   imagesNotHandles: '[live2d_pet_say 没执行] images 要填附件句柄组成的数组。',
@@ -131,7 +131,7 @@ const zh = {
   askReceipt: (r: AskReceipt) => '已问出。'
     + (r.replaced !== null ? `替换了还没回答的上一个提问「${r.replaced}」。` : '')
     + (r.cut ? '只显示了前 3 个选项。' : '')
-    + (r.chatOpen ? '对话页开着,问题也显示在那里,两边都能回答。' : '')
+    + (r.chatOpen ? '梦境的对话记录也显示了这个问题，可以在那里回答。' : '')
     + '回答到了会以 [answer] 事件送达。',
 
   selfAdjustOff: (tool: string, user: string) => `[${tool} 没执行] ${user}在「习惯」页把「自主配置权限」设成了「禁止」。`,
@@ -150,7 +150,11 @@ const zh = {
   quietUntil: (time: string, sound: boolean, roam: 'off' | 'calm') => `安静到 ${time}:音效${sound ? '照常' : '关'},走动 ${roam === 'off' ? '不乱动' : '多待着'}。设置没变,到时自动恢复。`,
 
   actNone: (dropped: string[]) => `[live2d_pet_act 没执行] 当前形象的词表里没有这些动作${dropped.length ? `(${dropped.join('、')})` : ''}。`,
-  actReceipt: (actions: string[], lasting: string[], dropped: string[]) => `开始依次做:${actions.join(' → ')}。`
+  actCabinResident: '当前住户由小屋世界控制。请用 cabin_* 工具行动。',
+  actCabinQueued: (actions: string[], dropped: string[], id: string) => `动作已排队，依次为 ${actions.join(' → ')}。${dropped.length ? `未识别 ${dropped.join('、')}。` : ''}动作编号 ${id}。`,
+  actCabinUnconfirmed: '小屋世界没有确认收到动作，请先查看当前住户。',
+  actCabinRejected: '小屋世界的角色动作队列不可用。',
+  actReceipt: (actions: string[], lasting: string[], dropped: string[], id: string) => `动作指令已送到桌宠，依次为 ${actions.join(' → ')}。动作编号 ${id}。`
     + (lasting.length ? `${lasting.join('、')} 会一直保持到下一个动作。` : '')
     + (dropped.length ? `\n[执行参数] 当前形象的词表里没有这些,已略过:${dropped.join('、')}。` : ''),
 
@@ -168,7 +172,7 @@ const zh = {
   /** `{{pet.self}}` while the person allows no change. */
   selfNone: (user: string) => `${user}在「习惯」页把「自主配置权限」设成了「禁止」,现在这些你都改不了,\`live2d_pet_quiet\` 也用不了。`,
   /** `{{pet.chat}}`, when the app has a chat page. */
-  chatPage: (_user: string) => '应用的「对话」页按时间列出这些气泡、对方的话,以及你两句话之间调用过的工具名;对方也能在那里打字、发图片(同样是 `[typed]` 事件,图片接在正文后),回答 `live2d_pet_ask`。`live2d_pet_say` 带的 `images` 只显示在对话页,头顶气泡不显示。',
+  chatPage: (_user: string) => '梦境的「对话记录」按时间列出这些气泡、对方的话和中途调用的工具。对方能在那里发文字、图片和回答 `live2d_pet_ask`。`live2d_pet_say` 附带的图片显示在梦境的对话记录中。',
   /** `{{pet.cua}}` while computer use is off on a system that runs it. */
   cuaOff: (user: string, canOpen: boolean) => `## 电脑操作\n\n电脑操作现在关着:你看不到屏幕,也动不了鼠标和键盘。${user}想让你看屏幕或帮忙操作电脑时,可以提出打开它:在设置窗口「习惯」页的「电脑操作」一节,打开前那里会讲清风险。` +
     (canOpen ? `${user}同意去打开的话,\`live2d_pet_cua_open_settings\` 把设置窗口直接打开到那里。` : ''),
@@ -235,19 +239,19 @@ const en: typeof zh = {
   },
 
   sayEmpty: '[live2d_pet_say not run] The script is empty and there are no images. Do not call it when you have nothing to say.',
-  saySavedOnly: 'The reply is in the Coo conversation. The Figure Scape window is unavailable for bubble, audio, and motion playback.',
+  saySavedOnly: 'The reply is saved in Figure Scape’s conversation history. The Figure Scape window is unavailable for bubble, audio, and motion playback.',
   saySaveFailed: '[live2d_pet_say not run] The reply could not be saved.',
   sayReceipt: (r) => [
     r.waitSec > .5
       ? `Queued behind about ${Math.round(r.waitSec)} s of earlier lines; this one takes about ${Math.round(r.selfSec)} s.`
       : `Sent to the pet window for display; this line takes about ${Math.round(r.selfSec)} s.`,
-    r.chatOpen ? 'The chat page is open and shows it too.' : '',
-    r.images ? `The ${r.images} image${r.images > 1 ? 's' : ''} with it show only on the chat page.` : '',
+    r.chatOpen ? 'Figure Scape’s conversation history received the reply.' : '',
+    r.images ? `Saved ${r.images} attached image${r.images > 1 ? 's' : ''} in Figure Scape’s conversation history.` : '',
     r.replaced !== null ? `Replaced the unanswered question "${r.replaced}".` : '',
   ].filter(Boolean).join(' ')
     + (r.dropped.length ? `\n[arguments] These markers are not in the current figure's vocabulary and were skipped: ${r.dropped.join(', ')}.` : ''),
 
-  imagesShown: (n, chatOpen) => `${n} image${n > 1 ? 's' : ''} shown on the chat page${chatOpen ? '' : ', which is not open right now'}.`,
+  imagesShown: (n, chatOpen) => `${n} image${n > 1 ? 's' : ''} saved in Figure Scape’s conversation history${chatOpen ? '' : ', which is currently closed'}.`,
   shownImage: (i, total) => `[image ${i}/${total} shown on the chat page]`,
   imagesNotHandles: '[live2d_pet_say not run] images takes an array of attachment handles.',
   tooManyImages: (max) => `[live2d_pet_say not run] images takes at most ${max} handles.`,
@@ -260,7 +264,7 @@ const en: typeof zh = {
     'Asked.',
     r.replaced !== null ? `Replaced the previous unanswered question "${r.replaced}".` : '',
     r.cut ? 'Only the first 3 options are shown.' : '',
-    r.chatOpen ? 'The chat page is open and shows the question too; it can be answered in either place.' : '',
+    r.chatOpen ? 'The question also appears in Figure Scape’s conversation history, where it can be answered.' : '',
     'The answer will arrive as an [answer] event.',
   ].filter(Boolean).join(' '),
 
@@ -279,7 +283,11 @@ const en: typeof zh = {
   quietUntil: (time, sound, roam) => `Quiet until ${time}: sound effects ${sound ? 'as usual' : 'off'}, walking ${roam}. The settings are unchanged and come back on their own then.`,
 
   actNone: (dropped) => `[live2d_pet_act not run] None of these are in the current figure's vocabulary${dropped.length ? ` (${dropped.join(', ')})` : ''}.`,
-  actReceipt: (actions, lasting, dropped) => `Doing in order: ${actions.join(' → ')}.`
+  actCabinResident: 'Cabin World controls this resident. Use the cabin_* tools for actions.',
+  actCabinQueued: (actions, dropped, id) => `Actions queued in order: ${actions.join(' → ')}.${dropped.length ? ` Unrecognized: ${dropped.join(', ')}.` : ''} Action ID ${id}.`,
+  actCabinUnconfirmed: 'Cabin World has not confirmed receipt. Check the current resident first.',
+  actCabinRejected: 'The Cabin World character action queue is unavailable.',
+  actReceipt: (actions, lasting, dropped, id) => `Action order sent to the desktop pet: ${actions.join(' → ')}. Action ID ${id}.`
     + (lasting.length ? ` ${lasting.join(', ')} ${lasting.length > 1 ? 'are' : 'is'} held until the next action.` : '')
     + (dropped.length ? `\n[arguments] Not in the current figure's vocabulary, skipped: ${dropped.join(', ')}.` : ''),
 
@@ -294,7 +302,7 @@ const en: typeof zh = {
     : `Right now these take effect at once: ${direct.join(', ')}; these are first asked of ${user} in a bubble: ${asked.join(', ')}.`),
   selfNone: (user) => `${user} set "Self-adjustment" to "Off" on the Habits page, so right now you can change none of these, and \`live2d_pet_quiet\` does not work either.`,
   // the English template puts these right after a sentence, so they start with a space
-  chatPage: (user) => ` The app's Chat page lists these bubbles in time order, with what ${user} said and the names of the tools you called between two lines; ${user} can also type and send images there (they arrive as \`[typed]\` events too, images after the text) and answer \`live2d_pet_ask\`. The \`images\` of \`live2d_pet_say\` show only on the Chat page, not in the bubble.`,
+  chatPage: (user) => ` Figure Scape’s conversation history lists these bubbles, what ${user} said, and the tools you called in between. ${user} can send text and images there and answer \`live2d_pet_ask\`. Images attached to \`live2d_pet_say\` appear in Figure Scape’s conversation history.`,
   cuaOff: (user, canOpen) => `## Computer use\n\nComputer use is off: you cannot see the screen or use the mouse and keyboard. When ${user} wants you to look at the screen or help operate the computer, you can suggest turning it on: the Computer use section of the Habits page in the settings window, which explains the risks before it turns on.` +
     (canOpen ? ` If ${user} agrees to turn it on, \`live2d_pet_cua_open_settings\` opens the settings window right there.` : ''),
   cuaSettingsOpened: (user) => `The settings window is open at Computer use, showing what it risks; once ${user} clicks to turn it on, the computer-use tools are yours from the next message.`,

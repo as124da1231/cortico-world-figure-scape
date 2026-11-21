@@ -275,7 +275,7 @@ const es419: Translation<PetText> = {
   windowReason: {
     badHostEnv: (env: string) => `${env} no es un arreglo JSON de cadenas`,
     noElectronFile: (file: string) => `El ejecutable de Electron no existe: ${file}`,
-    noElectron: 'No hay Electron disponible: instala el entorno de ejecución de la ventana en el panel de la mascota o indica el ejecutable de Electron en la configuración',
+    noElectron: 'Falta el componente de la ventana. Instálalo en «Engines → Pet window».',
     startFailed: (why: string) => `No se pudo iniciar: ${why}`,
     closed: 'La ventana se cerró',
     exited: (code: number | null) => `El proceso de la ventana terminó (código de salida ${code})`,

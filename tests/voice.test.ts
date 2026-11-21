@@ -4,9 +4,10 @@ import { openVoiceWindow, holdSpeech } from './helpers/voice-window.ts';
  * FunASR or Whisper (a stand-in for sherpa-onnx's recognizer that answers with a set line) →
  * `desktop-live2d-pet.speech` event, with the listen phases the page shows along the way.
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,12 +15,24 @@ import { DESKTOP_PET_DEFAULTS } from '../src/config.ts';
 import { DesktopPetWorld } from '../src/world.ts';
 import { petText } from '../src/i18n/index.ts';
 import type { Language } from 'cortico/core/language.ts';
-import type { SherpaModule } from '../src/asr/sherpa.ts';
+import { loadSherpa, type SherpaModule } from '../src/asr/sherpa.ts';
 import type { ModelSpec } from '../src/runtime/store.ts';
 import { rmsDb } from '../src/asr/segmenter.ts';
 import { FakeHost } from './helpers/fake-host.ts';
 import { FakePage } from './helpers/page.ts';
 import { fakeSapi } from './helpers/fake-sapi.ts';
+
+it.skipIf(process.platform !== 'win32' || process.arch !== 'x64')('reports a missing local ONNX DLL before running Sherpa native code', () => {
+  const root = mkdtempSync(join(tmpdir(), 'pet-native-asr-'));
+  const wrapper = join(root, 'node_modules', 'sherpa-onnx-node');
+  const native = join(root, 'node_modules', 'sherpa-onnx-win-x64');
+  mkdirSync(wrapper, {recursive:true});
+  mkdirSync(native, {recursive:true});
+  writeFileSync(join(wrapper, 'index.js'), 'throw Error("Sherpa loaded")');
+  writeFileSync(join(native, 'sherpa-onnx.node'), '');
+  const require = createRequire(join(root, 'audit.cjs'));
+  expect(() => loadSherpa(require)).toThrow('missing onnxruntime.dll');
+});
 
 /** A recognizer that answers `reply(samples)`; `decodes` lists how many samples each decode got. */
 interface FakeFunAsr { sherpa: SherpaModule; decodes: number[]; audio: Float32Array[]; configs: Array<Record<string, unknown>>; reply: (samples: number) => string; beforeLoad?: () => Promise<void> }
@@ -112,8 +125,7 @@ afterEach(async () => {
   cleanup = [];
 });
 
-/** A talk key the test presses; `problem` makes it unreadable. */
-async function setup(text: string | ((samples: number) => string), language: Language = 'zh', loadGate?: Promise<void>) {
+async function setup(text: string | ((samples: number) => string), language: Language = 'zh', loadGate?: Promise<void>, reuseModel = false) {
   const asr = fakeFunAsr(text);
   if (loadGate) asr.beforeLoad = () => loadGate;
   const cfg = structuredClone(DESKTOP_PET_DEFAULTS);
@@ -121,9 +133,11 @@ async function setup(text: string | ((samples: number) => string), language: Lan
   Object.assign(cfg, { enabled: true, port: 0 });
   cfg.window.enabled = false;
   const dir = mkdtempSync(join(tmpdir(), 'pet-voice-'));
-  placeModel(join(dir, 'm'));
+  const modelRoot = join(dir, reuseModel ? 'native' : 'm');
+  placeModel(modelRoot);
   const world = new DesktopPetWorld({
     cfg, timezone: 'Asia/Shanghai', persist: (patch) => merge(cfg as never, patch as never), runtimesRoot: () => join(dir, 'rt'), modelsDir: () => join(dir, 'm'),
+    reuseModelsDir: () => join(dir, 'native'),
     loadSherpa: () => asr.sherpa, funasrModel: modelSpec(), whisperModel: placeWhisper(join(dir, 'm')), language: () => language,
   });
   const host = new FakeHost();
@@ -132,7 +146,7 @@ async function setup(text: string | ((samples: number) => string), language: Lan
   const page = await openVoiceWindow(world);
   cleanup.push(() => page.close());
   await expect.poll(() => (world.voiceState().server as { phase: string }).phase).toBe(loadGate ? 'starting' : 'running');
-  return { asr, world, host, page, cfg };
+  return { asr, world, host, page, cfg, modelRoot };
 }
 
 describe('voice input', () => {
@@ -206,11 +220,11 @@ describe('voice input', () => {
 
   it('a threshold set from the meter applies to the next frame: speech below it is not heard', async () => {
     const { world, host, page } = await setup('不该听见');
+    await world.webUi().invoke!('voice', 'setMic', [{ mode: 'always' }]);
     const speech = tone(900, .3);
     const state = await world.webUi().invoke!('voice', 'setThreshold', [rmsDb(speech[0]) + 3]) as { thresholdDb: number };
     expect(state.thresholdDb).toBe(rmsDb(speech[0]) + 3);
     const last = tone(20, .05)[0];
-    page.send({ t: 'speak-hold', down: true });
     for (const fr of [...speech, ...tone(900, 0), last]) page.audio(fr);
     await expect.poll(() => world.voiceState().level).toBe(rmsDb(last));
     expect((world.voiceState().counts as { utterances: number }).utterances).toBe(0);
@@ -332,9 +346,245 @@ describe('voice input', () => {
 
   it('ignores quiet input', async () => {
     const { asr, page, world } = await setup('x');
-    holdSpeech(page, tone(1500, .002));
+    await world.webUi().invoke!('voice', 'setMic', [{ mode: 'always' }]);
+    for (const frame of tone(1500, .002)) page.audio(frame);
     await new Promise((r) => setTimeout(r, 400));
     expect(asr.decodes).toHaveLength(0);
     expect((world.voiceState().counts as { utterances: number }).utterances).toBe(0);
+  });
+
+  it('recognizes short quiet speech in hold mode and reuses the native model without downloading', async () => {
+    const { world, page, host, asr, modelRoot } = await setup('听见了', 'zh', undefined, true);
+    expect(world.voiceState().model).toMatchObject({ phase: 'ready', reused: true, path: join(modelRoot, 'test-model') });
+    expect(asr.configs[0]).toMatchObject({ modelConfig: { senseVoice: { model: join(modelRoot, 'test-model', 'model.int8.onnx') } } });
+    holdSpeech(page, tone(240, .004));
+    await expect.poll(() => host.events.length).toBe(1);
+  });
+
+  it('preserves the hold warm-up option and uses a closed idle mic in click mode', async () => {
+    const { world, page, host, asr } = await setup('录音已收到');
+    const invoke = world.webUi().invoke!;
+    await invoke('voice', 'setMic', [{ mode: 'hold', openOnPress: false }]);
+    await page.next(msg => msg.t === 'prefs' && msg.mic === true);
+    for (const frame of tone(500, .3)) page.audio(frame);
+    expect(host.events).toHaveLength(0);
+
+    await invoke('voice', 'setMic', [{ mode: 'toggle' }]);
+    await invoke('voice', 'setThreshold', [-5]);
+    await page.next(msg => msg.t === 'prefs' && msg.mic === false
+      && (msg.voice as {mode?: string})?.mode === 'toggle');
+    page.send({ t: 'speak-toggle' });
+    const recording = await page.next(msg => msg.t === 'prefs' && msg.mic === true
+      && (msg.voice as {recording?: boolean})?.recording === true);
+    expect(recording.voice).toMatchObject({hint: expect.stringContaining('结束并发送')});
+    await sendAudio(world, page, [...tone(240, .004), ...tone(1200, 0), ...tone(240, .008)]);
+    expect(host.events).toHaveLength(0);
+    // A streaming recognizer can show draft text, but the silence cannot end or send the recording.
+    expect((world.voiceState().counts as { utterances: number }).utterances).toBe(0);
+    page.send({ t: 'speak-toggle' });
+    await page.next(msg => msg.t === 'prefs' && msg.mic === false
+      && (msg.voice as {processing?: boolean})?.processing === true);
+    await expect.poll(() => host.events.length).toBe(1);
+    expect(asr.decodes.at(-1)).toBe(1680 * 16);
+    const ready = await page.next(msg => msg.t === 'prefs' && msg.mic === undefined
+      && (msg.voice as {processing?: boolean})?.processing === false
+      && String((msg.voice as {hint?: string})?.hint).includes('开始录音'));
+    expect(ready.voice).toMatchObject({recording: false, mode: 'toggle'});
+  });
+
+  it.each(['hold', 'toggle'] as const)('an activation click only enables the configured manual mode (%s)', async mode => {
+    const { world, page, host, cfg, asr } = await setup('按选择的方式说');
+    const invoke = world.webUi().invoke!;
+    await invoke('voice', 'setMic', [{ mode }]);
+    await invoke('voice', 'setEnabled', [false]);
+    await expect.poll(() => (world.voiceState().server as { phase: string }).phase).toBe('stopped');
+    page.messages.length = 0;
+    page.send({ t: 'speak-activate' });
+    await expect.poll(() => cfg.asr.enabled).toBe(true);
+    await page.next(msg => { const voice = msg.voice as { mode?: string; ready?: boolean; activating?: boolean; recording?: boolean } | undefined;
+      return msg.t === 'prefs' && voice?.mode === mode && voice?.ready === true && voice.activating === false && voice.recording === false && msg.mic === false;
+    });
+    expect(cfg.asr.enabled).toBe(true);
+    await sendAudio(world, page, tone(500, .3));
+    expect(asr.decodes).toHaveLength(0);
+    expect(host.events).toHaveLength(0);
+    if (mode === 'hold') holdSpeech(page,tone(500,.3));
+    else {
+      page.send({ t: 'speak-toggle' });
+      await sendAudio(world, page, tone(500, .2));
+      page.send({ t: 'speak-toggle' });
+    }
+    await expect.poll(() => host.events.length).toBe(1);
+    expect(cfg.asr.mic.mode).toBe(mode);
+  });
+
+  it('pauses automatic listening, discards unfinished speech and resumes in the same mode', async () => {
+    const { world, page, host, cfg } = await setup('恢复监听后才发送');
+    await world.webUi().invoke!('voice', 'setMic', [{ mode: 'always' }]);
+    await sendAudio(world, page, tone(500, .3));
+    await page.next(msg => msg.t === 'listen' && msg.phase === 'start');
+    await world.webUi().invoke!('voice', 'testStart', []);
+    page.send({ t: 'speak-pause' });
+    await sendAudio(world, page, tone(500, .3));
+    expect(cfg.asr.enabled).toBe(true);
+    await world.webUi().invoke!('voice', 'testCancel', []);
+    await sendAudio(world, page, tone(500, .3));
+    page.send({ t: 'speak-pause' });
+    await expect.poll(() => cfg.asr.enabled).toBe(false);
+    await page.next(msg => msg.t === 'prefs' && msg.mic === false);
+    for (const frame of tone(900, 0)) page.audio(frame);
+    page.send({ t: 'mic', state: 'off' });
+    await expect.poll(() => world.voiceState().mic).toMatchObject({ state: 'off' });
+    expect(world.voiceState().input).toMatchObject({ open: false, mode: 'always' });
+    expect(host.events).toHaveLength(0);
+    page.send({ t: 'speak-activate' });
+    await expect.poll(() => (world.voiceState().server as {phase: string}).phase).toBe('running');
+    await sendAudio(world, page, tone(500, .3));
+    await sendAudio(world, page, tone(900, 0));
+    await expect.poll(() => host.events.length).toBe(1);
+    expect(cfg.asr.mic.mode).toBe('always');
+  });
+
+  it('ignores a manual toggle in automatic mode without flushing the utterance', async () => {
+    const { world, page, host } = await setup('自动监听发出');
+    await world.webUi().invoke!('voice', 'setMic', [{ mode: 'always' }]);
+    await sendAudio(world, page, tone(500, .3));
+    page.send({ t: 'speak-toggle' });
+    await sendAudio(world, page, tone(20, .4));
+    expect((world.voiceState().counts as { utterances: number }).utterances).toBe(0);
+    expect(host.events).toHaveLength(0);
+    await sendAudio(world, page, tone(900, 0));
+    await expect.poll(() => host.events.length).toBe(1);
+  });
+
+  it('cancels click recording on mode change rather than sending it', async () => {
+    const { world, page, host } = await setup('不应发送');
+    const invoke = world.webUi().invoke!;
+    await invoke('voice', 'setMic', [{ mode: 'toggle' }]);
+    page.send({ t: 'speak-toggle' });
+    await sendAudio(world, page, tone(500, .3));
+    await invoke('voice', 'setMic', [{ mode: 'hold' }]);
+    page.send({ t: 'speak-toggle' });
+    await sendAudio(world, page, tone(20, .2));
+    expect(host.events).toHaveLength(0);
+    expect((world.voiceState().counts as { utterances: number }).utterances).toBe(0);
+  });
+
+  it('closes the microphone in the cancellation message and never sends the tap recording', async () => {
+    const { world, page, host } = await setup('不应发送');
+    await world.webUi().invoke!('voice', 'setMic', [{ mode: 'toggle' }]);
+    page.send({ t: 'speak-toggle' });
+    await page.next(msg => msg.t === 'prefs' && msg.mic === true);
+    await sendAudio(world, page, tone(500, .3));
+    page.messages.length = 0;
+
+    page.send({ t: 'cancel' });
+    await page.next(msg => msg.t === 'listen' && msg.phase === 'none');
+    const cancelled = await page.next(msg => msg.t === 'prefs'
+      && (msg.voice as { mode?: string; recording?: boolean })?.mode === 'toggle'
+      && (msg.voice as { recording?: boolean })?.recording === false);
+    expect(cancelled.mic).toBe(false);
+    expect((world.voiceState().counts as { utterances: number }).utterances).toBe(0);
+    expect(host.events).toHaveLength(0);
+  });
+
+  it('discards a recording after microphone denial and records on the next click', async () => {
+    const { world, page, host } = await setup('重试后听到了');
+    await world.webUi().invoke!('voice', 'setMic', [{ mode: 'toggle' }]);
+    page.send({ t:'speak-toggle' });
+    await page.next(msg => msg.t === 'prefs' && msg.mic === true);
+    page.send({ t:'mic', state:'denied', detail:'Permission denied' });
+    await page.next(msg => msg.t === 'mic-error' && msg.state === 'denied');
+    expect(host.events).toHaveLength(0);
+    page.send({ t:'speak-toggle' });
+    await sendAudio(world, page, tone(500, .3));
+    page.send({ t:'speak-toggle' });
+    await expect.poll(() => host.events.length).toBe(1);
+  });
+
+  it('uses the selected recognizer for a test even in automatic mode without sending anything to Coo', async () => {
+    const { world, page, host, asr } = await setup('试录成功');
+    const invoke = world.webUi().invoke!;
+    await invoke('voice', 'setMic', [{ mode: 'always' }]);
+    await invoke('voice', 'setThreshold', [-5]);
+    await invoke('voice', 'testStart', []);
+    await sendAudio(world, page, tone(500, .2));
+    await invoke('voice', 'testFinish', []);
+    expect(world.voiceState().test).toMatchObject({ phase: 'error', text: expect.stringContaining('门槛') });
+    expect(asr.decodes).toHaveLength(0);
+    await invoke('voice', 'testStart', []);
+    await sendAudio(world, page, tone(500, .2));
+    await invoke('voice', 'setThreshold', [-42]);
+    await sendAudio(world, page, tone(500, .3));
+    await invoke('voice', 'testFinish', []);
+    await expect.poll(() => world.voiceState().test).toEqual({ phase: 'done', text: '试录成功' });
+    expect(asr.decodes).toHaveLength(1);
+    expect(host.events).toHaveLength(0);
+  });
+
+  it('tests with live voice input paused, then releases the test microphone without submitting', async () => {
+    const { world, page, host, cfg } = await setup('这句话仅用于试录');
+    const invoke = (method: string, args: unknown[] = []) => world.webUi().invoke!('voice', method, args);
+    await invoke('setMic', [{ mode: 'always' }]);
+    await invoke('setEnabled', [false]);
+    await expect.poll(() => (world.voiceState().server as { phase: string }).phase).toBe('stopped');
+    page.messages.length = 0;
+    await invoke('testStart');
+    await page.next(msg => msg.t === 'prefs' && msg.mic === true);
+    await sendAudio(world, page, tone(620, .35));
+    await invoke('testFinish');
+    await expect.poll(() => world.voiceState().test).toEqual({ phase: 'done', text: '这句话仅用于试录' });
+    await page.next(msg => msg.t === 'prefs' && msg.mic === false);
+    await expect.poll(() => (world.voiceState().server as { phase: string }).phase).toBe('stopped');
+    expect(cfg.asr.enabled).toBe(false);
+    expect(host.events).toHaveLength(0);
+  });
+
+  it('counts the full recording time from the first audio frame and releases a cancelled or timed-out capture', async () => {
+    const { world, host, asr } = await setup('试录成功');
+    const invoke = (method: string) => world.webUi().invoke!('framework', 'voice.' + method, []);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await expect(invoke('testStart')).resolves.toMatchObject({ test: { phase: 'opening' } });
+      vi.advanceTimersByTime(9000);
+      expect(world.voiceState().test).toEqual({ phase: 'opening' });
+      await invoke('testStart');
+      world['onAudio'](new Int16Array(320));
+      expect(world.voiceState().test).toEqual({ phase: 'recording' });
+      vi.advanceTimersByTime(7999);
+      expect(world.voiceState().test).toEqual({ phase: 'recording' });
+      vi.advanceTimersByTime(1);
+      expect(world.voiceState().test).toMatchObject({ phase: 'error', text: expect.stringContaining('已接通') });
+
+      await invoke('testStart');
+      await invoke('testCancel');
+      vi.advanceTimersByTime(12_000);
+      expect(world.voiceState().test).toEqual({ phase: 'idle' });
+
+      await invoke('testStart');
+      vi.advanceTimersByTime(12_000);
+      expect(world.voiceState().test).toMatchObject({ phase: 'error', text: expect.stringContaining('未收到麦克风音频') });
+      expect(asr.decodes).toHaveLength(0);
+      expect(host.events).toHaveLength(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('reopens a failed microphone when the user retries a test in automatic mode', async () => {
+    const { world, page } = await setup('试录成功');
+    const invoke = world.webUi().invoke!;
+    await invoke('voice', 'setMic', [{ mode: 'always' }]);
+    await invoke('voice', 'testStart', []);
+    await page.next(msg => msg.t === 'prefs' && msg.mic === true);
+    page.send({ t: 'mic', state: 'denied', detail: 'Permission denied' });
+    await expect.poll(() => world.voiceState().test).toEqual({ phase: 'error', text: 'Permission denied' });
+    page.messages.length = 0;
+    await invoke('voice', 'testStart', []);
+    const reset = await page.next(msg => msg.t === 'prefs' && msg.mic === false);
+    const reopened = await page.next(msg => msg.t === 'prefs' && msg.mic === true);
+    expect(reset.mic).toBe(false);
+    expect(reopened.mic).toBe(true);
+    await sendAudio(world, page, tone(500, .3));
+    await invoke('voice', 'testFinish', []);
+    await expect.poll(() => world.voiceState().test).toEqual({ phase: 'done', text: '试录成功' });
   });
 });

@@ -53,7 +53,7 @@ body.preview-page { grid-template-rows:auto minmax(0,1fr) auto; }
   overflow:hidden;
   touch-action:none;
   cursor:grab;
-  background-image:radial-gradient(light-dark(#ded5d5,#3d343e) 1px, transparent 1.5px);
+  background-image:radial-gradient(var(--studio-line) 1px, transparent 1.5px);
   background-size:16px 16px;
 }
 #viewport:active { cursor:grabbing }
@@ -94,6 +94,8 @@ body.preview-page { grid-template-rows:auto minmax(0,1fr) auto; }
   padding:7px 9px 3px;
 }
 #controls label { min-width:0; flex-wrap:wrap }
+#controls label[hidden] { display:none }
+#zoom-controls { margin-inline-start:auto }
 button, select {
   box-sizing:border-box;
   height:var(--studio-control);
@@ -104,8 +106,14 @@ button, select {
   padding:3px 7px;
   font:inherit;
 }
-button { min-width:32px; cursor:pointer }
-button:hover { background:var(--preview-bg) }
+button {
+  min-width:32px; cursor:pointer;
+  background:var(--studio-control-bg); color:var(--studio-control-ink);
+  border-color:var(--studio-control-edge); box-shadow:var(--studio-control-shadow);
+  transition:border-color var(--studio-motion), box-shadow var(--studio-motion);
+}
+button:hover:not(:disabled) { background:var(--studio-control-hover); border-color:var(--studio-control-hover-edge); color:var(--studio-text) }
+button:active:not(:disabled) { box-shadow:var(--studio-pressed-shadow) }
 #status {
   margin:0;
   padding:2px 9px 7px;

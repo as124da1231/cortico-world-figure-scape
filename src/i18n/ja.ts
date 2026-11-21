@@ -275,7 +275,7 @@ const ja: Translation<PetText> = {
   windowReason: {
     badHostEnv: (env: string) => `${env} が文字列の JSON 配列ではありません`,
     noElectronFile: (file: string) => `Electron の実行ファイルがありません：${file}`,
-    noElectron: '使える Electron がありません：デスクトップペットのパネルでウィンドウのランタイムをインストールするか、設定で Electron の実行ファイルを指定してください',
+    noElectron: 'ウィンドウのコンポーネントがありません。「Engines → Pet window」でインストールしてください。',
     startFailed: (why: string) => `起動に失敗しました：${why}`,
     closed: 'ウィンドウは閉じられました',
     exited: (code: number | null) => `ウィンドウのプロセスが終了しました（終了コード ${code}）`,

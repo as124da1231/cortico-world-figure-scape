@@ -104,7 +104,7 @@ export interface FigureManifest {
   /** What the body looks like, for the bot's prompt, by language. */
   about: Names;
   author?: string;
-  source?: 'cabin-world';
+  source?: 'cabin-world' | 'spriter';
   license?: string;
   credits?: Array<{ role: string; name: string; url?: string }>;
   /** The module the frame imports, relative to the pack, and the factory it exports. */
@@ -331,7 +331,7 @@ export function readManifest(dir: string, skipped: string[] = [], t: PackText = 
     name, about, entry: raw.entry, export: raw.export, axes, presets, vocab, sounds, can: { walk: can.walk !== false }, moves, needs, voice, effects,
     ...(bubble ? { bubble } : {}),
     ...(typeof raw.author === 'string' ? { author: raw.author } : {}),
-    ...(raw.source === 'cabin-world' ? { source: raw.source } : {}),
+    ...(raw.source === 'cabin-world' || raw.source === 'spriter' ? { source: raw.source } : {}),
     ...(typeof raw.license === 'string' ? { license: raw.license } : {}),
     ...(Array.isArray(raw.credits) ? { credits: raw.credits as FigureManifest['credits'] } : {}),
     ...(raw.model ? { model: raw.model as string } : {}),

@@ -7,8 +7,10 @@ export const WORKSPACE_PANELS = [
   ['interaction', '交互', 'Interaction'],
   ['controls', '操作台布局', 'Control layout'],
   ['display', '显示', 'Display'],
+  ['appearance', '外观', 'Appearance'],
   ['permissions', '权限', 'Permissions'],
   ['services', '模型服务', 'Model services'],
+  ['engines', '引擎', 'Engines'],
 ] as const;
 
 export type WorkspacePanel = typeof WORKSPACE_PANELS[number][0];

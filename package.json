@@ -1,8 +1,8 @@
 {
   "name": "cortico-world-figure-scape",
-  "version": "0.1.0-dev.2",
+  "version": "0.1.0-dev.4",
   "type": "module",
-  "description": "把自己的角色带进 Coo。导入 Live2D 模型或兼容形象包，调整动作、装扮和触碰反馈。从桌面切到小屋、竖屏或动态壁纸，继续同一段对话。内置小屋世界。",
+  "description": "把自己的角色带进 Coo。导入 Live2D、兼容形象包或 Spriter 源工程，编辑动作、装扮和触碰。在桌面、竖屏或动态壁纸继续对话。在梦境对话面板可接续原版桌宠历史。可试录语音并查看转写。小屋世界组件在引擎页按需安装，可复用已有安装。",
   "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
@@ -54,15 +54,15 @@
     "locales": {
       "zh": {
         "displayName": "Figure Scape · 梦境",
-        "description": "把自己的角色带进 Coo。导入 Live2D 模型或兼容形象包，调整动作、装扮和触碰反馈。从桌面切到小屋、竖屏或动态壁纸，继续同一段对话。内置小屋世界。"
+        "description": "把自己的角色带进 Coo。导入 Live2D、兼容形象包或 Spriter 源工程，编辑动作、装扮和触碰。在桌面、竖屏或动态壁纸继续对话。在梦境对话面板可接续原版桌宠历史。可试录语音并查看转写。小屋世界组件在引擎页按需安装，可复用已有安装。"
       },
       "en": {
         "displayName": "Figure Scape",
-        "description": "Bring your own character into Coo. Import Live2D models or compatible figure packs, then customize motions, outfits, and touch reactions. Keep chatting across the desktop, a furnished room, portrait view, and animated wallpapers. Includes Cabin World."
+        "description": "Bring your own character into Coo. Import Live2D models, compatible figure packs, or Spriter projects and edit motions, outfits, and touch reactions. Keep chatting across scenes and read the stock desktop pet’s history in Figure Scape’s chat panel. Test your microphone with a transcript. In Engines, install Cabin World on demand or reuse a local installation."
       }
     },
-    "webUiClient": "dist/webui-4WGQCEXM.js",
-    "webUiStyle": "dist/webui-SIZDYSPY.css",
+    "webUiClient": "dist/webui-Z3GD3HMO.js",
+    "webUiStyle": "dist/webui-2R5QAVJV.css",
     "describe": "describe.json",
     "tags": [
       "companion",
@@ -70,6 +70,7 @@
       "local",
       "streaming",
       "external-setup",
+      "sensitive-data",
       "experimental"
     ]
   },
@@ -95,6 +96,7 @@
     "scripts/build-webui.mjs",
     "scripts/prepare-cabin-runtime.py",
     "scripts/check-cabin-runtime.mjs",
+    "scripts/check-native-conversation.mjs",
     "tsconfig.json",
     "!src/cua",
     "!**/live2dcubismcore.min.js",
@@ -105,16 +107,12 @@
   ],
   "scripts": {
     "build": "node scripts/build-webui.mjs",
-    "prepack": "node scripts/check-cabin-runtime.mjs",
-    "cabin:split": "node scripts/split-cabin-runtime.mjs",
+    "prepack": "node scripts/check-cabin-runtime.mjs --pins",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "acorn": "8.15.0",
-    "figure-scape-cabin-1of3": "0.1.0-dev.2",
-    "figure-scape-cabin-2of3": "0.1.0-dev.2",
-    "figure-scape-cabin-3of3": "0.1.0-dev.2",
     "esbuild": "0.28.2",
     "fflate": "0.8.3",
     "jpeg-js": "^0.4.4",
@@ -123,6 +121,7 @@
     "opencc-js": "^1.4.1",
     "pngjs": "7.0.0",
     "qrcode": "1.5.4",
+    "saxes": "6.0.0",
     "sherpa-onnx-node": "1.13.8",
     "webwallgl": "3.0.2",
     "ws": "^8.18.0"
@@ -142,8 +141,8 @@
     "win32"
   ],
   "live2dEditor": {
-    "script": "dist/editor-EALIXFXB.js",
-    "style": "dist/editor-CK7KXOGL.css"
+    "script": "dist/editor-KMN2A4CU.js",
+    "style": "dist/editor-7GA4C6GX.css"
   },
   "live2dWallpaper": "dist/wallpaper-YJLN6PG7.js"
 }

@@ -20,6 +20,7 @@ export function sceneWorkspace(ctx: PageContext) {
   const back = c.button('', goBack);
   back.classList.add('studio-scene-back');
   const viewport = c.node('div', '', 'studio-scene-viewport');
+  viewport.tabIndex = -1;
   const grid = c.node('div', '', 'studio-scene-apps');
   const actions = c.node('div', '', 'studio-scene-actions');
   header.append(back, heading, actions);
@@ -31,6 +32,7 @@ export function sceneWorkspace(ctx: PageContext) {
     const {page, scroll} = stack.at(-1)!;
     const parent = stack.at(-2);
     back.hidden = !parent;
+    header.hidden = !parent;
     back.textContent = parent ? '‹ ' + parent.page.title : '';
     if (parent) back.setAttribute('aria-label', t('返回 ', 'Back to ') + parent.page.title);
     heading.textContent = page.title;
@@ -54,7 +56,7 @@ export function sceneWorkspace(ctx: PageContext) {
     page.close?.();
     render();
     if (opener?.isConnected && !opener.matches(':disabled')) opener.focus({preventScroll: true});
-    else heading.focus({preventScroll: true});
+    else (stack.length === 1 ? viewport : heading).focus({preventScroll: true});
   }
   element.addEventListener('keydown', event => {
     if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || stack.length === 1) return;

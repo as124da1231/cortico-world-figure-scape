@@ -1,5 +1,5 @@
 /* Coopanion Desktop Pet palette, from its pet.css in Coopanion 0.2.21. */
-:root {
+:is(.pet-studio, .live2d-preview, .live2d-surface, .studio-appearance-art, .layout-control-phone, .layout-hover-rail, .studio-preview-sample) {
   --coo-bg:light-dark(#F3F2F6,#0D1117);
   --coo-surface:light-dark(#FFFFFF,#151A22);
   --coo-text:light-dark(#1B1626,#E9EDF2);
@@ -14,7 +14,7 @@
   --coo-shadow:light-dark(rgba(27,22,38,.12),rgba(0,0,0,.32));
   --coo-warning:light-dark(#96743B,#C4A372);
 }
-:is(.pet-studio, .studio-workspace-chrome, .live2d-preview, .live2d-surface) {
+:is(.pet-studio, .live2d-preview, .live2d-surface, .studio-appearance-art, .layout-control-phone, .layout-hover-rail, .studio-preview-sample) {
   color-scheme: light dark;
   --studio-bg: light-dark(#F7F3EF, #221C22);
   --studio-surface: light-dark(#FFFDFB, #2A2229);
@@ -22,6 +22,7 @@
   --studio-text: light-dark(#2D2428, #F6F0F3);
   --studio-muted: light-dark(#6A5A5E, #CDBEC5);
   --studio-accent: light-dark(#8F3049, #F6AFC3);
+  --studio-brand: var(--studio-accent);
   --studio-action-ink: var(--studio-accent);
   --studio-action: light-dark(#F4E2E7, #482E3B);
   --studio-hover: color-mix(in srgb, var(--studio-accent) 5%, var(--studio-surface));
@@ -33,24 +34,157 @@
   --studio-wait: light-dark(#77501C, #EBC58F);
   --studio-focus: light-dark(#795365, #F0C2D4);
   --studio-shadow: 0 8px 24px light-dark(#32242B19, #09060880);
+  --studio-surface-edge: color-mix(in srgb, var(--studio-line) 80%, var(--studio-surface));
+  --studio-control-bg: var(--studio-surface);
+  --studio-control-hover: var(--studio-hover);
+  --studio-control-ink: var(--studio-text);
+  --studio-control-edge: var(--studio-line);
+  --studio-control-hover-edge: var(--studio-control-line);
+  --studio-input-edge: var(--studio-line);
+  --studio-backdrop: light-dark(#261C2573,#100B128C);
+  --studio-control-shadow: 0 1px 2px color-mix(in srgb, var(--studio-text) 9%, transparent);
+  --studio-pressed-shadow: inset 0 1px 2px color-mix(in srgb, var(--studio-text) 15%, transparent);
+  --studio-primary-bg: light-dark(#883249,#EEB1C1);
+  --studio-primary-ink: light-dark(#FFFCFC,#2B1720);
+  --studio-primary-hover: color-mix(in srgb, var(--studio-primary-bg) 90%, var(--studio-text));
+  --studio-primary-edge: color-mix(in srgb, var(--studio-primary-bg) 90%, var(--studio-text));
   --studio-edge: clamp(12px, 3cqi, 32px);
   --studio-gutter: 16px;
   --studio-control: 36px;
   --studio-touch: 44px;
-  --studio-radius: 8px;
+  --studio-radius: 9px;
   --studio-card-radius: 12px;
   --studio-panel-radius: 16px;
+  --studio-motion: 140ms;
+  --studio-font: "Segoe UI Variable Text", "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
+  --studio-label-size: 14px;
+  --studio-label-line: 22px;
+  --studio-caption-size: 12px;
+  --studio-caption-line: 18px;
+  --studio-heading-size: 16px;
+  --studio-heading-line: 24px;
+}
+
+:is(.pet-studio, .live2d-preview, .live2d-surface, .studio-appearance-art, .studio-preview-sample, .layout-control-phone, .layout-hover-rail)[data-appearance="mint"],
+html[data-appearance="mint"] .live2d-editor {
+  /* Match the Cortico console's Mint palette when the Coo host is absent. */
+  --studio-bg: light-dark(#f4f5f4,#121312);
+  --studio-surface: light-dark(#fbfbfb,#1d1f1e);
+  --studio-sunken: light-dark(#e8e9e8,#2c302e);
+  --studio-text: light-dark(#1b1a1e,#e9eae9);
+  --studio-muted: light-dark(#5c5c60,#b0b2b1);
+  --studio-accent: light-dark(#238268,#53bda0);
+  --studio-line: light-dark(#e3e4e3,#292c2b);
+  --studio-control-line: light-dark(#d0d2d0,#383c3a);
+  --studio-action: color-mix(in srgb, var(--studio-brand) 13%, var(--studio-surface));
+  --studio-control-bg: transparent;
+  --studio-control-hover: color-mix(in srgb, var(--studio-text) 3.5%, transparent);
+  --studio-control-ink: var(--studio-muted);
+  --studio-control-edge: transparent;
+  --studio-control-hover-edge: transparent;
+  --studio-control-shadow: none;
+  --studio-brand: light-dark(#00a870,#2fd59b);
+  --studio-primary-bg: color-mix(in srgb, var(--studio-brand) 78%, light-dark(#f2f3f2,#242726));
+  --studio-primary-ink: #082a1e;
+  --studio-primary-hover: color-mix(in srgb, var(--studio-brand) 86%, light-dark(#f2f3f2,#242726));
+  --studio-primary-edge: var(--studio-primary-bg);
+  --studio-radius: 10px;
+  --studio-card-radius: 14px;
   --studio-motion: 120ms;
-  --studio-font: "Instrument Sans", "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
+  --studio-backdrop: light-dark(#1b1a1e70,#0009);
+}
+:is(.pet-studio, .live2d-preview, .live2d-surface, .studio-appearance-art, .studio-preview-sample, .layout-control-phone, .layout-hover-rail)[data-appearance="blue"],
+html[data-appearance="blue"] .live2d-editor {
+  --studio-bg: light-dark(#EEF2F8,#161D2D);
+  --studio-surface: light-dark(#FAFCFF,#1E293C);
+  --studio-sunken: light-dark(#E1E8F1,#28354D);
+  --studio-text: light-dark(#202E48,#ECF2FF);
+  --studio-muted: light-dark(#4D607B,#B2C4DD);
+  --studio-accent: light-dark(#405DA0,#AABFFF);
+  --studio-action: light-dark(#E0E8FA,#34466C);
+  --studio-line: light-dark(#CCD7E7,#405374);
+  --studio-control-line: light-dark(#8498B8,#7E94BB);
+  --studio-control-bg: light-dark(#F6F9FE,#25324A);
+  --studio-control-shadow: 0 1px 2px light-dark(#34486A1A,#070E1C55);
+  --studio-shadow: 0 8px 24px light-dark(#273E6122,#080D1C88);
+  --studio-backdrop: light-dark(#18294870,#080F1D99);
+  --studio-primary-bg: light-dark(#405A96,#B2C5F8);
+  --studio-primary-ink: light-dark(#FEFCFF,#15223B);
+}
+:is(.pet-studio, .live2d-preview, .live2d-surface, .studio-appearance-art, .studio-preview-sample, .layout-control-phone, .layout-hover-rail)[data-appearance="amber"],
+html[data-appearance="amber"] .live2d-editor {
+  --studio-bg: light-dark(#F7F0E5,#241C16);
+  --studio-surface: light-dark(#FFFCF5,#30251C);
+  --studio-sunken: light-dark(#F0E3CF,#413224);
+  --studio-text: light-dark(#392A20,#F8ECDA);
+  --studio-muted: light-dark(#6E5742,#D4BA9D);
+  --studio-accent: light-dark(#874F22,#F2BF86);
+  --studio-action: light-dark(#F5E1C7,#533C27);
+  --studio-line: light-dark(#DECDB5,#594633);
+  --studio-control-line: light-dark(#AA8D6F,#A18466);
+  --studio-control-bg: light-dark(#FCF5E9,#3A2D21);
+  --studio-control-shadow: 0 1px 2px light-dark(#54362021,#160E0855);
+  --studio-shadow: 0 8px 24px light-dark(#50321F24,#160D0788);
+  --studio-backdrop: light-dark(#39281B73,#190F0899);
+  --studio-primary-bg: light-dark(#85502A,#F0BF8B);
+  --studio-primary-ink: light-dark(#FFFCF5,#312013);
+}
+:is(.pet-studio, .live2d-preview, .live2d-surface, .studio-appearance-art, .studio-preview-sample, .layout-control-phone, .layout-hover-rail)[data-appearance],
+html[data-appearance] .live2d-editor {
+  --studio-focus: var(--studio-accent);
+  --coo-bg: var(--studio-bg);
+  --coo-surface: var(--studio-surface);
+  --coo-text: var(--studio-text);
+  --coo-muted: var(--studio-muted);
+  --coo-line: var(--studio-line);
+  --coo-control-line: var(--studio-control-line);
+  --coo-accent: var(--studio-accent);
+  --coo-accent-ink: var(--studio-accent);
+  --coo-tint: var(--studio-action);
+  --coo-said-bg: var(--studio-action);
+  --coo-said-ink: var(--studio-text);
+  --coo-warning: var(--studio-wait);
+}
+:is(.pet-studio, .live2d-preview, .live2d-surface, .studio-appearance-art, .studio-preview-sample, .layout-control-phone, .layout-hover-rail)[data-appearance="mint"],
+html[data-appearance="mint"] .live2d-editor {
+  --coo-accent: var(--studio-brand);
+  --coo-said-bg: light-dark(#e6e9e7,#2c3230);
+  --coo-said-ink: light-dark(#1f2221,#e6eae8);
+  --coo-warning: light-dark(#96743b,#c4a372);
+}
+
+/* Keep the runtime and its layout preview on Coo's desktop palette. */
+.live2d-surface[data-appearance="mint"],
+:is(.layout-control-phone,.layout-hover-rail)[data-appearance="mint"] {
+  --studio-bg: light-dark(#F3F2F6,#0D1117);
+  --studio-surface: light-dark(#FFFFFF,#151A22);
+  --studio-sunken: light-dark(#E8E6EE,#232B37);
+  --studio-text: light-dark(#1B1626,#E9EDF2);
+  --studio-muted: light-dark(#6A6577,#8C95A3);
+  --studio-line: light-dark(#E2DFE8,#252C37);
+  --studio-accent: light-dark(#008257,#2FD59B);
+  --studio-control-line: light-dark(#D0D2D0,#566170);
+  --studio-control-bg: var(--studio-surface);
+  --studio-control-edge: var(--studio-line);
+  --studio-brand: light-dark(#00A870,#2FD59B);
+  --coo-bg: var(--studio-bg);
+  --coo-surface: var(--studio-surface);
+  --coo-text: var(--studio-text);
+  --coo-muted: var(--studio-muted);
+  --coo-line: var(--studio-line);
+  --coo-control-line: var(--studio-control-line);
+  --coo-accent: var(--studio-brand);
+  --coo-accent-ink: var(--studio-accent);
+  --coo-tint: var(--studio-action);
 }
 
 .live2d-surface[data-theme="light"] { color-scheme: light; }
 .live2d-surface[data-theme="dark"] { color-scheme: dark; }
-:root[data-color-mode="light"] :is(.pet-studio,.studio-workspace-chrome) { color-scheme:light; }
-:root[data-color-mode="dark"] :is(.pet-studio,.studio-workspace-chrome) { color-scheme:dark; }
+:root[data-color-mode="light"] .pet-studio { color-scheme:light; }
+:root[data-color-mode="dark"] .pet-studio { color-scheme:dark; }
 
 @media (prefers-reduced-motion: reduce) {
-  :is(.pet-studio, .studio-workspace-chrome, .live2d-preview, .live2d-surface) {
+  :is(.pet-studio, .live2d-preview, .live2d-surface) {
     --studio-motion: 0ms;
   }
 }

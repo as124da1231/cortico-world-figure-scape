@@ -25,7 +25,7 @@ export function modelLibrary(
   const buttons = c.node('div', '', 'studio-import-actions');
   const dropTarget = c.node('div', '', 'studio-drop-target');
   const dropTitle = c.node('strong', t('拖入模型文件夹或 ZIP', 'Drop a model folder or ZIP'));
-  const dropHint = c.node('span', t('支持原始 Live2D 模型和 Coo 形象包', 'Live2D sources and Coo figure packages'));
+  const dropHint = c.node('span', t('支持 Live2D、Coo 形象包和 Spriter 工程', 'Live2D, Coo figure packs and Spriter projects'));
   const dropCopy = c.node('div', '', 'studio-drop-copy');
   dropCopy.append(dropTitle, dropHint);
   const importMenu = c.node('details', '', 'studio-import-menu');
@@ -54,8 +54,8 @@ export function modelLibrary(
   const cabinImport = c.dialog(t('从小屋世界导入角色', 'Import a Cabin World character'), 'studio-editor-form');
   const cabinList = c.node('div', '', 'studio-resource-list');
   const cabinStatus = c.status();
-  const cabinSetup = c.node('a', t('连接小屋世界', 'Connect Cabin World'), 'studio-link');
-  cabinSetup.href = workspaceHref('desktop', 'cabin');
+  const cabinSetup = c.node('a', t('管理小屋世界引擎', 'Manage Cabin World engine'), 'studio-link');
+  cabinSetup.href = workspaceHref('engines', 'cabin');
   cabinSetup.hidden = true;
   cabinImport.body.append(cabinStatus, cabinSetup, cabinList);
   const cabinChoice = c.button(t('从小屋世界导入', 'Import from Cabin World'), () => {
@@ -392,7 +392,7 @@ export function modelLibrary(
         feedback.textContent = t('正在传入模型文件…', 'Transferring model files…') + ' ' + Math.floor(receipt.done / receipt.total * 100) + '%';
       }
       progress.removeAttribute('value');
-      feedback.textContent = t('正在识别模型和形象包…', 'Checking models and figure packages…');
+      feedback.textContent = t('正在识别角色来源…', 'Checking character sources…');
       result = await c.call<Discovery>('resources.finishUpload', [id]);
       if (token !== uploadEpoch) result = undefined;
     } catch (error) { if (!ctx.signal.aborted && !discoveryCancelled) feedback.textContent = errorText(error); }
@@ -418,17 +418,20 @@ export function modelLibrary(
     if (files.length) void importFiles(() => files);
     input.value = '';
   }, { signal: ctx.signal });
-  element.addEventListener('dragover', event => {
-    if (!event.dataTransfer?.types.includes('Files')) return;
+  const dropSurface = () => element.closest('.studio-surface') ?? element;
+  const inDropSurface = (target: EventTarget | null) => target instanceof win.Node && dropSurface().contains(target);
+  ctx.root.addEventListener('dragover', event => {
+    if (!inDropSurface(event.target) || !event.dataTransfer?.types.includes('Files')) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = choose.disabled ? 'none' : 'copy';
     if (!choose.disabled) toolbar.dataset.dragging = 'true';
   }, { signal: ctx.signal });
-  element.addEventListener('dragleave', event => {
-    if (!(event.relatedTarget instanceof Node) || !element.contains(event.relatedTarget)) delete toolbar.dataset.dragging;
+  ctx.root.addEventListener('dragleave', event => {
+    if (!inDropSurface(event.relatedTarget)) delete toolbar.dataset.dragging;
   }, { signal: ctx.signal });
-  element.addEventListener('drop', event => {
+  ctx.root.addEventListener('drop', event => {
     delete toolbar.dataset.dragging;
+    if (!inDropSurface(event.target)) return;
     if (!event.dataTransfer?.types.includes('Files') && !event.dataTransfer?.files.length) return;
     event.preventDefault();
     void fromTransfer(event.dataTransfer);

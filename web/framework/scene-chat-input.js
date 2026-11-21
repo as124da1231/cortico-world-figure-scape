@@ -1,7 +1,13 @@
+import { SCENE_CHAT_TEXT_MAX, chatTextLengthNote } from './chat-text.js';
+
 export function createSceneChatInput({ doc, text, send, mode, form, input, submit, feedback, delivered }) {
   let pending = null, retry = null, connected = false, blocked = false;
+  let lastLengthNote = '';
   const sync = () => {
-    submit.disabled = !connected || blocked || !!pending || !input.value.trim();
+    const lengthNote = chatTextLengthNote(input.value, SCENE_CHAT_TEXT_MAX, text);
+    if (lengthNote || lastLengthNote && feedback.textContent === lastLengthNote) note(lengthNote);
+    lastLengthNote = lengthNote;
+    submit.disabled = !connected || blocked || !!pending || !!lengthNote || !input.value.trim();
     const label = pending ? text('发送中', 'Sending') : text('发送', 'Send');
     if (submit.textContent !== label) submit.textContent = label;
   };
@@ -22,6 +28,7 @@ export function createSceneChatInput({ doc, text, send, mode, form, input, submi
   });
   form.addEventListener('submit', event => {
     event.preventDefault();
+    sync();
     if (submit.disabled) return;
     const value = input.value, message = value.trim();
     const id = retry?.message === message ? retry.id : doc.defaultView.crypto.randomUUID();
@@ -41,7 +48,7 @@ export function createSceneChatInput({ doc, text, send, mode, form, input, submi
     },
     setBlocked(value) { if (blocked !== !!value) { blocked = !!value; sync(); } },
     failed, note,
-    receipt({ request, ok, cursor }) {
+    receipt({ request, ok, cursor, reason }) {
       const response = pending?.id === request ? pending : retry?.id === request ? retry : null;
       if (!response) return;
       if (pending?.id === request) pending = null;
@@ -52,7 +59,8 @@ export function createSceneChatInput({ doc, text, send, mode, form, input, submi
         delivered?.(response.message, cursor, request);
         note('');
       } else {
-        note(text('发送失败，输入已保留。', 'Could not send. Your draft is kept.'));
+        note(reason === 'text-too-long' ? chatTextLengthNote(response.message, SCENE_CHAT_TEXT_MAX, text)
+          : text('发送失败，输入已保留。', 'Could not send. Your draft is kept.'));
       }
       sync();
     },

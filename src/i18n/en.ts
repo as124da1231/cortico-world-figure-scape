@@ -277,8 +277,8 @@ const en: PetText = {
     hideWhenFullscreen: { title: 'Hide during full screen', description: 'When on, the pet hides while the window in front fills the screen Coo is on (a game, a full-screen video, a browser in full screen) and comes back when full screen ends; a maximized window does not count. When off, Coo always stays on top.' },
     passWhenFullscreen: { title: "Let clicks pass through during full screen", description: "When on, while the window in front fills the screen Coo is on, Coo stays visible and every click passes through it to the window below, until full screen ends; a maximized window does not count. With hide during full screen also on, Coo hides." },
     exportOverlay: { title: 'OBS overlay', description: "Serves the pet window's picture on a transparent background at /overlay for an OBS Browser source; off, nothing is served." },
-    electronFile: { title: 'Electron executable', description: 'Empty uses CORTICO_DESKTOP_PET_HOST, then the runtime installed from the panel.' },
-    port: { title: 'Page port', description: 'Moves up to the next free port when taken.' },
+    electronFile: { title: 'Custom window executable', description: 'Leave empty to detect the window executable automatically.' },
+    port: { title: 'Local page port', description: 'Tries the next port if this one is in use.' },
     touchEnabled: { title: 'Touches become events', description: 'Pokes, petting, and being picked up and thrown.' },
     touchWakeOn: { title: 'Response mode', description: 'poke: only a poke gets a response right away; other touches wait for the next response. all: every touch gets one. none: every touch waits for the next response. custom: the touches ticked on the Habits page get one. After a touch gets a response, the touches until that turn ends wait for the next one.' },
     sound: { title: 'All sounds', description: "The sound button in the pet's menu flips this." },
@@ -313,8 +313,8 @@ const en: PetText = {
   /** Why the pet window is not open, on its lamp and the pet panel. */
   windowReason: {
     badHostEnv: (env: string) => `${env} is not a JSON array of strings`,
-    noElectronFile: (file: string) => `The Electron executable does not exist: ${file}`,
-    noElectron: 'No Electron to run: install the window runtime on the pet panel, or set the Electron executable in the config',
+    noElectronFile: (file: string) => `Could not find the custom window executable at ${file}. Select another executable or clear the path in Advanced startup settings.`,
+    noElectron: 'The window component is missing. Install it under Engines → Pet window.',
     startFailed: (why: string) => `Failed to start: ${why}`,
     closed: 'The window was closed',
     exited: (code: number | null) => `The window process exited (exit code ${code})`,

@@ -23,16 +23,17 @@ export function wardrobeEditor(ctx:PageContext,onTry?:(picks:Record<string,strin
  groups.className = 'studio-wardrobe-groups';
  element.append(header,empty,groups);
  let resources:Resource[]=[],disabled=false,present=false;
- const rows:Array<{node:HTMLElement;value:()=>Group}>=[];
+ const rows:Array<{node:HTMLElement;value:()=>Group;syncTry:()=>void}>=[];
  const slots=WARDROBE_SLOTS as Array<{slot:Group['slot'];id:string;name:string;en:string}>;
  function input(value:string,label:string){const i=doc.createElement('input');i.type='text';i.value=value;i.setAttribute('aria-label',label);return i;}
  function changed(){present=true;}
- function lock(){for(const c of element.querySelectorAll<HTMLInputElement|HTMLButtonElement|HTMLSelectElement>('input,button,select'))c.disabled=disabled;
+ function lock(){for(const c of element.querySelectorAll<HTMLInputElement|HTMLButtonElement|HTMLSelectElement>('input,button,select'))if(!c.closest('.studio-resource-picker'))c.disabled=disabled;
   for(const control of element.querySelectorAll<HTMLElement>('.studio-resource-picker'))control.inert=disabled;
+  for(const row of rows)row.syncTry();
   add.disabled=disabled||!resources.length;empty.hidden=rows.length>0;}
  function groupRow(original:Group){
   const node=el('fieldset'),name=input(original.name,text('分组名称','Group name')),en=input(original.en??'',text('英文名称','English name'));
-  name.required=true;name.readOnly=!!original.slot;en.readOnly=!!original.slot;const options=el('div'),optionRows:Array<{node:HTMLElement;value:()=>Option}>=[];
+  name.required=true;name.readOnly=!!original.slot;en.readOnly=!!original.slot;const options=el('div'),optionRows:Array<{node:HTMLElement;value:()=>Option;syncTry:()=>void}>=[];
   const title=el('legend',original.name);
   options.className='studio-wardrobe-options';
   name.addEventListener('input',()=>{title.textContent=name.value||original.name;},{signal});
@@ -49,13 +50,15 @@ export function wardrobeEditor(ctx:PageContext,onTry?:(picks:Record<string,strin
    };
    const picker=resourcePicker(ctx,resource,resources.map(r=>({...r,problem:r.wardrobeError})),onTry?trial:undefined);
    const del=ui.button(text('移除','Remove'),{size:'sm'});del.dataset.draftChange='true';del.setAttribute('aria-label',text('移除装扮选项','Remove wardrobe option'));row.className='studio-wardrobe-option';const tryOn=ui.button(text('试穿','Try on'),{size:'sm'});tryOn.addEventListener('click',()=>trial(resource.value),{signal});const commands=el('div');commands.className='studio-inline studio-wardrobe-option-actions';commands.append(...(onTry?[tryOn]:[]),del);row.append(optionName,resource,picker,commands);options.append(row);
-   const item={node:row,value:()=>({...originalOption,name:optionName.value,resource:resource.value})};optionRows.push(item);
+   const syncTry=()=>{tryOn.disabled=disabled||!resource.value||!resources.some(item=>item.id===resource.value&&!item.wardrobeError);};
+   const item={node:row,syncTry,value:()=>({...originalOption,name:optionName.value,resource:resource.value})};optionRows.push(item);
+   resource.addEventListener('change',syncTry,{signal});
    for(const c of [optionName,resource])c.addEventListener('change',changed,{signal});
    del.addEventListener('click',()=>{if(disabled)return;changed();optionRows.splice(optionRows.indexOf(item),1);row.remove();},{signal});
   }
   for(const option of original.options)optionRow(option);
   addOption.addEventListener('click',()=>{if(disabled)return;changed();let n=1;const ids=new Set(optionRows.map(r=>r.value().id));while(ids.has('option'+n))n++;optionRow({id:'option'+n,name:text('新选项','New option'),resource:''});lock();},{signal});
-  const item={node,value:()=>({...original,name:name.value,...(en.value?{en:en.value}:{en:undefined}),options:optionRows.map(r=>r.value())})};rows.push(item);
+  const item={node,syncTry:()=>optionRows.forEach(option=>option.syncTry()),value:()=>({...original,name:name.value,...(en.value?{en:en.value}:{en:undefined}),options:optionRows.map(r=>r.value())})};rows.push(item);
   for(const c of [name,en])c.addEventListener('change',changed,{signal});
   remove.addEventListener('click',()=>{if(disabled)return;changed();rows.splice(rows.indexOf(item),1);node.remove();lock();},{signal});
   const names = el('div');

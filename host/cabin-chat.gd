@@ -1,6 +1,7 @@
 extends RefCounted
 
 const TAB := "figure-scape-chat"
+const TEXT_LIMIT := 500
 var dock: Dock
 var send_frame: Callable
 var tab_button: Button
@@ -18,6 +19,7 @@ var awaiting := 0
 var next_read := 0
 var read_deadline := 0
 var phase := "idle"
+var last_length_note := ""
 
 func attach(target: Dock, transmit: Callable) -> void:
 	dock = target
@@ -49,7 +51,6 @@ func attach(target: Dock, transmit: Callable) -> void:
 	input.name = "CooMessage"
 	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	input.placeholder_text = "给 Coo 发消息…"
-	input.max_length = 500
 	input.custom_minimum_size.y = 36
 	input.add_theme_font_override("font", dock._font)
 	input.add_theme_font_size_override("font_size", 14)
@@ -110,6 +111,9 @@ func _submit() -> void:
 	var text := input.text.strip_edges()
 	if text.is_empty() or awaiting > 0 or not input.editable:
 		return
+	if text.to_utf16_buffer().size() > TEXT_LIMIT * 2:
+		_update_composer()
+		return
 	if request_id.is_empty() or text != draft:
 		request_id = Crypto.new().generate_random_bytes(16).hex_encode()
 		draft = text
@@ -151,7 +155,13 @@ func _feedback(message: String) -> void:
 	status.visible = not message.is_empty()
 
 func _update_composer() -> void:
-	send_button.disabled = not input.editable or awaiting > 0 or input.text.strip_edges().is_empty()
+	var text := input.text.strip_edges()
+	var length := text.to_utf16_buffer().size() / 2
+	var length_note := "消息最多 %d 字，当前 %d 字。请缩短后发送，输入已保留。" % [TEXT_LIMIT, length] if length > TEXT_LIMIT else ""
+	if not length_note.is_empty() or (not last_length_note.is_empty() and status.text == last_length_note):
+		_feedback(length_note)
+	last_length_note = length_note
+	send_button.disabled = not input.editable or awaiting > 0 or not length_note.is_empty() or text.is_empty()
 
 func _show_messages(messages: Array) -> void:
 	var scrollbar := scroll.get_v_scroll_bar()

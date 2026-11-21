@@ -5,13 +5,16 @@ export function draftActionCommand(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)
     || !['play', 'stop'].includes(raw.kind)
     || typeof raw.owner !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(raw.owner)
-    || Object.keys(raw).some(key => key !== 'kind' && key !== 'owner' && !(raw.kind === 'play' && (key === 'binding' || key === 'mode')))
-    || (raw.mode !== undefined && raw.mode !== 'native' && raw.mode !== 'full')) {
+    || Object.keys(raw).some(key => key !== 'kind' && key !== 'owner' && !(raw.kind === 'play' && ['binding', 'mode', 'audition'].includes(key)))
+    || (raw.mode !== undefined && raw.mode !== 'native' && raw.mode !== 'full')
+    || (raw.audition !== undefined && typeof raw.audition !== 'boolean')) {
     throw Error('Invalid draft action command');
   }
-  return raw.kind === 'play'
-    ? { kind: 'play', owner: raw.owner, binding: bindingsValue([raw.binding])[0], ...(raw.mode ? { mode: raw.mode } : {}) }
-    : { kind: 'stop', owner: raw.owner };
+  if (raw.kind === 'stop') return { kind: 'stop', owner: raw.owner };
+  const binding = bindingsValue([raw.binding])[0];
+  if (raw.audition && (binding.release || binding.overlays?.length)) throw Error('Audition expects one native resource');
+  return { kind: 'play', owner: raw.owner, binding,
+    ...(raw.mode ? { mode: raw.mode } : {}), ...(raw.audition ? { audition: true } : {}) };
 }
 
 export function draftActionReport(body) {

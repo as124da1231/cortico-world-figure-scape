@@ -34,9 +34,9 @@ export function createNativeDraftLayer(native, resources) {
     state: () => ({ ...state }),
     checkpoint: () => ({ active, state, transition, visible }),
     restore(checkpoint) { ({ active, state, transition, visible } = checkpoint); },
-    play(binding, owner, requestId, mode = 'full') {
+    play(binding, owner, requestId, mode = 'full', audition = false) {
       if (active && state.owner !== owner) throw Error('The draft action belongs to a different editor');
-      const player = native.previewPlayer(binding);
+      const player = native.previewPlayer(binding, audition);
       const resource = resources.find(item => item.id === binding.resource);
       const duration = resource.kind === 'expression' ? Math.max(2, resource.seconds || 1) : nativeBindingDuration(binding, resources);
       fade(.15);

@@ -1,14 +1,15 @@
-import type { ChatItem } from '../../../../chat.ts';
+import type { ChatItem, ChatRefs } from '../../../../chat.ts';
 import { workspaceHref } from '../../../../framework/workspace.ts';
 import type { PageContext } from '../../base/page.ts';
 import { studioControls, studioText as t } from './controls.ts';
 import './conversation-panel.css';
+import { CHAT_TEXT_MAX, chatTextLengthNote } from '../../../../../web/framework/chat-text.js';
 
 type DraftImage = { name: string; mime: string; base64: string };
 type Frame = {
   t: string; cursor?: number; before?: number; more?: boolean; id?: string; reason?: string;
   item?: ChatItem; items?: ChatItem[]; phase?: { state: string }; text?: string; images?: DraftImage[];
-  refs?: { withdrawn?: number[] }; askId?: string | null; at?: number; cursors?: number[];
+  refs?: Partial<ChatRefs>; askId?: string | null; at?: number; cursors?: number[];
 };
 
 export function mountConversation(ctx: PageContext): void {
@@ -19,7 +20,7 @@ export function mountConversation(ctx: PageContext): void {
   back.href = workspaceHref('framework');
   const connection = c.node('span', t('正在连接…', 'Connecting…'));
   connection.setAttribute('role', 'status');
-  header.append(c.node('h2', t('Coo 对话', 'Coo conversation')), connection, back);
+  header.append(c.node('h2', t('梦境对话记录', 'Figure Scape conversation')), connection, back);
   const history = c.node('div', '', 'studio-conversation-history');
   history.tabIndex = 0;
   history.setAttribute('aria-label', t('对话记录', 'Conversation history'));
@@ -34,7 +35,6 @@ export function mountConversation(ctx: PageContext): void {
   form.className = 'studio-conversation-form';
   const input = c.doc.createElement('textarea');
   input.rows = 2;
-  input.maxLength = 4000;
   input.placeholder = t('给 Coo 发消息…', 'Message Coo…');
   input.setAttribute('aria-label', input.placeholder);
   const submit = c.doc.createElement('button');
@@ -55,13 +55,19 @@ export function mountConversation(ctx: PageContext): void {
   ctx.root.append(view);
 
   const items = new Map<number, ChatItem>();
+  const withdrawn = new Set<number>();
+  const delivered = new Map<number, number>();
   let ready = false, phase = 'idle', before: number | undefined, openAsk: string | null = null;
   let images: DraftImage[] = [], loadingImages = false;
   let pending: { id: string; text: string; images: DraftImage[] } | undefined;
   let inFlight = false;
   let sendTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastLengthNote = '';
   const updateForm = () => {
-    submit.disabled = !ready || inFlight || loadingImages || (!input.value.trim() && !images.length);
+    const lengthNote = chatTextLengthNote(input.value, CHAT_TEXT_MAX, t);
+    if (lengthNote || lastLengthNote && status.textContent === lastLengthNote) status.textContent = lengthNote;
+    lastLengthNote = lengthNote;
+    submit.disabled = !ready || inFlight || loadingImages || !!lengthNote || (!input.value.trim() && !images.length);
     imageButton.disabled = inFlight || loadingImages;
   };
   ctx.signal.addEventListener('abort', () => clearTimeout(sendTimer), { once: true });
@@ -87,11 +93,32 @@ export function mountConversation(ctx: PageContext): void {
     el.append(image);
   }
 
+  function applyRefs(refs?: Partial<ChatRefs>) {
+    for (const cursor of refs?.withdrawn ?? []) {
+      withdrawn.add(cursor);
+      items.delete(cursor);
+      delivered.delete(cursor);
+    }
+    for (const [cursor, at] of refs?.delivered ?? []) {
+      if (!withdrawn.has(cursor) && at > (delivered.get(cursor) ?? cursor)) delivered.set(cursor, at);
+    }
+  }
+
+  function showItem(item: ChatItem) {
+    if (withdrawn.has(item.cursor)) return;
+    if (item.kind === 'user' && item.at !== undefined) applyRefs({ delivered: [[item.cursor, item.at]] });
+    items.set(item.cursor, item);
+  }
+
+  function order(item: ChatItem) {
+    return item.kind === 'user' ? (delivered.get(item.cursor) ?? item.at ?? item.cursor) : item.cursor;
+  }
+
   function draw(preservePosition = false) {
     const distance = history.scrollHeight - history.scrollTop;
     const atBottom = distance - history.clientHeight < 70;
     const rows = [...items.values()].filter(item => ['user', 'say', 'ask', 'answer'].includes(item.kind))
-      .sort((a, b) => (('at' in a && a.at) || a.cursor) - (('at' in b && b.at) || b.cursor));
+      .sort((a, b) => order(a) - order(b) || a.cursor - b.cursor);
     log.replaceChildren(...rows.map(item => {
       if (item.kind === 'user' || item.kind === 'say') {
         const text = item.kind === 'user' ? item.text : item.beats.map(beat => beat.text).join('\n');
@@ -133,9 +160,9 @@ export function mountConversation(ctx: PageContext): void {
       switch (frame.t) {
         case 'init':
         case 'older':
-          if (frame.t === 'init') items.clear();
-          for (const item of frame.items ?? []) items.set(item.cursor, item);
-          for (const cursor of frame.refs?.withdrawn ?? []) items.delete(cursor);
+          if (frame.t === 'init') { items.clear(); withdrawn.clear(); delivered.clear(); }
+          applyRefs(frame.refs);
+          for (const item of frame.items ?? []) showItem(item);
           before = frame.more ? frame.before : undefined;
           if (frame.t === 'init') {
             ready = true;
@@ -146,15 +173,14 @@ export function mountConversation(ctx: PageContext): void {
           }
           draw(frame.t === 'older');
           break;
-        case 'item': if (frame.item) { items.set(frame.item.cursor, frame.item); draw(); } break;
-        case 'settled':
-          for (const cursor of frame.cursors ?? []) {
-            const item = items.get(cursor);
-            if (item?.kind === 'user' && frame.at) items.set(cursor, { ...item, at: frame.at });
-          }
+        case 'item': if (frame.item) { showItem(frame.item); draw(); } break;
+        case 'settled': {
+          const { at } = frame;
+          if (at !== undefined) applyRefs({ delivered: (frame.cursors ?? []).map(cursor => [cursor, at]) });
           draw();
           break;
-        case 'withdrawn': if (frame.cursor !== undefined) { items.delete(frame.cursor); draw(); } break;
+        }
+        case 'withdrawn': if (frame.cursor !== undefined) { applyRefs({ withdrawn: [frame.cursor] }); draw(); } break;
         case 'phase': phase = frame.phase?.state ?? 'idle'; draw(); break;
         case 'ask': openAsk = frame.askId ?? null; draw(); break;
         case 'draft':
@@ -215,6 +241,7 @@ export function mountConversation(ctx: PageContext): void {
   }, { signal: ctx.signal });
   form.addEventListener('submit', event => {
     event.preventDefault();
+    updateForm();
     if (!stream?.open || submit.disabled) return;
     const text = input.value.trim();
     if (pending?.text !== text || pending.images !== images) pending = { id: crypto.randomUUID(), text, images };

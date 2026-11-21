@@ -51,7 +51,6 @@ export function createPhoneChat({ doc, bubble, text, send, toggleControls, close
   const form = node('form', 'phone-chat-form');
   const input = node('textarea', 'phone-chat-input');
   input.rows = 1;
-  input.maxLength = 500;
   input.autocomplete = 'off';
   const submit = node('button', 'phone-chat-send');
   submit.type = 'submit';

@@ -60,8 +60,9 @@ export function studioNotifications(ctx: PageContext) {
     }
     notice.setAttribute('popover', 'manual');
     const rect = (root.querySelector('.studio-surface') ?? root).getBoundingClientRect();
-    const tabs = root.parentElement?.previousElementSibling?.querySelector('.providertabs');
-    const safeTop = Math.max(rect.top, tabs?.getBoundingClientRect().bottom ?? 0) + 12;
+    const scrollTop = root.closest('.panelslot')?.getBoundingClientRect().top ?? 0;
+    const headerBottom = root.querySelector('.studio-panel-header')?.getBoundingClientRect().bottom ?? 0;
+    const safeTop = Math.max(rect.top, scrollTop, headerBottom) + 12;
     const right = Math.max(12, win.innerWidth - rect.right + 12);
     notice.style.setProperty('--notice-top', Math.max(12, safeTop) + 'px');
     notice.style.setProperty('--notice-right', right + 'px');
@@ -74,6 +75,7 @@ export function studioNotifications(ctx: PageContext) {
   });
   observer.observe(root, { subtree:true, childList:true, attributes:true, attributeFilter:['open'] });
   win.addEventListener('resize', () => { if (!notice.hidden) place(); }, {signal});
+  win.addEventListener('scroll', () => { if (!notice.hidden) place(); }, {signal, passive:true, capture:true});
   notice.addEventListener('keydown', event => {
     if (event.key !== 'Escape' || notice.dataset.kind === 'pending' || notice.dataset.kind === 'progress') return;
     event.preventDefault();

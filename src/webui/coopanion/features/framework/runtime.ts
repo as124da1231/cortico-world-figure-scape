@@ -2,8 +2,11 @@ import { createModelSizeControl } from '../../../../../web/framework/model-size.
 import type { PetSkin } from '../../../../config.ts';
 import type { PageContext } from '../../base/page.ts';
 import type { PresentationMode } from '../../../../framework/presentation-service.ts';
+import type { AppearancePreset } from '../../../../framework/appearance.ts';
 import type { HostState } from '../../../../window-host.ts';
+import type { ArtifactState } from '../../../../runtime/store.ts';
 import type { WindowCompatibility } from '../../../../framework/window-compatibility.ts';
+import { workspaceHref } from '../../../../framework/workspace.ts';
 import { errorText, studioControls, studioText as t } from './controls.ts';
 import type { SettingsState, SpeechState } from './settings-panels.ts';
 import { sceneTile } from './scene-workspace.ts';
@@ -20,6 +23,7 @@ type Presentation = {
 export type RuntimeState = {
   inWindow: boolean;
   theme?: string;
+  appearance?: AppearancePreset;
   sound?: boolean;
   presentationScales?: Record<PresentationMode, number>;
   fontSize?: number;
@@ -40,7 +44,7 @@ export type RuntimeState = {
   figureLabel?: string;
   selfAdjust?: { mode: string; custom: Record<string, boolean> };
   window?: HostState | null;
-  electron?: { phase: string; supported?: boolean; done: number; total: number | null; detail?: string | null };
+  electron?: ArtifactState & { supported?: boolean };
   framework: {
     model?: { phase: string; busy: boolean; candidate?: string; error?: string };
     configuration: { bodyEffects: SettingsState; speech?: SpeechState };
@@ -71,11 +75,16 @@ export function visibleScene(state: RuntimeState) {
   if (state.cabinWorld?.phase === 'active' && state.cabinWorld.presented !== false) return 'cabin-world';
   return state.onDesktop && state.bodyReady !== false ? state.presentation?.applied ?? null : null;
 }
-export const windowLabel = (state: RuntimeState) => visibleScene(state) === 'cabin-world' ? t('小屋世界运行中', 'Cabin World is running')
+function needsWindowSetup(state: RuntimeState) {
+  return state.window?.phase === 'missing'
+    && (state.window.reason?.kind !== 'noElectron' || state.electron?.phase !== 'ready');
+}
+
+const windowLabel = (state: RuntimeState) => visibleScene(state) === 'cabin-world' ? t('小屋世界运行中', 'Cabin World is running')
   : state.onDesktop ? t('显示中', 'Visible')
   : state.inWindow ? t('已隐藏', 'Hidden')
     : state.window?.phase === 'running' ? t('正在连接', 'Connecting')
-      : state.window?.phase === 'missing' ? t('缺少窗口运行时', 'Window runtime required')
+      : needsWindowSetup(state) ? t('窗口需要设置', 'Window setup needed')
         : state.window?.phase === 'error' || state.window?.reason?.kind === 'exited' ? t('窗口启动失败', 'Window failed')
           : t('未启动', 'Closed');
 
@@ -84,6 +93,8 @@ function reason(code: string) {
     'wallpaper-source-unavailable': t('请先从壁纸库选择可用的背景。', 'Choose an available background from the wallpaper library.'),
     'wallpaper-first-frame-failed': t('壁纸未能显示首帧，当前画面已保留。', 'The wallpaper could not draw its first frame. The current view is still active.'),
     'presentation-timeout': t('新画面未能及时就绪，可以重试。', 'The view took too long to load. Try again.'),
+    'presentation-first-frame-timeout': t('角色未及时画出新场景的首帧，已保留原场景。', 'The character did not draw a frame in time. The previous scene is still active.'),
+    'presentation-confirmation-timeout': t('新场景未及时收到确认，已保留原场景。', 'The new scene was not confirmed in time. The previous scene is still active.'),
     'window-disconnected': t('窗口连接已断开，请先恢复窗口。', 'Reconnect the pet window and try again.'),
     'presentation-rejected': t('新画面加载失败，保留原画面。', 'Could not load the new view. The previous view is still active.'),
     'unreachable': t('无法到达目标，角色留在当前位置。', 'The character could not reach that spot.'),
@@ -93,21 +104,24 @@ function reason(code: string) {
 }
 
 function windowAction(state: RuntimeState, timedOut: boolean) {
-  if (visibleScene(state) === 'cabin-world') return { method: 'openWindow', label: t('返回梦境窗口', 'Return to Figure Scape window') };
-  if (state.onDesktop) return { method: 'hideWindow', label: t('隐藏梦境', 'Hide Figure Scape') };
-  if (state.inWindow) return { method: 'openWindow', label: t('显示梦境', 'Show Figure Scape') };
+  if (visibleScene(state) === 'cabin-world') return { method: 'openWindow', label: t('返回桌宠', 'Return to desktop pet') };
+  if (state.onDesktop) return { method: 'hideWindow', label: t('隐藏桌宠', 'Hide desktop pet') };
+  if (state.inWindow) return { method: 'openWindow', label: t('显示桌宠', 'Show desktop pet') };
   if (timedOut || state.window?.phase === 'error' || state.window?.reason?.kind === 'exited') {
     return { method: 'recoverWindow', label: t('重试启动', 'Retry launch') };
   }
   if (state.window?.phase === 'running') return { method: null, label: t('正在连接…', 'Connecting…') };
-  if (state.window?.phase === 'missing') return { method: null, label: t('修复启动', 'Fix launch') };
-  return { method: 'openWindow', label: t('启动梦境', 'Start Figure Scape') };
+  if (needsWindowSetup(state)) {
+    return { method: 'setup', label: t('设置桌宠窗口', 'Set up pet window') };
+  }
+  return { method: 'openWindow', label: t('启动桌宠', 'Start desktop pet') };
 }
 
-export function runtimeControls(ctx: PageContext, refresh: () => Promise<void>, notify: (message: string) => void) {
+export function runtimeControls(ctx: PageContext, refresh: () => Promise<void>) {
   const c = studioControls(ctx);
 
-  const view = c.node('section', '', 'studio-runtime-overview');
+  const view = c.node('section', '', 'studio-engine studio-runtime-overview');
+  const heading = c.node('h2', t('桌宠窗口', 'Pet window'));
   const overview = c.node('div', '', 'studio-runtime-overview-line');
   const status = c.status('studio-runtime-state');
   status.textContent = t('正在读取运行状态…', 'Reading runtime status…');
@@ -116,15 +130,12 @@ export function runtimeControls(ctx: PageContext, refresh: () => Promise<void>, 
   const tools = c.node('div', '', 'studio-runtime-actions');
   const feedback = c.status('studio-runtime-feedback');
   const artifactFeedback = c.status('studio-runtime-feedback');
-  const detail = c.dialog(t('运行详情', 'Runtime details'), 'studio-runtime-dialog');
-  const detailList = c.node('dl', '', 'studio-runtime-facts');
-  const facts = Array.from({length:3}, () => {
-    const row = c.node('div'), key = c.node('dt'), value = c.node('dd');
-    row.hidden = true;
-    row.append(key,value);
-    detailList.append(row);
-    return {row,key,value};
-  });
+  const componentState = c.node('p', '', 'studio-runtime-component-state');
+  const headerFeedback = c.node('div', '', 'studio-runtime-header-feedback');
+  const headerMessage = c.status();
+  const setupLink = c.link(t('桌宠窗口设置', 'Pet window settings'), 'engines', 'window');
+  headerFeedback.append(headerMessage, setupLink);
+  headerFeedback.hidden = true;
   function writeText(element: HTMLElement, message: string) {
     if (element.textContent !== message) element.textContent = message;
   }
@@ -143,33 +154,32 @@ export function runtimeControls(ctx: PageContext, refresh: () => Promise<void>, 
     win.clearTimeout(visibilityTimer);
     win.clearTimeout(connectionTimer);
   }, { once: true });
-  function openDetails(opener?: HTMLElement) {
-    renderDetails();
-    detail.open(opener);
-  }
   function command(name: string, label: string, primary = false) {
     return c.button(label, () => void change(name), primary);
   }
 
-  const launch = c.button(t('启动梦境', 'Start Figure Scape'), () => {
+  function activateWindow() {
     if (!current) return;
     const action = windowAction(current, timedOut);
-    if (!action.method) { openDetails(); return; }
-    void change(action.method, [], true);
-  }, true);
+    if (action.method === 'setup') win.location.hash = workspaceHref('engines', 'window');
+    else if (action.method) void change(action.method);
+  }
+  const launch = c.button(t('启动桌宠', 'Start desktop pet'), activateWindow, true);
   launch.classList.add('studio-runtime-launch');
-  const primary = c.button(t('启动梦境', 'Start Figure Scape'), () => {
+  const primary = c.button(t('启动桌宠', 'Start desktop pet'), () => {
     const method = current && windowAction(current, timedOut).method;
-    if (method) void change(method);
+    if (method) void change(method === 'setup' ? 'openWindow' : method);
   }, true);
-  const close = command('closeWindow', t('关闭窗口', 'Close window'));
+  const close = command('closeWindow', t('关闭桌宠窗口', 'Close pet window'));
   const pass = c.button(t('启用鼠标穿透', 'Enable click-through'), () => void change('setClickThrough', [!current?.clickThrough]));
-  const install = command('installElectron', t('安装窗口运行时', 'Install window runtime'), true);
+  const install = command('installElectron', t('安装窗口组件', 'Install window component'), true);
+  const cancelInstall = command('cancelElectron', t('取消下载', 'Cancel download'));
+  cancelInstall.hidden = true;
   const statusOf = (phase?: string) => phase === 'ready' ? t('已安装', 'Installed')
     : phase === 'working' ? t('正在安装', 'Installing') : phase === 'error' ? t('安装失败', 'Installation failed')
       : phase === 'missing' || phase === 'absent' ? t('尚未安装', 'Not installed') : phase ?? '—';
   const meter = c.node('progress');
-  meter.setAttribute('aria-label', t('窗口运行时安装进度', 'Window runtime installation progress'));
+  meter.setAttribute('aria-label', t('窗口组件安装进度', 'Window component installation progress'));
   const scene = c.section(t('在小屋里移动', 'Move around the room'));
   const sceneButtons = c.node('div', '', 'studio-inline');
   const sceneStatus = c.status();
@@ -253,65 +263,72 @@ export function runtimeControls(ctx: PageContext, refresh: () => Promise<void>, 
   const sceneFeedback = c.node('div', '', 'studio-scene-feedback');
   sceneFeedback.append(modeActions, sceneViewport);
 
-  const browser = c.node('a', t('浏览器预览 ↗', 'Browser preview ↗'), 'studio-runtime-link');
-  browser.setAttribute('aria-label', t('在新标签页预览桌宠', 'Preview the pet in a new tab'));
+  const browser = c.node('a', t('在浏览器中预览桌宠 ↗', 'Preview pet in browser ↗'), 'studio-runtime-link');
   browser.target = '_blank';
   browser.rel = 'noopener noreferrer';
   browser.hidden = true;
-  tools.append(primary, install, pass, close);
+  tools.append(primary, install, cancelInstall, close);
   overview.append(lamp, status, tools);
-  view.append(overview, feedback, meter, artifactFeedback);
-  detail.body.append(view, detailList);
+  view.append(heading, overview, feedback, meter, artifactFeedback);
   const links = c.node('div', '', 'studio-runtime-links');
-  links.append(browser);
+  links.append(pass, browser);
+  const advanced = c.node('div', '', 'studio-runtime-advanced');
+  advanced.append(componentState, links);
 
-  function renderDetails() {
+  function renderWindowSettings() {
     if (!current) return;
     const scene = visibleScene(current);
     const action = windowAction(current, timedOut);
-    const detached = current.window?.phase === 'missing' || current.window?.phase === 'error' || !!timedOut
-      || current.window?.reason?.kind === 'exited';
+    const artifact = current.electron;
+    const needsSetup = action.method === 'setup';
+    const installing = pending === 'installElectron' || artifact?.phase === 'working';
+    const failed = current.window?.phase === 'error' || current.window?.reason?.kind === 'exited' || timedOut || artifact?.phase === 'error' && needsSetup;
     const changing = waitingForVisibility !== null || !!pending;
-    const bodyLabel = current.onDesktop
-      ? current.bodyReady ? t('首帧已就绪', 'First frame ready') : t('等待角色画面', 'Waiting for the character')
-      : '';
-    lamp.dataset.state = detached ? 'error' : scene ? 'ready' : changing || current.window?.phase === 'running' && !current.inWindow ? 'busy' : 'idle';
+    lamp.dataset.state = installing ? 'busy' : failed ? 'error' : scene ? 'ready'
+      : changing || current.window?.phase === 'running' && !current.inWindow ? 'busy' : 'idle';
     const changingWindow = waitingForVisibility !== null || ['openWindow','hideWindow','closeWindow','recoverWindow'].includes(pending);
-    writeText(status, changingWindow ? launch.textContent || windowLabel(current)
+    writeText(status, pending === 'cancelElectron' ? t('正在取消下载', 'Cancelling download')
+      : installing ? artifact?.stage === 'installing' ? t('正在解包窗口组件', 'Extracting window component')
+        : t('正在下载窗口组件', 'Downloading window component')
+      : changingWindow ? launch.textContent || windowLabel(current)
       : timedOut ? t('窗口连接超时', 'Window connection timed out')
-        : [windowLabel(current),bodyLabel].filter(Boolean).join(' · '));
+        : windowLabel(current));
+    const offerInstall = needsSetup && current.window?.reason?.kind === 'noElectron' && artifact?.supported === true;
+    const primaryArea = offerInstall ? links : tools;
+    if (primary.parentElement !== primaryArea) primaryArea.prepend(primary);
     primary.hidden = !action.method;
-    primary.disabled = changing || !current.skin.figure && !current.inWindow;
-    writeText(primary, launch.textContent || action.label);
+    primary.disabled = changing || installing || !current.skin.figure && !current.inWindow;
+    writeText(primary, needsSetup ? t('重试启动', 'Retry launch') : launch.textContent || action.label);
     pass.hidden = !current.onDesktop || !current.inWindow || scene === 'cabin-world';
     pass.disabled = changing;
-    writeText(pass, current.clickThrough ? t('关闭鼠标穿透', 'Disable click-through') : t('启用鼠标穿透', 'Enable click-through'));
-    pass.setAttribute('aria-pressed', String(current.clickThrough === true));
+    writeText(pass, current.clickThrough ? t('恢复鼠标操作', 'Restore mouse input') : t('启用鼠标穿透', 'Enable click-through'));
     close.hidden = scene === 'cabin-world' || !current.inWindow && current.window?.phase !== 'running';
     close.disabled = changing;
-    const artifact = current.electron;
-    install.hidden = !artifact?.supported || artifact.phase === 'ready' || current.inWindow;
+    const installArea = offerInstall ? tools : links;
+    if (install.parentElement !== installArea) installArea.prepend(install);
+    install.hidden = !artifact?.supported || artifact.phase === 'ready' || installing || current.inWindow;
     install.disabled = changing || artifact?.phase === 'working';
-    writeText(install, artifact?.phase === 'error' ? t('重试安装窗口运行时', 'Retry window runtime installation') : t('安装窗口运行时', 'Install window runtime'));
-    meter.hidden = pending !== 'installElectron' && artifact?.phase !== 'working';
+    writeText(install, artifact?.phase === 'error' ? t('重试安装窗口组件', 'Retry window component installation')
+      : t('安装窗口组件', 'Install window component'));
+    cancelInstall.hidden = artifact?.stage !== 'downloading';
+    cancelInstall.disabled = !!pending;
+    meter.hidden = !installing;
     if (artifact?.total) { meter.max = artifact.total; meter.value = artifact.done; } else meter.removeAttribute('value');
-    writeText(artifactFeedback, artifact?.phase === 'error' || artifact?.phase === 'working' ? artifact.detail ?? '' : '');
+    const downloadSize = artifact?.total ? `${Math.round(artifact.total / 1_000_000)} MB` : '';
+    const downloadError = artifact?.detail === 'invalid-archive-size' || artifact?.detail === 'missing-executable'
+      ? t('窗口组件不完整，请重试下载。', 'The window component is incomplete. Retry the download.') : artifact?.detail;
+    writeText(artifactFeedback, artifact?.phase === 'error' ? downloadError ?? ''
+      : artifact?.stage === 'downloading' && downloadSize ? `${Math.floor(artifact.done / 1_000_000)} / ${downloadSize}`
+        : artifact?.cancelled ? t('下载已取消，可以重新安装。', 'Download cancelled. You can install again.')
+          : !install.hidden && downloadSize ? t(`首次安装需下载约 ${downloadSize}。`, `First-time installation downloads about ${downloadSize}.`) : '');
     const modelHint = current.previousModelUnavailable
       ? t('上次选中的模型已不可用，请在工作台重新导入。', 'The selected model is unavailable. Reimport it from the workbench.')
       : !current.skin.figure && !current.inWindow
         ? t('请先在工作台导入并选择角色。', 'Import and select a character in the workbench first.') : '';
-    writeText(feedback, commandFeedback || modelHint || (current.window?.reason?.kind === 'closed' ? '' : current.windowHint) || '');
-    const rows = [
-      [current.bodyReady ? t('当前角色', 'Current character') : t('所选角色', 'Selected character'),
-        current.figureLabel ?? current.skin.figure ?? t('未选择', 'None selected')],
-      [t('当前场景', 'Current scene'), scene === 'cabin-world' ? t('小屋世界', 'Cabin World') : scene ? modeLabel(scene) : ''],
-      [t('窗口运行时', 'Window runtime'), statusOf(artifact?.phase)],
-    ];
-    for (const [i,{row,key,value}] of facts.entries()) {
-      writeText(key, rows[i][0]);
-      writeText(value, rows[i][1]);
-      row.hidden = !rows[i][1];
-    }
+    const runtimeHint = current.window?.reason?.kind === 'closed'
+      || current.window?.reason?.kind === 'noElectron' && artifact?.phase === 'ready' ? '' : current.windowHint;
+    writeText(feedback, commandFeedback || modelHint || runtimeHint || '');
+    writeText(componentState, artifact ? t('窗口组件', 'Window component') + ' · ' + statusOf(artifact.phase) : '');
     browser.hidden = !current.url || !current.skin.figure;
     if (current.url) browser.href = current.url;
   }
@@ -326,12 +343,13 @@ export function runtimeControls(ctx: PageContext, refresh: () => Promise<void>, 
         connectionTimer = undefined;
         if (!current || ctx.signal.aborted || current.inWindow || current.window?.phase !== 'running') return;
         timedOut = true;
+        commandFeedback = t('桌宠窗口连接超时，可以重试。', 'The pet window did not connect. Try again.');
         render(current);
       }, 12_000);
     } else {
       clearConnectionTimer();
       timedOut = false;
-      if (launchWait && !next.inWindow && next.windowHint) reportLaunchProblem(next.windowHint);
+      if (launchWait && !next.inWindow && next.windowHint) commandFeedback = next.windowHint;
       launchWait = false;
     }
     const action = windowAction(next, timedOut);
@@ -342,10 +360,18 @@ export function runtimeControls(ctx: PageContext, refresh: () => Promise<void>, 
           : pending === 'openWindow' || pending === 'recoverWindow' ? t('正在启动…', 'Starting…') : action.label;
     writeText(launch, label);
     const noModel = !next.inWindow && !next.skin.figure;
-    launch.disabled = locked || visibilityBusy || noModel && action.method !== null;
+    launch.disabled = locked || visibilityBusy || !action.method || noModel && action.method !== 'setup';
     launch.title = noModel ? t('请先导入并选择模型', 'Import and select a model first') : '';
-    if (action.method) launch.removeAttribute('aria-haspopup');
-    else launch.setAttribute('aria-haspopup', 'dialog');
+    const failed = timedOut || next.window?.phase === 'error' || next.window?.reason?.kind === 'exited';
+    writeText(headerMessage, pending ? ''
+      : action.method === 'setup'
+        ? next.window?.reason?.kind === 'noElectron' && next.electron?.supported
+          ? t('安装窗口组件后即可启动。', 'Install the window component to launch the pet.')
+          : t('窗口程序不可用，请检查启动设置。', 'The window executable is unavailable. Check the startup settings.')
+      : timedOut ? commandFeedback
+        : failed ? t('桌宠窗口启动失败，可以重试。', 'The pet window did not start. Try again.') : commandFeedback);
+    headerFeedback.hidden = !headerMessage.textContent;
+    setupLink.hidden = !headerMessage.textContent || action.method === 'setup' || !failed && !commandFeedback;
     const selectedMode = next.presentation?.desired ?? 'desktop';
     const cabinSwitching = next.cabinWorld?.phase === 'active' && next.cabinWorld.presented === false;
     const activeMode = visibleScene(next);
@@ -389,7 +415,7 @@ export function runtimeControls(ctx: PageContext, refresh: () => Promise<void>, 
     cancelMode.hidden = !modeRequest || modeRequest.mode !== openedMode || next.presentation?.operation?.phase === 'committing';
     scene.hidden = openedMode !== 'room' || activeMode !== 'room';
     if (!scene.hidden && scene.isConnected) void readScene();
-    if (detail.element.open) renderDetails();
+    if (view.isConnected) renderWindowSettings();
   }
 
   function clearVisibilityRequest() {
@@ -400,13 +426,7 @@ export function runtimeControls(ctx: PageContext, refresh: () => Promise<void>, 
     win.clearTimeout(connectionTimer);
     connectionTimer = undefined;
   }
-  function reportLaunchProblem(message: string) {
-    commandFeedback = message;
-    if (detail.element.open) writeText(feedback, message);
-    else notify(message + ' ' + t('点击版本号查看运行详情。', 'Click the version to see runtime details.'));
-  }
-
-  async function change(method: string, args: unknown[] = [], fromHeader = false) {
+  async function change(method: string, args: unknown[] = []) {
     if (pending || !current) return;
     commandFeedback = '';
     const visibility = method === 'hideWindow' ? false : method === 'openWindow' && current.inWindow ? true : null;
@@ -423,24 +443,21 @@ export function runtimeControls(ctx: PageContext, refresh: () => Promise<void>, 
           visibilityTimer = win.setTimeout(() => {
             clearVisibilityRequest();
             if (!current || ctx.signal.aborted) return;
-            reportLaunchProblem(t('窗口尚未确认显示状态，可以重试。', 'The window did not confirm visibility. Try again.'));
+            commandFeedback = t('窗口尚未确认显示状态，可以重试。', 'The window did not confirm visibility. Try again.');
             render(current);
           }, 5000);
         }
       } else if (startsWindow) {
         launchWait = !next.inWindow && next.window?.phase === 'running';
-        if (!launchWait && !next.inWindow) {
-          reportLaunchProblem(next.windowHint ?? t('窗口未启动。', 'The window did not start.'));
+        if (!launchWait && !next.inWindow && next.window?.phase !== 'missing') {
+          commandFeedback = next.windowHint ?? t('窗口未启动。', 'The window did not start.');
         }
       }
       if (next.skin && next.framework) render(next);
       if (method === 'setClickThrough') commandFeedback = next.clickThrough
-        ? t('鼠标穿透已开启。', 'Click-through enabled.') : t('已恢复鼠标交互。', 'Mouse input restored.');
+        ? t('鼠标穿透已开启。', 'Click-through enabled.') : t('已恢复鼠标操作。', 'Mouse input restored.');
     } catch (error) {
-      if (!ctx.signal.aborted) {
-        if (fromHeader) reportLaunchProblem(errorText(error));
-        else commandFeedback = errorText(error);
-      }
+      if (!ctx.signal.aborted) commandFeedback = errorText(error);
     } finally {
       pending = '';
       if (current && !ctx.signal.aborted) { render(current); await refresh(); }
@@ -516,7 +533,15 @@ export function runtimeControls(ctx: PageContext, refresh: () => Promise<void>, 
   for (const control of [launch, primary, close, pass, install]) control.disabled = true;
   for (const control of [primary, close, pass, install, meter]) control.hidden = true;
   return {
-    launch, openDetails, detail, scene, sceneApps: modeButtons, render, detailBody: detail.body, detailLinks: links,
+    launch, headerFeedback, windowSettings: view, windowAdvanced: advanced, scene, sceneApps: modeButtons, render,
+    showWindow() {
+      if (!current || current.onDesktop || pending || waitingForVisibility !== null) return;
+      if (windowAction(current, timedOut).method === 'openWindow' && !current.inWindow && !current.skin.figure) {
+        win.location.hash = workspaceHref('framework');
+        return;
+      }
+      activateWindow();
+    },
     onSceneOpen(fn: (mode: PresentationMode) => void) { openScene = fn; },
     showScene(mode: PresentationMode, page: HTMLElement) {
       openedMode = mode;

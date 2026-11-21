@@ -101,3 +101,43 @@ it('waits for framing readiness with lightweight reports without overwriting for
  expect(preview.disabled).toBe(true);const zoom=root.querySelector('[data-field="fit.zoom"]') as HTMLInputElement;zoom.value='1.7';
  await vi.waitFor(()=>expect(preview.disabled).toBe(false));expect(zoom.value).toBe('1.7');expect(root.textContent).toContain('geometry is ready');expect(api.invokePanel.mock.calls.filter(c=>c[2]==='modelEditor')).toHaveLength(1);expect(api.invokePanel.mock.calls.some(c=>c[2]==='previewFraming')).toBe(false);controller.abort();
 });
+
+it('composes fast try-on selections by group before the previous preview finishes', async () => {
+ const outfit = { id:'outfit', slot:'outfit', name:'Outfit', options:[
+  { id:'first', name:'First', resource:'expr-aaaaaaaaaaaaaaaa' },
+  { id:'second', name:'Second', resource:'expr-bbbbbbbbbbbbbbbb' },
+ ] };
+ const parts = { id:'parts', slot:'parts', name:'Parts', options:[{ id:'part', name:'Part', resource:'expr-cccccccccccccccc' }] };
+ const profile = { version:1, fit:{mode:'contain',anchor:'bottom',autoFit:false,zoom:1,offset:[0,0],padding:[.04,.02]}, wardrobe:[outfit,parts] };
+ const resources = [...outfit.options,...parts.options].map(option=>({id:option.resource,title:option.name,kind:'expression'}));
+ const contract = { figure:'raw', fields:[], operation:{ phase:'idle',saved:false,applied:false },editor:{ sourceId:'source',profile,revision:'r1',catalog:{words:{expressions:[],motions:[]},resources} } };
+ api.invokePanel.mockImplementation(async(_page,_panel,method)=>method==='modelEditor'?contract:{});
+ const root = document.createElement('div');
+ document.body.append(root);
+ const controller = new AbortController();
+ let releaseFirst: (value: Record<string, unknown>) => void = () => {};
+ const firstPreview = new Promise<Record<string, unknown>>(resolve => { releaseFirst = resolve; });
+ const sent: unknown[] = [];
+ const preview = vi.fn(async (kind: string, input?: Record<string, unknown>) => {
+  if (kind!=='wardrobe') return {};
+  sent.push(input?.command);
+  return sent.length===1 ? firstPreview : {};
+ });
+ const onDraft=vi.fn();
+ const editor=modelEditor({root,signal:controller.signal,ui:{button:(text:string)=>{const node=document.createElement('button');node.textContent=text;node.type='button';return node;}} as any,lifecycle:{} as any},{preview,onDraft});
+ root.append(editor.element);
+ await editor.refresh();
+ editor.selectSection('wardrobe');
+ const trials=Array.from(root.querySelectorAll<HTMLButtonElement>('.studio-wardrobe-option-actions button')).filter(button=>button.textContent==='Try on');
+ trials[0].click();
+ await vi.waitFor(()=>expect(sent).toHaveLength(1));
+ trials[1].click();
+ trials[2].click();
+ expect(sent).toHaveLength(1);
+ releaseFirst({});
+ await vi.waitFor(()=>expect(root.textContent).toContain('Trying on · Second · Part'));
+ expect(sent).toHaveLength(2);
+ expect(sent[1]).toMatchObject({ picks:{ outfit:'second',parts:'part' } });
+ expect(onDraft).not.toHaveBeenCalled();
+ controller.abort();
+});

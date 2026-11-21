@@ -37,7 +37,7 @@ const DESCRIBE: WorldDescribe = {
     live2d_pet_prepare_model: { zh: '准备模型动作适配方案', en: 'Prepares a model action adaptation proposal.' },
     live2d_pet_save_model_adaptation: { zh: '保存确认后的原始模型动作绑定', en: 'Saves approved bindings to the original model profile.' },
     live2d_pet_status: { zh: '查看梦境身体是否可见、就绪，以及已确认的角色和装扮。', en: 'Checks Figure Scape visibility and readiness, including the confirmed character and outfit.' },
-    live2d_pet_say: { zh: '把梦境入口的回复写入 Coo 对话，并在梦境窗口可用时播放气泡、声音和动作。', en: 'Saves a reply to the Figure Scape input in the Coo conversation and plays bubbles, audio, and motions when its window is available.' },
+    live2d_pet_say: { zh: '把回复保存到梦境的对话记录。梦境窗口可用时播放气泡、声音和动作。', en: 'Saves a reply in Figure Scape’s conversation history and plays bubbles, audio, and motions when its window is available.' },
     live2d_pet_ask: { zh: '弹出带至多 3 个选项的提问气泡,回答之后作为事件送回。', en: 'Asks a question in a bubble with up to 3 options; the answer comes back later as an event.' },
     live2d_pet_move_to: { zh: '沿屏幕底边走到或跑到某个位置。', en: "Walks or runs along the bottom edge of the screen to a position." },
     live2d_pet_set: { zh: '修改桌宠自己的外观与习惯;按使用者的设置直接生效,或先在气泡里询问。', en: "Changes the pet's own looks and habits, at once or after asking in a bubble, as the person's settings say." },
@@ -125,7 +125,7 @@ export function desktopPetDefinition(assembly: DesktopPetAssembly = {}): WorldDe
         ? (path: string) => { process.send?.({ type: 'companion:open', path }); }
         : undefined;
       const sdkService = createSdkService(ctx.dataDir);
-      // 发布版把 210MB 的小屋引擎拆成资源包,这里在后台先拼好;真正进入时还会再等一次。
+      // 小屋资源按需准备，已安装的运行时直接复用。
       const cabinBundle = process.platform === 'win32' && process.arch === 'x64'
         ? createCabinBundle({
           packageRoot: fileURLToPath(new URL('..', import.meta.url)),
@@ -133,7 +133,6 @@ export function desktopPetDefinition(assembly: DesktopPetAssembly = {}): WorldDe
           version: CABIN_BUNDLE_VERSION,
         })
         : undefined;
-      void cabinBundle?.prepare().catch(() => {});
       const world = new DesktopPetWorld({
         cfg: ctx.cfg,
         modelService: createModelResources({ dataDir: ctx.dataDir, sdk: sdkService }),
@@ -143,8 +142,10 @@ export function desktopPetDefinition(assembly: DesktopPetAssembly = {}): WorldDe
         sdkService,
         phone: createPhoneConnection({
           dataDir: ctx.dataDir,
-          botDir: ctx.botDir,
-          secret: name => ctx.secret(name),
+          consolePort: () => ctx.cfg.phoneLinkConsolePort,
+          persistConsolePort: phoneLinkConsolePort => ctx.persist({ phoneLinkConsolePort }),
+          passwordSecret: () => ctx.secret(DESKTOP_PET_SECRETS.phoneConsolePassword),
+          storePasswordSecret: value => ctx.storeSecret(DESKTOP_PET_SECRETS.phoneConsolePassword, value),
           enabled: () => ctx.cfg.phoneLinkEnabled === true,
           persist: phoneLinkEnabled => ctx.persist({ phoneLinkEnabled }),
         }),
@@ -157,12 +158,15 @@ export function desktopPetDefinition(assembly: DesktopPetAssembly = {}): WorldDe
         runtimesRoot,
         windowProfile: join(ctx.dataDir, DESKTOP_PET_ID, 'window-profile'),
         modelsDir: () => modelsDirFor(modelsRoot()),
+        reuseModelsDir: () => join(modelsRoot(), 'desktop-pet'),
         wallpaperDir: join(ctx.dataDir, DESKTOP_PET_ID, 'wallpapers'),
         cabinRuntime: cabinBundle && {
           root: cabinBundle.root,
           dataDir: join(ctx.dataDir, DESKTOP_PET_ID, 'cabin-world'),
         },
-        ensureCabinRuntime: cabinBundle ? () => cabinBundle.prepare() : undefined,
+        ensureCabinRuntime: cabinBundle?.prepare,
+        verifyCabinRuntime: cabinBundle?.verify,
+        cabinResourceState: cabinBundle?.state,
         asrApiKey: () => ctx.secret(DESKTOP_PET_SECRETS.asrApiKey),
         storeAsrApiKey: (key) => ctx.storeSecret(DESKTOP_PET_SECRETS.asrApiKey, key),
         serviceSecrets: {
@@ -187,6 +191,7 @@ export function desktopPetDefinition(assembly: DesktopPetAssembly = {}): WorldDe
           openScenes: () => openInCoo('#/provider/world%3Adesktop-live2d-pet/desktop'),
           openWallpapers: enter => openInCoo('#/provider/world%3Adesktop-live2d-pet/desktop?task=' + (enter ? 'wallpaper-enter' : 'wallpaper')),
           openCabin: () => openInCoo('#/provider/world%3Adesktop-live2d-pet/desktop?task=cabin'),
+          openCabinEngine: () => openInCoo('#/provider/world%3Adesktop-live2d-pet/engines?task=cabin'),
         } : undefined),
         onBotChange: () => assembly.onBotChange?.(),
         onDesktopChange: (on) => assembly.onDesktopChange?.(on),

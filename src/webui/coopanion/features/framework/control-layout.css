@@ -24,7 +24,7 @@
   align-items:start; gap:14px;
 }
 .pet-studio .layout-editor-grid[hidden], .pet-studio .layout-selection[hidden] { display:none; }
-.pet-studio :is(.layout-editor-library,.layout-editor-center,.layout-editor-aside) {
+.pet-studio :is(.layout-editor-library,.layout-editor-center,.layout-editor-aside,.layout-selection-card) {
   display:grid; align-content:start; gap:10px; min-width:0; min-height:0; padding:12px;
   border:1px solid var(--studio-line); border-radius:var(--studio-panel-radius); background:var(--studio-surface);
 }
@@ -90,11 +90,24 @@
 .pet-studio .layout-hover-rail .layout-empty[hidden] { display:none; }
 .pet-studio .layout-empty { margin:0; color:var(--studio-muted); font-size:12px; text-align:center; padding:12px 8px; }
 .pet-studio .layout-drop-mark { outline:2px solid var(--studio-accent); outline-offset:-2px; }
-.pet-studio .layout-selection { flex-wrap:wrap; border:1px solid var(--studio-line); border-radius:10px; padding:7px 10px; }
-.pet-studio .layout-selection select { width:auto; max-width:100%; }
+.pet-studio .layout-editor-side { min-inline-size:0; display:grid; gap:14px; align-content:start; }
+.pet-studio .layout-selection-card { block-size:176px; grid-template-rows:20px minmax(0,1fr); }
+.pet-studio .layout-selection {
+  display:grid; grid-template-columns:minmax(0,1fr); align-content:start; gap:6px;
+  overflow:auto; scrollbar-width:thin;
+}
+.pet-studio .layout-selection strong { min-inline-size:0; overflow-wrap:anywhere; }
+.pet-studio .layout-selection select { width:100%; min-width:0; }
+.pet-studio .layout-selection-actions { display:flex; flex-wrap:wrap; gap:4px; }
+.pet-studio .layout-selection-actions button { min-block-size:32px; padding-inline:5px; font-size:12px; }
+.pet-studio .layout-selection-empty { margin:0; color:var(--studio-muted); font-size:12px; }
 @container (max-width:760px) {
   .pet-studio .layout-editor-grid { grid-template-columns:minmax(0,1fr) minmax(105px,.38fr); }
   .pet-studio .layout-editor-library { grid-column:1/-1; }
+  .pet-studio .layout-editor-side { display:contents; }
+  .pet-studio .layout-selection-card { grid-column:1/-1; block-size:144px; }
+  .pet-studio .layout-selection { grid-template-columns:minmax(0,1fr) minmax(120px,1fr); }
+  .pet-studio .layout-selection-actions { grid-column:1/-1; }
   .pet-studio .layout-palette { grid-template-columns:repeat(auto-fit,minmax(128px,1fr)); max-block-size:136px; }
 }
 @container (max-width:390px) {

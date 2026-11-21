@@ -239,7 +239,7 @@ const zhHant: Translation<PetText> = {
     hideWhenFullscreen: { title: '全螢幕時自動隱藏', description: '開啟時，前景視窗以全螢幕鋪滿桌寵所在的那個螢幕（遊戲、全螢幕影片、瀏覽器全螢幕）就把 Coo 藏起來，離開全螢幕後再放回來；最大化的視窗不算。關閉時一律浮在最上層。' },
     passWhenFullscreen: { title: "全螢幕時滑鼠穿透", description: "開啟時，前景視窗以全螢幕鋪滿桌寵所在的那個螢幕期間 Coo 照常顯示，點擊全部穿過 Coo 落到下方的視窗，離開全螢幕後恢復；最大化的視窗不算。與全螢幕時自動隱藏同時開啟時 Coo 會隱藏。" },
     exportOverlay: { title: 'OBS 畫面', description: '在 /overlay 提供桌寵視窗的透明畫面，供 OBS「瀏覽器」來源使用；關閉時不提供。' },
-    electronFile: { title: 'Electron 程式', description: '留空時依序使用 CORTICO_DESKTOP_LIVE2D_PET_HOST 和面板裡安裝的執行環境。' },
+    electronFile: { title: '自訂視窗程式', description: '留空時自動選擇視窗程式。' },
     port: { title: '頁面連接埠', description: '被佔用時往上順延到下一個空的連接埠。' },
     touchEnabled: { title: '互動送成事件', description: '戳、摸、拎起來甩出去。' },
     touchWakeOn: { title: '回應模式', description: 'poke：只有戳一下馬上回應，其餘互動等下次回應時一併送達；all：所有互動都馬上回應；none：所有互動都等下次回應時一併送達；custom：依「習慣」頁勾選的互動馬上回應。一次互動得到回應之後、本輪結束之前的互動，都等下次回應時一併送達。' },
@@ -274,8 +274,8 @@ const zhHant: Translation<PetText> = {
 
   windowReason: {
     badHostEnv: (env: string) => `${env} 不是 JSON 字串陣列`,
-    noElectronFile: (file: string) => `Electron 程式不存在：${file}`,
-    noElectron: '沒有可用的 Electron：在桌寵面板安裝視窗執行環境，或在設定裡指定 Electron 程式',
+    noElectronFile: (file: string) => `找不到自訂視窗程式 ${file}。請在進階啟動設定中重新選擇程式，或清空路徑。`,
+    noElectron: '缺少視窗元件。請在「引擎 → 桌寵視窗」安裝。',
     startFailed: (why: string) => `啟動失敗：${why}`,
     closed: '視窗已關閉',
     exited: (code: number | null) => `視窗處理程序結束（結束代碼 ${code}）`,

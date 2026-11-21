@@ -41,6 +41,31 @@ it('keeps both landscape composers visible and keeps their drafts through scene 
   expect(bubble.parentElement).toBe(document.body);
 });
 
+it.each(['room', 'wallpaper', 'phone'])('keeps a long pasted %s draft intact and sends it only after editing', mode => {
+  const bubble = document.body.appendChild(document.createElement('div'));
+  const send = vi.fn(() => true);
+  const options = { doc:document, bubble, text, send, connectMic:vi.fn(), syncMic:vi.fn() };
+  const portrait = mode === 'phone';
+  const chat = portrait ? createPhoneChat(options) : createLandscapeChat(options);
+  if (portrait) chat.render({ active:true, area:{...area,w:320,h:569}, name:'Coo', online:true });
+  else chat.render({ mode, area, online:true, switching:false, lines:[] });
+  const panel = document.querySelector(portrait ? '.pet-phone-chat' : `[data-landscape-chat=${mode}]`)!;
+  const input = panel.querySelector('textarea')!, form = input.form!;
+  send.mockClear();
+  expect(input.maxLength).toBe(-1);
+  input.value = '长'.repeat(501);
+  input.dispatchEvent(new Event('input'));
+  form.requestSubmit();
+  expect(send).not.toHaveBeenCalled();
+  expect(input.value).toHaveLength(501);
+  expect(panel.textContent).toContain('当前 501 字');
+  input.value = '短'.repeat(500);
+  input.dispatchEvent(new Event('input'));
+  form.requestSubmit();
+  expect(send).toHaveBeenCalledWith(expect.objectContaining({ text: input.value, scene:mode }));
+  chat.failed();
+});
+
 it('shows the ongoing reply once and reveals it in portrait history when speech ends', () => {
   const bubble = document.body.appendChild(document.createElement('div'));
   const chat = createPhoneChat({doc:document,bubble,text,send:()=>true,connectMic:vi.fn(),syncMic:vi.fn()});

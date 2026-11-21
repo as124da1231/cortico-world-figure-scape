@@ -27,7 +27,8 @@ import { modelBehaviorReport } from './model-behavior-contract.js';
  * - the body: `step(dt, draw)` advances one frame and draws it, unless `draw` is false (the pet window is hidden;
  *   a body that draws anyway only spends the time); `layout()` says where it is ({ x, y, facing, mode,
  *   busy, moving, pressing, cursor, box, hit, bubble, side }, see the kit's `layout`; `y`, the stage y its feet stand on, only
- *   for a body that stands off the floor, which the World then keeps with its position and hands back as `start.y`); `resize()` takes new
+ *   for a body that stands off the floor, which the World then keeps with its position and hands back as `start.y`).
+ *   `restExtent` optionally gives the resting silhouette in 256-unit body coordinates for scene framing. `resize()` takes new
  *   bounds (`set({ bounds })` from the page changes what `host.bounds()` returns, then calls it); `do(word)`, `walk(x, run, id)`,
  *   `move({ to, run, params }, id)` (one of the manifest's `moves`, its `params` by id as the World checked them),
  *   `stopWalk(id)` (a walk's or a move's), `pointer(type, p)`, `drop(p)`, `shift(dx, dy)`, `place(x, facing, y)`,
@@ -54,6 +55,7 @@ let body = null, preview = false, dead = false, bounds = { W: 0, H: 0, floorY: 0
 /** The stage's size from the page, with the windows when there are any. */
 const setBounds = (b) => { bounds = desk ? { ...b, ...desk } : { ...b }; };
 let events = [], sounds = [], captureCover = false, extraTouch = null, previewWords = null;
+let editorOutfit = Promise.resolve();
 const post = (m) => parent.postMessage(m, '*');
 function fail(err) {
   if (dead) return;
@@ -131,14 +133,23 @@ addEventListener('message', async (e) => {
       events = []; sounds = [];
     } else if (m.t === 'scheme') {
       // the fade starts at the body's next frame: the page's clock is not the body's
-      await body.setScheme?.(m.id, { fade: m.fade });
-      post({ t: 'scheme', seq: m.seq, modelBehavior: modelBehaviorReport(body.modelBehavior), z: body.z ?? null });
-    } else if (m.t === 'editor-figure-word') {
+      const apply = async () => {
+        if (m.editor && !body.setScheme) throw Error('This figure cannot change outfits in preview');
+        const changed = await body.setScheme?.(m.id, { fade: m.fade });
+        if (m.editor && changed === false) throw Error('The figure rejected this outfit');
+        post({ t: 'scheme', seq: m.seq, modelBehavior: modelBehaviorReport(body.modelBehavior), z: body.z ?? null });
+      };
+      if (m.editor) editorOutfit = editorOutfit.then(apply).catch(error => {
+        post({ t: 'scheme', seq: m.seq, error: String(error?.message ?? error).slice(0, 240) });
+      });
+      else await apply();
+    } else if (m.t === 'editor-figure-word' || m.t === 'body-word') {
       let ok = false, reason;
       try {
-        if (previewWords?.has(m.word) && (!Array.isArray(body.words) || body.words.includes(m.word))) ok = await body.do(m.word) !== false;
+        const allowed = m.t === 'body-word' || previewWords?.has(m.word);
+        if (allowed && (!Array.isArray(body.words) || body.words.includes(m.word))) ok = await body.do(m.word) !== false;
       } catch (error) { reason = String(error?.message ?? error).slice(0, 240); }
-      post({ t: 'editor-figure-word', id: m.id, ok, reason });
+      post({ t: m.t, id: m.id, ok, reason });
     } else if (m.t === 'do') body.do(m.word);
     else if (m.t === 'walk') { if (!body.walk?.(m.x, m.run, m.id, m.y)) events.push({ kind: 'interrupted', detail: { walkId: m.id, by: 'busy' } }); }
     else if (m.t === 'move') { if (!body.move?.(m.args, m.id)) events.push({ kind: 'interrupted', detail: { walkId: m.id, by: 'busy' } }); }
@@ -171,8 +182,8 @@ addEventListener('message', async (e) => {
       try {
         if (!body.draftWardrobe) throw Error('Draft wardrobe preview is unavailable');
         body.draftWardrobe(m.command);
-        post({ t: 'body-draft-wardrobe', owner, status: m.command.kind === 'restore' ? 'released' : 'applied' });
-      } catch (error) { post({ t: 'body-draft-wardrobe', owner, status: 'failed', error: String(error?.message ?? error) }); }
+        post({ t: 'body-draft-wardrobe', owner, request: m.request, status: m.command.kind === 'restore' ? 'released' : 'applied' });
+      } catch (error) { post({ t: 'body-draft-wardrobe', owner, request: m.request, status: 'failed', error: String(error?.message ?? error) }); }
     }
     else if (m.t === 'body-clear-draft-action' && (!m.owner || body.draftActionState?.owner === m.owner)) body.clearDraftAction?.();
     else if (m.t === 'body-framing') post(applyBodyFraming(body, m.command, m.seq));

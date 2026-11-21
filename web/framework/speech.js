@@ -12,13 +12,24 @@ export function createSpeechPresentation({ audio, onUnit, onRelease, bodySpeech,
   }
 
   return {
-    start(owner, { clip, cues, wantsPlan, face, text }) {
+    start(owner, { clip, cues, wantsPlan, face, text, offset }) {
       if (disposed) return;
       stop('replaced');
       const boundaries = [];
       let end = 0;
       for (const character of text) boundaries.push(end += character.length);
-      current = { owner, boundaries, clip: clip ? media.play(clip, cues, wantsPlan, face) : null };
+      current = { owner, boundaries, clip: clip ? media.play(clip, cues, wantsPlan, face, offset) : null };
+    },
+    take(owner) {
+      const clip = current?.owner === owner ? current.clip : null;
+      const position = clip ? media.take(clip.id) : null;
+      current = null;
+      onRelease?.();
+      return position;
+    },
+    position(owner) {
+      const clip = current?.owner === owner ? current.clip : null;
+      return clip && ['preparing', 'scheduled', 'started'].includes(clip.state) ? clip.position : null;
     },
     progress(owner) {
       if (current?.owner !== owner) return { mode: 'text' };
@@ -42,7 +53,7 @@ export function createSpeechPresentation({ audio, onUnit, onRelease, bodySpeech,
     snapshot() {
       const body = bodySpeech?.();
       return { implementation: 'speech-playback', status: disposed ? 'disposed' : 'mounted', mode: 'audio-clock',
-        capabilities: { mouthPulse: true, amplitudeStream: body?.supported?.level === true, seekableMediaClock: false,
+        capabilities: { mouthPulse: true, amplitudeStream: body?.supported?.level === true, seekableMediaClock: true,
           immediateMouthReset: false, releaseSpeechContribution: body?.supported?.release === true },
         media: media.snapshot(), body, lastPreview: lastPreview && { ...lastPreview } };
     },

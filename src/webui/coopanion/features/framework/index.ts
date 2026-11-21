@@ -1,11 +1,12 @@
 import { browserWorkbench, requiresBrowserPreview } from './preview-access.ts';
 import type { Page, PageContext } from '../../base/page.ts';
-import { version as packageVersion } from '../../../../../package.json';
-import { legacyWorkspaceDestination, WORKSPACE_PANELS, type WorkspacePanel } from '../../../../framework/workspace.ts';
+import { legacyWorkspaceDestination, workspaceHref, WORKSPACE_PANELS, type WorkspacePanel } from '../../../../framework/workspace.ts';
+import { appearancePreset } from '../../../../framework/appearance.ts';
 import { attachModelEditor } from './model-editor-session.ts';
 import { inputPanel } from './input-panel.ts';
 import { appearancePresets } from './presets.ts';
 import { appearancePanel } from './appearance-panel.ts';
+import { appearanceGallery } from './appearance-gallery.ts';
 import { actionPanel } from './action-panel.ts';
 import { settingsPanel } from './settings-panels.ts';
 import { preferences, type PreferenceTask } from './preferences.ts';
@@ -14,7 +15,7 @@ import { voiceService, plannerSwitch } from './audio-services.ts';
 import { listening } from './listening.ts';
 import { errorText, studioControls, studioText as t } from './controls.ts';
 import { modelLibrary } from './model-library.ts';
-import { runtimeComponents } from './runtime-components.ts';
+import { enginesPanel } from './engines-panel.ts';
 import { wallpaperPanel } from './wallpaper-panel.ts';
 import { modeLabel, runtimeControls, type RuntimeState } from './runtime.ts';
 import { modelServicesPanel } from './model-services.ts';
@@ -32,6 +33,7 @@ import './wallpaper-panel.css';
 import './scene-workspace.css';
 import './runtime-details.css';
 import './phone-link.css';
+import './appearance-gallery.css';
 import '../../../../../web/framework/wallpaper-placement.css';
 import '../../../../../web/framework/scene-size.css';
 import { cabinPanel } from './cabin-panel.ts';
@@ -65,8 +67,9 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
     mountConversation(ctx);
     return;
   }
-  const components = runtimeComponents(ctx, packageVersion);
   const surface = c.node('main', '', 'studio-surface');
+  const scrollArea = root.closest<HTMLElement>('.panelslot') ?? surface;
+  if (scrollArea !== surface) root.classList.add('studio-page-scroll');
   surface.setAttribute('aria-label', label);
   surface.tabIndex = -1;
   const body = c.node('div', '', 'studio-task');
@@ -78,8 +81,10 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
   let runtimeError = '';
   const observers: Array<(state: RuntimeState) => void> = [];
   function refresh(): Promise<void> {
+    const appearance = state?.appearance;
     reading ??= c.call<RuntimeState>('runtime.state').then(next => {
       if (signal.aborted) return;
+      if (state?.appearance !== appearance) next.appearance = state?.appearance;
       state = next;
       for (const render of observers) render(next);
       if (runtimeError && notifications.current() === runtimeError) notify('');
@@ -94,59 +99,23 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
   const runtime = runtimeControls(ctx, async () => {
     await reading;
     await refresh();
-  }, notify);
-  const version = c.button('v' + packageVersion, runtime.openDetails);
-  version.classList.add('studio-version');
-  version.setAttribute('aria-haspopup', 'dialog');
-  version.setAttribute('aria-label', 'v' + packageVersion + ' · ' + t('运行详情', 'Runtime details'));
-  version.title = t('运行详情与组件', 'Runtime details and components');
+  });
   observers.push(runtime.render);
-  const routeRoot = root.parentElement;
-  const header = routeRoot?.previousElementSibling?.querySelector(':scope > .providerintro > .pagetitle-row')?.parentElement;
-  const headerTools = c.node('div', '', 'studio-header-tools');
-  headerTools.append(runtime.launch, version);
-  if (header && routeRoot?.classList.contains('panelslot')) {
-    header.append(headerTools);
-    // Coo reuses this wrapper when selecting another tab in the same World.
-    header.parentElement?.classList.add('studio-workspace-chrome');
-    const tabs = header.parentElement?.querySelector<HTMLElement>('.providertabs');
-    const activeTab = tabs?.querySelector<HTMLElement>('.pagetab.active');
-    if (tabs && activeTab) {
-      const reveal = () => {
-        const view = tabs.getBoundingClientRect(), selected = activeTab.getBoundingClientRect();
-        if (selected.left < view.left) tabs.scrollLeft += selected.left - view.left;
-        else if (selected.right > view.right) tabs.scrollLeft += selected.right - view.right;
-      };
-      reveal();
-      if (typeof win.ResizeObserver === 'function') {
-        const observer = new win.ResizeObserver(reveal);
-        observer.observe(tabs);
-        signal.addEventListener('abort', () => observer.disconnect(), {once:true});
-      }
-    }
-    signal.addEventListener('abort', () => headerTools.remove(), { once: true });
-  } else {
-    root.classList.add('studio-standalone');
-    root.append(headerTools);
+  if (panel !== 'engines') {
+    const header = c.node('header', '', 'studio-panel-header');
+    header.append(c.node('h2', label, 'studio-panel-title'));
+    if (panel === 'framework') header.append(runtime.launch, runtime.headerFeedback);
+    root.append(header);
   }
   root.append(surface);
-  const prefs = preferences(ctx, notify);
-  const startup = c.node('details', '', 'studio-runtime-startup');
-  const startupTitle = c.node('summary', t('高级启动设置', 'Advanced startup settings'));
-  const diagnostics = c.node('div', '', 'studio-runtime-config');
-  startup.append(startupTitle, diagnostics);
-  startup.addEventListener('toggle', () => {
-    if (startup.open) void preferenceBody('runtime', diagnostics);
-  }, {signal});
-  const componentLink = c.button(t('Live2D 组件与许可', 'Live2D components and licenses'), () => {
-    runtime.detail.element.close();
-    version.focus({ preventScroll: true });
-    void components.open(() => runtime.openDetails(version));
+  let reportPreference = notify;
+  const sectionFeedback = new Map<PreferenceTask, HTMLElement>();
+  const prefs = preferences(ctx, (message, kind, task) => {
+    const feedback = task && sectionFeedback.get(task);
+    if (!feedback) { reportPreference(message, kind); return; }
+    feedback.textContent = message;
+    feedback.dataset.kind = kind ?? 'error';
   });
-  componentLink.setAttribute('aria-haspopup', 'dialog');
-  componentLink.classList.add('studio-runtime-link');
-  runtime.detailLinks.prepend(componentLink);
-  runtime.detailBody.append(startup, runtime.detailLinks);
 
   type SettingsView = ReturnType<typeof c.dialog>;
   const settingsTasks = new Map<string, () => void>();
@@ -211,7 +180,9 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
   function inlinePreferences(id: PreferenceTask, title: string, extra?: HTMLElement): Section {
     const group = c.node('section', '', 'studio-inline-preferences');
     const heading = c.node('header');
-    heading.append(c.node('h2', title));
+    const feedback = c.status('studio-settings-inline-feedback');
+    sectionFeedback.set(id, feedback);
+    heading.append(c.node('h2', title), feedback);
     if (extra) heading.append(extra);
     const fields = c.node('div');
     group.append(heading, fields);
@@ -234,15 +205,20 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
   switch (panel) {
     case 'framework': {
       let previewFrame: HTMLIFrameElement | undefined, previewReady = false;
-      const receivers = new Map<string, (error?: string) => void>();
+      const receivers = new Map<string, (result: Record<string, unknown>) => void>();
       const editor = attachModelEditor(ctx, (kind, input) => {
         if (!editDialog.element.open || (kind === 'restore' && !previewReady)) return;
         if (!previewReady || !previewFrame?.contentWindow) return Promise.reject(Error(t('预览还在准备，稍后再试。', 'The preview is still loading. Try again shortly.')));
         const id = win.crypto.randomUUID();
         const frame = previewFrame;
-        return new Promise<void>((resolve, reject) => {
+        return new Promise<Record<string, unknown>>((resolve, reject) => {
           const timer = win.setTimeout(() => { receivers.delete(id); reject(Error(t('预览响应超时。','Preview response timed out.'))); }, 2800);
-          receivers.set(id, error => { win.clearTimeout(timer); receivers.delete(id); if (error) reject(Error(error)); else resolve(); });
+          receivers.set(id, result => {
+            win.clearTimeout(timer);
+            receivers.delete(id);
+            if (result.error) reject(Error(String(result.error)));
+            else resolve(result);
+          });
           frame.contentWindow?.postMessage({type:'live2d-editor:preview',id,kind,...input},new URL(frame.src).origin);
         });
       });
@@ -277,8 +253,13 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
       editLayout.append(taskMenu, editView, editor.element);
       taskMenu.append(compactTask, previewToggle);
       editDialog.body.append(editLayout);
-      function editorPreview(target: string | undefined, task: string) {
+      function resetPreviewReceipts() {
         previewReady = false;
+        editor.previewUnavailable();
+        for (const complete of receivers.values()) complete({ cancelled: true });
+      }
+      function editorPreview(target: string | undefined, task: string) {
+        resetPreviewReceipts();
         previewFrame = undefined;
         previewArea.replaceChildren();
         const id = target ?? state?.skin.figure;
@@ -306,10 +287,12 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
       win.addEventListener('message', event => {
         if (!previewFrame || event.source !== previewFrame.contentWindow || event.origin !== new URL(previewFrame.src).origin) return;
         if (event.data?.type === 'live2d-editor:ready') previewReady = true;
-        else if (event.data?.type === 'live2d-editor:receipt') receivers.get(event.data.id)?.(event.data.error);
+        else if (event.data?.type === 'live2d-editor:loading' || event.data?.type === 'live2d-editor:preview-error') resetPreviewReceipts();
+        else if (event.data?.type === 'live2d-editor:receipt') receivers.get(event.data.id)?.(event.data);
         else if (event.data?.type === 'live2d-preview:close') editDialog.element.close();
       }, {signal});
-      editDialog.element.addEventListener('close', () => { editor.deactivate(); previewReady = false; previewFrame = undefined; previewArea.replaceChildren(); }, { signal });
+      editDialog.element.addEventListener('close', () => { editor.deactivate(); resetPreviewReceipts(); previewFrame = undefined; previewArea.replaceChildren(); }, { signal });
+      signal.addEventListener('abort', resetPreviewReceipts, { once: true });
       const currentTools = c.node('div', '', 'studio-current-tools');
       const effects = c.dialog(t('身体整体效果', 'Whole-body effects'), 'studio-editor-form');
       effects.body.append(bodyEffectsSettings());
@@ -367,7 +350,8 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
         } catch(error) { notify(errorText(error)); }
       }
       const phone = phoneLinkPanel(ctx);
-      const library = modelLibrary(ctx, editor, refresh, notify, id => void openBrowserEditor('framing', id), currentTools, () => void components.open(), phone.element);
+      const library = modelLibrary(ctx, editor, refresh, notify, id => void openBrowserEditor('framing', id), currentTools,
+        () => { win.location.hash = workspaceHref('engines', 'live2d'); }, phone.element);
       observers.push(next => { editor.modelChanged(next.skin.figure ?? ''); library.render(next); presets.lock(); });
       sections.push({ id: 'library', nodes: [library.element], read: library.refresh });
       void phone.update();
@@ -380,79 +364,86 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
       break;
     }
     case 'sound': {
-      const effects = settingsDialog(t('音效设置', 'Sound effect settings'));
-      const quick = c.node('div', '', 'studio-effects-quick');
-      const effectSummary = c.status('studio-settings-summary');
-      const syncEffects = () => {
-        effectSummary.textContent = displaySummary(stateLabel(prefs.value('sound')));
+      const sheet = (title: string) => {
+        const element = c.node('section', '', 'studio-sound-sheet');
+        const heading = c.node('header', '', 'studio-sound-heading');
+        heading.append(c.node('h3', title));
+        element.append(heading);
+        const body = c.node('div', '', 'studio-sheet-body');
+        element.append(body);
+        return { element, body, heading };
       };
-      prefs.subscribe(syncEffects);
-      const speech = settingsDialog(t('说话声设置', 'Speech settings'));
-      const voice = voiceService(ctx, speech.element), planner = plannerSwitch(ctx);
-      speech.body.classList.add('studio-sound-panel');
+
+      // 音效:总开关和音量在前,分类音效跟在同一组里;关掉总开关时其余项一起变灰。
+      const effects = sheet(t('音效', 'Sound effects'));
+      effects.element.classList.add('studio-effects-sheet');
+      const effectsCopy = c.node('div', '', 'studio-sound-heading-copy');
+      effectsCopy.append(...effects.heading.children, c.node('p', t('角色动作、气泡与界面操作的声音。', 'Sounds for character actions, bubbles and controls.')));
+      const master = c.node('div', '', 'studio-effects-toolbar');
+      const kinds = c.node('div', '', 'studio-sheet-group');
+      const effectsStatus = c.status('studio-preference-feedback');
+      effects.heading.append(effectsCopy, master);
+      effects.body.append(kinds, effectsStatus);
+      const followEffects = () => {
+        const on = prefs.value('sound') === true;
+        effects.element.classList.toggle('is-off', !on);
+        for (const host of [master, kinds]) {
+          for (const row of host.querySelectorAll<HTMLElement>('.studio-field')) {
+            if (row.classList.contains('studio-quick-toggle')) continue;
+            for (const control of row.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('input, select, button')) control.disabled = !on;
+          }
+        }
+      };
+      prefs.subscribe(followEffects);
+      const readEffects = async () => {
+        await Promise.all([preferenceBody('sound-quick', master), preferenceBody('sound-effects', kinds)]);
+        if (!signal.aborted) followEffects();
+      };
+
+      // 说话声:语音合成的开关、音色参数和试听就地展开。
+      const speech = sheet(t('说话声', 'Voice'));
+      const voice = voiceService(ctx), planner = plannerSwitch(ctx);
       speech.body.append(voice.element, planner.element);
 
-      const input = settingsDialog(t('输入设置', 'Input settings'));
-      input.element.classList.add('studio-input-settings');
-      const inputTitle = input.heading.textContent!;
-      const back = c.button(t('返回输入设置', 'Back to input settings'), () => showInput());
-      back.classList.add('studio-settings-back');
-      const advanced = c.button(t('高级识别设置', 'Advanced recognition'), () => {
-        inputView(t('高级识别设置', 'Advanced recognition'), recognition);
-        void preferenceBody('recognition', recognition);
-      });
-      const recognition = c.node('div');
-      const listen = listening(ctx, advanced, () => inputView(t('最近识别', 'Recent recognition'), listen.recent), notify, true);
-      input.body.append(listen.element);
-      let inputTrigger: HTMLElement | null = null;
-      let inputScroll = 0;
-      input.element.addEventListener('close', () => {
-        inputTrigger = null;
-        inputScroll = 0;
-      }, {signal});
-
-      function inputView(title: string, content: HTMLElement) {
-        inputTrigger = c.doc.activeElement as HTMLElement | null;
-        inputScroll = input.body.scrollTop;
-        input.heading.textContent = title;
-        input.body.replaceChildren(back, content);
-        input.body.scrollTop = 0;
-        back.focus();
-      }
-      function showInput() {
-        input.heading.textContent = inputTitle;
-        input.body.replaceChildren(listen.element);
-        input.body.scrollTop = inputScroll;
-        if (inputTrigger?.isConnected) inputTrigger.focus({preventScroll:true});
-        inputTrigger = null;
-      }
-      sections.push(
-        settingsRow('sound-effects', t('音效', 'Sound effects'), effectSummary, {
-          title: t('音效设置', 'Sound effect settings'), control: quick, open() {
-            if (effects.open()) {
-              void preferenceBody('sound-effects', effects.body);
-            }
-          },
-        }, () => preferenceBody('sound-quick', quick)),
-        settingsRow('speech', t('说话声', 'Voice'), voice.summary, {
-          title: t('说话声设置', 'Speech settings'), open() {
-            if (!speech.open()) return;
-            voice.prepare();
-            void Promise.all([voice.read(), planner.read()]);
-          },
-        }, () => Promise.all([voice.read(), planner.read()])),
-        settingsRow('listening', t('语音输入', 'Voice input'), listen.summary, {
-          title: inputTitle, control: listen.enabled, below:listen.quick, open() {
-            if (!input.open()) return;
-            showInput();
-            void listen.refresh();
-          },
-        }, listen.refresh),
-      );
-      poll = () => {
-        void prefs.refresh(); void listen.refresh(); void voice.read();
-        if (speech.element.open) void planner.read();
+      const inputSheet = sheet(t('语音输入', 'Voice input'));
+      const listen = listening(ctx, runtime.showWindow, runtime.headerFeedback);
+      const inputActions = c.node('label', '', 'studio-voice-enable');
+      inputActions.append(listen.summary, listen.enabled);
+      inputSheet.heading.append(inputActions);
+      const advanced = c.dialog(t('高级识别设置', 'Advanced recognition'), 'studio-audio-dialog studio-recognition-dialog');
+      const advancedBody = c.node('div', '', 'studio-sheet-group');
+      const advancedStatus = c.status('studio-preference-feedback');
+      advanced.body.append(listen.advanced, advancedBody);
+      advanced.element.append(advancedStatus);
+      reportPreference = (message, kind) => {
+        const feedback = advanced.element.open ? advancedStatus : effectsStatus;
+        feedback.textContent = message;
+        feedback.dataset.kind = kind ?? 'error';
       };
+      const recent = c.dialog(t('最近识别', 'Recent recognition'), 'studio-audio-dialog studio-transcript-dialog');
+      recent.body.append(listen.recent);
+      const openAdvanced = () => { if (advanced.open(advancedButton)) void preferenceBody('recognition', advancedBody); };
+      const advancedButton = c.button(t('高级设置', 'Advanced settings'), openAdvanced);
+      const recentButton = c.button(t('识别记录', 'Recognition history'), () => { recent.open(recentButton); });
+      for (const button of [advancedButton, recentButton]) button.setAttribute('aria-haspopup', 'dialog');
+      const voiceLinks = c.node('div', '', 'studio-audio-utilities');
+      voiceLinks.append(advancedButton, recentButton);
+      inputSheet.body.append(listen.element, voiceLinks);
+
+      const into = (element: HTMLElement) => () => element.scrollIntoView({block:'nearest'});
+      settingsTasks.set('sound-effects', into(effects.element));
+      settingsTasks.set('speech', into(speech.element));
+      settingsTasks.set('tts', into(speech.element));
+      settingsTasks.set('listening', into(inputSheet.element));
+      settingsTasks.set('recognition', openAdvanced);
+      settingsTasks.set('planner', into(planner.element));
+
+      sections.push(
+        {id: 'listening', nodes: [inputSheet.element], read: listen.refresh},
+        {id: 'speech', nodes: [speech.element], read: () => Promise.all([voice.read(), planner.read()])},
+        {id: 'sound-effects', nodes: [effects.element], read: readEffects},
+      );
+      poll = () => { void prefs.refresh(); void listen.refresh(); void voice.read(); void planner.read(); };
       break;
     }
     case 'desktop': {
@@ -499,7 +490,7 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
     }
     case 'interaction': {
       const input = inputPanel(ctx);
-      const chat = c.button(t('打开 Coo 对话', 'Open Coo conversation'), () => {
+      const chat = c.button(t('打开梦境对话记录', 'Open Figure Scape conversation'), () => {
         void c.call('runtime.openConversation').catch(error => notify(errorText(error)));
       });
       const type = c.button(t('打开桌宠打字框', 'Type to the pet'), () => {
@@ -509,7 +500,7 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
       chatActions.append(chat, type);
       function reflectTyping(visible: boolean) {
         type.disabled = !visible;
-        type.title = visible ? '' : t('显示 Live2D 后可在桌宠窗口打字', 'Show Live2D to type in the pet window');
+        type.title = visible ? '' : t('在工作台显示桌宠后可打开打字框', 'Show the pet from the workbench to open its text input');
       }
       reflectTyping(state?.onDesktop === true);
       observers.push(next => reflectTyping(next.onDesktop === true));
@@ -550,6 +541,7 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
       function syncBubble(next = state) {
         if (!next) return;
         sample.dataset.theme = next.theme ?? 'light';
+        sample.dataset.appearance = appearancePreset(next.appearance);
         sample.style.setProperty('--sample-text', (next.fontSize ?? 1) * 14.5 + 'px');
         sample.style.setProperty('--sample-width', Math.min(100, (next.bubbleSize ?? 1) * 78) + '%');
       }
@@ -570,47 +562,50 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
           prefs.value('saidBubbles') === true ? t('显示文字发送气泡', 'Sent text bubbles on') : t('文字发送气泡关闭', 'Sent text bubbles off')));
       bubbles.nodes[0].appendChild(sample);
       const fullscreen = inlinePreferences('fullscreen', t('全屏与直播', 'Fullscreen and streaming'));
-      const captureFeedback = c.status('studio-help');
-      captureFeedback.hidden = true;
+      const captureFeedback = c.status('studio-capture-feedback');
       const overlayUrl = c.node('input');
       overlayUrl.type = 'url';
       overlayUrl.readOnly = true;
+      overlayUrl.placeholder = t('开启 OBS 浏览器源后生成', 'Enable OBS browser source to generate a URL');
+      overlayUrl.disabled = true;
       overlayUrl.setAttribute('aria-label', t('OBS 浏览器源地址', 'OBS browser source address'));
       const overlayCopy = c.button(t('复制地址', 'Copy address'), () => {
         const selectAddress = () => { overlayUrl.focus(); overlayUrl.select(); };
         const clipboard = win.navigator.clipboard;
         if (!clipboard) { selectAddress(); return; }
         void clipboard.writeText(overlayUrl.value).then(
-          () => notify(t('已复制 OBS 浏览器源地址。', 'Copied the OBS browser source address.'), 'success'),
+          () => { overlayCopy.textContent = t('已复制', 'Copied'); },
           selectAddress,
         );
       });
+      overlayCopy.disabled = true;
       const overlayControls = c.node('div', '', 'studio-inline studio-overlay-address');
       overlayControls.append(overlayUrl, overlayCopy);
       const overlaySource = c.node('div', '', 'studio-field');
       const overlayDescription = c.node('div', '', 'studio-field-copy');
       overlayDescription.append(c.node('strong', t('OBS 浏览器源', 'OBS browser source')),
-        c.node('small', t('OBS 浏览器源主动输出 Live2D 画面。', 'The OBS browser source streams Live2D directly.')));
+        c.node('small', t('OBS 可以单独采集桌宠画面。', 'OBS can capture the desktop pet separately.')));
       overlaySource.append(overlayDescription, overlayControls);
-      overlaySource.hidden = true;
       const captureLabels = {
-        excluded: t('Windows 已将 Live2D 窗口设为排除采集。', 'Windows has excluded the Live2D window from capture.'),
-        allowed: t('Windows 允许采集 Live2D 窗口。', 'Windows allows capture of the Live2D window.'),
+        excluded: t('Windows 已将桌宠窗口排除在截图和录屏之外。', 'Windows has excluded the pet window from screenshots and recordings.'),
+        allowed: t('Windows 允许采集桌宠窗口。', 'Windows allows capture of the pet window.'),
         limited: t('Windows 会隐藏窗口内容，录屏中仍可能看到窗口占位。', 'Windows hides the window contents. The window can still appear as a blank area.'),
         failed: t('Windows 未应用截图和录屏设置。', 'Windows did not apply the capture setting.'),
         unverified: t('已请求 Windows 更新录屏设置，暂时无法读取系统状态。', 'Capture settings were sent to Windows. The system state could not be verified.'),
         unsupported: t('当前窗口宿主不支持这项设置。', 'The current window host does not support this setting.'),
         pending: t('等待 Windows 确认采集状态。', 'Waiting for Windows to confirm capture status.'),
-        offline: t('下次启动 Live2D 时应用录屏设置。', 'The capture setting will apply when Live2D starts.'),
+        offline: t('下次启动桌宠时应用截图和录屏设置。', 'The capture setting will apply the next time the pet starts.'),
       };
       observers.push(next => {
         const compatibility = next.windowCompatibility;
-        captureFeedback.hidden = prefs.value('window.hideFromCapture') === undefined || !compatibility;
-        if (compatibility && captureFeedback.textContent !== captureLabels[compatibility.capture]) {
-          captureFeedback.textContent = captureLabels[compatibility.capture];
+        const capture = compatibility ? captureLabels[compatibility.capture] : '';
+        if (captureFeedback.textContent !== capture) captureFeedback.textContent = capture;
+        const address = next.overlayUrl ?? '';
+        overlayUrl.disabled = overlayCopy.disabled = !address;
+        if (overlayUrl.value !== address) {
+          overlayUrl.value = address;
+          overlayCopy.textContent = t('复制地址', 'Copy address');
         }
-        overlaySource.hidden = !next.overlayUrl;
-        if (overlayUrl.value !== (next.overlayUrl ?? '')) overlayUrl.value = next.overlayUrl ?? '';
       });
       fullscreen.nodes[0].appendChild(captureFeedback);
       fullscreen.nodes[0].appendChild(overlaySource);
@@ -631,7 +626,8 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
       };
       const list = c.node('dl', '', 'studio-permission-summary');
       const area = c.node('section', '', 'studio-inline-preferences studio-access-editor');
-      area.append(c.node('h2',t('允许 Coo 调整桌宠','Allow Coo to adjust the pet')));
+      const title = c.node('h2', t('允许 Coo 调整桌宠', 'Allow Coo to adjust the pet'));
+      const heading = c.node('header', '', 'studio-permission-header');
       const modeSelect = c.node('select');
       for(const [value, label] of [['off',t('关闭','Off')],['default',t('默认范围','Default scope')],['custom',t('自定义','Custom')],['any',t('全部允许','Allow all')]]) {
         const option=c.node('option',label);option.value=value;modeSelect.append(option);
@@ -646,8 +642,12 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
       let changed=false, saving=false;
       const discard=c.button(t('撤销修改','Revert changes'),()=>{changed=false;banner.textContent='';syncPermissions();});
       const save=c.button(t('应用权限','Apply permissions'),()=>void apply(),true);
-      buttons.append(banner,discard,save);
-      area.append(c.field(t('授权范围','Permission scope'),modeSelect,t('仅影响 Live2D 的自行调整。','Applies to self-adjustment of this Live2D pet.')),list,fields,buttons);
+      buttons.append(discard,save);
+      heading.append(title, buttons);
+      const summaryTitle = c.node('h3', '', 'studio-permission-summary-title');
+      const summary = c.node('section', '', 'studio-permission-review');
+      summary.append(summaryTitle, list);
+      area.append(heading, c.field(t('授权范围','Permission scope'),modeSelect,t('仅影响梦境角色的自行调整。','Applies to self-adjustment of this Figure Scape character.')), banner, summary, fields);
       function syncPermissions(){
         if(!changed && !saving){
           modeSelect.value=String(prefs.value('selfAdjust')??state?.selfAdjust?.mode??'default');
@@ -657,6 +657,8 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
       }
       function drawPermissions() {
         const mode = modeSelect.value;
+        summaryTitle.textContent = saving ? t('正在应用', 'Applying') : changed
+          ? t('待应用的权限', 'Pending permissions') : t('当前生效的权限', 'Active permissions');
         fields.hidden=mode!=='custom';modeSelect.disabled=saving;
         for(const[,box] of switches)box.disabled=saving;
         save.disabled=discard.disabled=saving||!changed;
@@ -674,7 +676,7 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
         const names = (direct: boolean) => SELF_KEYS.filter(key => allowed(key) === direct).map(key => labels[key]).join(t('、', ', '));
         list.replaceChildren(add(t('可直接调整', 'Can adjust'), names(true)), add(t('先询问你', 'Ask first'), names(false)));
       }
-      function update(){changed=true;banner.textContent=t('未应用。上方是应用后的权限。','Not applied. The list previews the resulting permissions.');drawPermissions();}
+      function update(){changed=true;banner.textContent=t('应用后生效。','Changes take effect when applied.');drawPermissions();}
       modeSelect.addEventListener('change',update,{signal});
       for(const[,box] of switches)box.addEventListener('change',update,{signal});
       async function apply(){
@@ -692,9 +694,33 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
       sections.push({id:'autonomy',nodes:[area],read:prefs.refresh});
       break;
     }
+    case 'appearance': {
+      const gallery = appearanceGallery(ctx, preset => {
+        if (state) state.appearance = preset;
+      });
+      observers.push(next => gallery.update(next.appearance));
+      sections.push({ id: 'palette', nodes: [gallery.element] });
+      break;
+    }
     case 'services': {
       const services = modelServicesPanel(ctx, notify);
       sections.push({ id: 'services', nodes: [services.element], read: services.read });
+      break;
+    }
+    case 'engines': {
+      const startup = c.node('details', '', 'studio-runtime-startup');
+      const settings = c.node('div', '', 'studio-runtime-config');
+      startup.append(c.node('summary', t('高级启动设置', 'Advanced startup settings')), settings, runtime.windowAdvanced);
+      startup.addEventListener('toggle', () => {
+        if (startup.open) void preferenceBody('runtime', settings);
+      }, {signal});
+      runtime.windowSettings.append(startup);
+      const engines = enginesPanel(ctx);
+      sections.push({id:'window', nodes:[runtime.windowSettings]},
+        {id:'live2d', nodes:[engines.live2d], read:engines.readLive2d},
+        {id:'cabin', nodes:[engines.cabin], read:engines.readCabin},
+        {id:'spriter', nodes:[engines.spriter]});
+      poll = engines.poll;
       break;
     }
   }
@@ -710,23 +736,29 @@ function mount(ctx: PageContext, panel: WorkspacePanel, label: string): void {
   const positions = scrollPositions.get(doc) ?? new Map<WorkspacePanel, number>();
   scrollPositions.set(doc, positions);
   const savedScroll = positions.get(panel) ?? 0;
-  surface.scrollTop = savedScroll;
-  surface.addEventListener('scroll', () => positions.set(panel, surface.scrollTop), { signal, passive: true });
+  scrollArea.scrollTop = savedScroll;
+  scrollArea.addEventListener('scroll', () => positions.set(panel, scrollArea.scrollTop), { signal, passive: true });
   const task = query.get('task');
   void Promise.allSettled([refresh(), ...sections.map(section => section.read?.())]).then(results => {
     if (signal.aborted) return;
     const failure = results.find(result => result.status === 'rejected');
     if (failure?.status === 'rejected') notify(errorText(failure.reason));
-    if (!task) { surface.scrollTop = savedScroll; return; }
+    if (!task) { scrollArea.scrollTop = savedScroll; return; }
     const target = ({ recognition: 'listening', tts: 'speech', planner: 'speech', chat: 'identity', editor: 'library', 'desktop-settings': 'desktop' } as Record<string,string>)[task] ?? task;
     if (openTask && (Object.hasOwn(editorTasks, target) || ['appearance', 'play', 'preview'].includes(target))) openTask(target);
     else {
       const anchor = anchors.get(target) ?? (panel === 'desktop' && settingsTasks.has(target) ? anchors.get('space') : undefined);
       if (anchor) {
-        surface.scrollTop = anchor.offsetTop - body.offsetTop;
-        settingsTasks.get(target)?.();
+        const headingHeight = scrollArea === surface ? 0 : root.querySelector('.studio-panel-header')?.getBoundingClientRect().height ?? 0;
+        scrollArea.scrollTop = anchor === body.firstElementChild ? 0
+          : scrollArea.scrollTop + anchor.getBoundingClientRect().top - scrollArea.getBoundingClientRect().top - headingHeight - 12;
+        if (task === 'cabin' && panel === 'engines') {
+          anchor.tabIndex = -1;
+          anchor.focus({ preventScroll:true });
+        }
+        (settingsTasks.get(task) ?? settingsTasks.get(target))?.();
       }
     }
   });
-  ctx.lifecycle.interval(() => { void refresh(); void components.poll(); poll?.(); }, 1500);
+  ctx.lifecycle.interval(() => { void refresh(); poll?.(); }, 1500);
 }

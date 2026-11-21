@@ -15,6 +15,7 @@
  */
 import { createRequire } from 'node:module';
 import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { Logger } from 'cortico/core/types.ts';
 import type { TranscribeResult } from './result.ts';
 import { rmsDb } from './segmenter.ts';
@@ -123,8 +124,16 @@ export interface SherpaAsrOptions {
 const SAMPLE_RATE = 16_000;
 const DEFAULT_THREADS = 2;
 
-export function loadSherpa(): SherpaModule {
-  return createRequire(import.meta.url)('sherpa-onnx-node') as SherpaModule;
+export function loadSherpa(require = createRequire(import.meta.url)): SherpaModule {
+  if (process.platform === 'win32' && process.arch === 'x64') {
+    const fromSherpa = createRequire(require.resolve('sherpa-onnx-node'));
+    const addon = fromSherpa.resolve('sherpa-onnx-win-x64/sherpa-onnx.node');
+    // Guard before loading native code so Windows cannot fall back to an incompatible system DLL.
+    if (!existsSync(join(dirname(addon), 'onnxruntime.dll'))) {
+      throw Error('Local speech recognition is missing onnxruntime.dll. Reinstall the extension to restore the speech runtime.');
+    }
+  }
+  return require('sherpa-onnx-node') as SherpaModule;
 }
 
 const toFloat = (pcm: Int16Array): Float32Array => {

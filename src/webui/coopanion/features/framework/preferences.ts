@@ -13,7 +13,7 @@ export function preferenceTask(key:string):PreferenceTask|null {
   const path=key.slice(K.length);
   if(path.startsWith('bodyEffects.')||path.startsWith('speech.'))return null;
   if(path.startsWith('cua.') || path === 'window.enabled' || path === 'window.scale') return null;
-  if (['asr.enabled', 'asr.engine', 'asr.api.baseUrl', 'asr.api.model'].includes(path)) return null;
+  if (['asr.enabled', 'asr.engine', 'asr.api.baseUrl', 'asr.api.model', 'asr.segment.thresholdDb'].includes(path)) return null;
   if(path.startsWith('asr.'))return 'recognition';
   if (path === 'sound' || path === 'sounds.volume') return 'sound-quick';
   if (path.startsWith('sounds.')) return 'sound-effects';
@@ -37,7 +37,6 @@ const titles: Record<PreferenceTask,string> = {
 const descriptions:Record<string,string>={
   roam:'设置桌宠平时的移动频率。',
   theme:'用于桌宠窗口和气泡。',
-  sound:'控制桌宠的交互音效。',
   'sounds.snoreSeconds':'设为 0 时持续到桌宠醒来。',
   'sounds.panByPosition':'按桌宠位置分配声道。',
   'window.frameRate':t('活动时的帧率，实际帧率受屏幕刷新率限制。', 'Frame rate while active, capped by the display refresh rate.'),
@@ -45,8 +44,11 @@ const descriptions:Record<string,string>={
   saidBubbles:t('显示打字发送后的回显。语音转写单独显示，发送后自动收起。', 'Echo typed messages on screen. Voice transcripts use a separate bubble and dismiss after sending.'),
   'window.lockFrameRate':'开启后静止时也按所选帧率绘制。',
   doubleClickChat:'双击桌宠打开打字框。',
-  'touch.showRegions':'在桌宠身上显示头部、躯干和腿部的触碰范围。',
-  'touch.wakeOn':'决定哪些触摸会立即唤醒 Coo。',
+  'touch.showRegions':t('在角色身上显示头部、躯干和腿部的范围。', 'Show the head, body, and leg hit areas on the pet.'),
+  'touch.wakeOn':t('上报触碰时，选哪些手势会让 Coo 立即回应。', 'Choose which reported gestures prompt an immediate response.'),
+  'asr.language':t('留空跟随 Coo。也可以填语言代码（如 zh）或 auto。', 'Leave blank to follow Coo, or enter a code such as zh or auto.'),
+  'asr.threads':t('用于本机识别。0 表示使用默认的 2 个线程。', 'For local recognition. 0 uses the default of two threads.'),
+  'asr.simplified':t('Coo 使用简体中文时，将转写结果转成简体。', 'Convert transcripts to Simplified Chinese when Coo uses it.'),
   selfAdjust:'决定 Coo 可自行修改哪些桌宠设置。',
   'window.hideWhenFullscreen':'桌宠所在屏幕进入全屏时隐藏，退出全屏后恢复。',
   'window.passWhenFullscreen':'全屏期间让鼠标点击通过桌宠窗口。',
@@ -60,15 +62,35 @@ const sliderUnits: Record<string, string> = {
 const choices:Record<string,string>={free:'自由活动',calm:'安静活动',off:'关闭',dark:'深色',light:'浅色',none:'不立即唤醒',poke:'仅戳一下',all:'所有触碰',custom:'自定义',default:'默认范围',any:'全部允许','ask-each-turn':'每轮确认','ask-before-acting':'操作前确认','ask-once':'授权一段时间','never-ask':'无需确认',chat:'对话',voice:'语音',roam:'活动',theme:'主题',sound:'声音',hide:'隐藏',dress:'装扮',worlds:'世界'};
 const titlesByPath: Record<string, [string, string]> = {
   theme: ['主题', 'Theme'],
+  sound: ['音效总开关', 'Sound effects'],
+  'sounds.volume': ['音量', 'Volume'],
   doubleClickChat: ['双击打开打字框', 'Double-click to type'],
   'touch.enabled': ['向 Coo 上报触碰', 'Report touches to Coo'],
-  'touch.wakeOn': ['立即唤醒 Coo 的手势', 'Gestures that wake Coo'],
-  'touch.showRegions': ['在桌宠上显示判定区', 'Show hit areas on the pet'],
+  'touch.wakeOn': ['立即回应的手势', 'Gestures that prompt a response'],
+  'touch.showRegions': ['显示触碰范围', 'Show hit areas'],
+  'asr.language': ['识别语言', 'Recognition language'],
+  'asr.threads': ['CPU 线程数', 'CPU threads'],
   saidBubbles: ['显示文字发送气泡', 'Show sent text bubbles'],
   'window.electronFile': ['自定义窗口程序', 'Custom window executable'],
   port: ['本地页面端口', 'Local page port'],
 };
-export function preferences(ctx:PageContext,notify:(s:string, kind?:'success'|'pending')=>void){
+
+const soundCueGroups = [
+  { title: ['角色音效', 'Character sounds'], paths: ['sounds.move', 'sounds.touch', 'sounds.face', 'sounds.snore'] },
+  { title: ['气泡与界面提示', 'Bubble and interface cues'], paths: ['sounds.talk', 'sounds.ui', 'sounds.confirmation'] },
+] as const;
+
+const soundCueCopy: Record<string, { title: [string, string]; summary: [string, string] }> = {
+  'sounds.move': { title: ['动作', 'Movement'], summary: ['走跑、跳跃和落地等动作声。', 'Sounds for movement such as running, jumping and landing.'] },
+  'sounds.touch': { title: ['触碰反馈', 'Touch feedback'], summary: ['拎起、摇晃、抚摸和戳碰的声音。', 'Sounds when the pet is picked up, shaken, petted or poked.'] },
+  'sounds.face': { title: ['表情', 'Expressions'], summary: ['开心、惊讶等表情音效。', 'Sound effects for expressions such as joy and surprise.'] },
+  'sounds.snore': { title: ['打呼噜', 'Snoring'], summary: ['角色睡着时的呼噜声。', 'Snoring while the character sleeps.'] },
+  'sounds.talk': { title: ['台词气泡声', 'Dialogue bubble sounds'], summary: ['文字逐字出现和选项卡片弹出的声音。', 'Sounds as text appears and choice cards open.'] },
+  'sounds.ui': { title: ['按钮与操作提示', 'Button and interaction cues'], summary: ['点按、选中和录音启停等提示声。', 'Cues for presses, selection and microphone start or stop.'] },
+  'sounds.confirmation': { title: ['确认提醒', 'Confirmation cues'], summary: ['需要你确认时的提示音。', 'A chime when Coo asks for confirmation.'] },
+};
+
+export function preferences(ctx:PageContext,notify:(s:string, kind?:'success'|'pending', task?:PreferenceTask)=>void){
   const c=studioControls(ctx), panels=new Map<PreferenceTask,HTMLElement>(),controls=new Map<string,HTMLInputElement|HTMLSelectElement>(),pending=new Set<string>();
   let entries:Entry[]=[],loaded=false,reading:Promise<void>|undefined,readFailure:string|undefined;
   const listeners = new Set<() => void>();
@@ -77,7 +99,9 @@ export function preferences(ctx:PageContext,notify:(s:string, kind?:'success'|'p
   let renderFrameRate: ((value: unknown) => void) | undefined;
   const customEntries=new Map<string,HTMLElement>();
   const custom = new Map<string,HTMLElement>();
-  async function write(group:string,key:string,value:unknown,control:HTMLInputElement|HTMLSelectElement, report=notify){
+  async function write(group:string,key:string,value:unknown,control:HTMLInputElement|HTMLSelectElement,
+    report: (message: string, kind?: 'success' | 'pending') => void =
+      (message, kind) => notify(message, kind, preferenceTask(key) ?? undefined)){
     if(pending.has(key))return;pending.add(key);control.disabled=true;report(t('正在保存…','Saving…'),'pending');
     try {
       await setConfig(group,{[key]:value},{signal:ctx.signal});
@@ -90,11 +114,13 @@ export function preferences(ctx:PageContext,notify:(s:string, kind?:'success'|'p
     const panel=c.section(titles[task]);
     panel.classList.add('studio-preferences');
     panel.dataset.preferenceGroup = task;
-    const fields = c.node('div', '', 'studio-sound-cues');
+    const cueRows = new Map<string, { row: HTMLElement; title: string; details?: string }>();
+    const segmentation = task === 'recognition' ? c.section(t('语句分段', 'Speech segmentation')) : null;
+    segmentation?.classList.add('studio-recognition-segmentation');
     const feedback = task === 'runtime' ? c.status('studio-runtime-config-feedback') : undefined;
     const report = feedback ? (message: string) => {
       if (!ctx.signal.aborted) feedback.textContent = message;
-    } : notify;
+    } : (message: string, kind?: 'success' | 'pending') => notify(message, kind, task);
     panels.set(task,panel);
     for(const entry of entries)for(const[key,prop]of Object.entries(entry.group.schema.properties)){
       if(preferenceTask(key)!==task)continue;
@@ -107,7 +133,7 @@ export function preferences(ctx:PageContext,notify:(s:string, kind?:'success'|'p
       else{input.type=prop.type==='boolean'?'checkbox':prop.type==='number'||prop.type==='integer'?'number':'text';if(input.type==='checkbox')input.setAttribute('role','switch');if(prop.minimum!==undefined)input.min=String(prop.minimum);if(prop.maximum!==undefined)input.max=String(prop.maximum);input.step=String(prop.multipleOf??(prop.type==='integer'?1:'any'));}
       const path = key.slice(K.length);
       const unit = sliderUnits[path];
-      const description = path === 'window.electronFile' ? t('留空时由梦境自动选择运行时。','Leave empty to use the detected runtime.')
+      const description = path === 'window.electronFile' ? t('留空时自动选择窗口程序。','Leave empty to detect the window executable automatically.')
         : path === 'port' ? t('端口被占用时会尝试下一个端口。','Tries the next port if this one is busy.')
         : (prop['x-hot'] === false ? '下次启动生效。 ' : '') +
         (path === 'doubleClickChat' ? '' : path === 'touch.enabled' ? t('关闭时，角色仍可在本地回应触碰。', 'Local touch responses still play when reporting is off.') : descriptions[path] ?? prop.description ?? '');
@@ -133,13 +159,19 @@ export function preferences(ctx:PageContext,notify:(s:string, kind?:'success'|'p
           control = adjustable;
         }
       }
-      const title = titlesByPath[path] ? t(...titlesByPath[path]) : ranges.has(key) ? prop.title : prop.title + (prop['x-suffix'] ? ' · ' + prop['x-suffix'] : '');
+      const cue = task === 'sound-effects' && prop.type === 'boolean' ? soundCueCopy[path] : undefined;
+      const title = cue ? t(...cue.title) : titlesByPath[path] ? t(...titlesByPath[path]) : ranges.has(key) ? prop.title : prop.title + (prop['x-suffix'] ? ' · ' + prop['x-suffix'] : '');
       if (path === 'user' && input instanceof HTMLInputElement) input.placeholder = t('默认称呼', 'Default name');
-      const row = c.field(title, control, description);
+      if (path === 'asr.language' && input instanceof HTMLInputElement) {
+        input.placeholder = t('跟随 Coo', 'Follow Coo');
+        input.spellcheck = false;
+      }
+      const row = c.field(title, control, cue ? t(...cue.summary) : description);
       if (task === 'sound-quick' && path === 'sound') row.classList.add('studio-quick-toggle');
-      const soundCategory = task === 'sound-effects' && path.startsWith('sounds.') && prop.type === 'boolean' && path !== 'sounds.panByPosition';
       if (task === 'sound-quick' && path === 'sounds.volume') panel.insertBefore(row, panel.children[1] ?? null);
-      else (soundCategory ? fields : panel).append(row);
+      else if (cue) cueRows.set(path, { row, title, details: prop.description });
+      else if (segmentation && path.startsWith('asr.segment.')) segmentation.append(row);
+      else panel.append(row);
       if (prop['x-path']) {
         const spec=prop['x-path'];
         const browse = c.button(t('选择文件', 'Choose file'), () => {
@@ -159,10 +191,33 @@ export function preferences(ctx:PageContext,notify:(s:string, kind?:'success'|'p
       }
       input.addEventListener('change',()=>{editingRanges.delete(key);if(!input.reportValidity())return;let value:unknown=input.value;if(prop.type==='boolean')value=(input as HTMLInputElement).checked;else if(prop.type==='number'||prop.type==='integer'){if(!input.value)return;value=Number(input.value);}void write(entry.group.id,key,value,input,report);},{signal:ctx.signal});
     }
-    if (task === 'sound-effects' && fields.childElementCount) {
-      const categories = c.node('section');
-      categories.append(c.node('h3', '分类音效'), fields);
-      panel.append(categories);
+    if (segmentation && segmentation.childElementCount > 1) panel.append(segmentation);
+    if (cueRows.size) {
+      const categories = c.node('div', '', 'studio-sound-cues');
+      const notes = c.node('dl', '', 'studio-sound-cue-notes');
+      for (const { title, paths } of soundCueGroups) {
+        const group = c.node('div', '', 'studio-sound-cue-group');
+        const heading = t(title[0], title[1]);
+        group.setAttribute('role', 'group');
+        group.setAttribute('aria-label', heading);
+        group.append(c.node('h4', heading));
+        for (const path of paths) {
+          const cue = cueRows.get(path);
+          if (!cue) continue;
+          group.append(cue.row);
+          if (cue.details) notes.append(c.node('dt', cue.title), c.node('dd', cue.details));
+        }
+        if (group.childElementCount > 1) categories.append(group);
+      }
+      if (notes.childElementCount) {
+        const details = c.dialog(t('音效明细', 'Sound effect details'), 'studio-audio-dialog');
+        details.body.append(notes);
+        const link = c.button(t('查看音效明细', 'View sound effect details'), () => { details.open(link); });
+        link.setAttribute('aria-haspopup', 'dialog');
+        link.classList.add('studio-sound-cue-details');
+        categories.append(link);
+      }
+      panel.insertBefore(categories, panel.children[1] ?? null);
     }
     if (task === 'touch') special(panel,'wake');
     if(task==='autonomy')special(panel,'self');
@@ -237,10 +292,11 @@ export function preferences(ctx:PageContext,notify:(s:string, kind?:'success'|'p
   function special(panel:HTMLElement,kind:'wake'|'self'){
     const title=kind==='wake'?'自定义唤醒':'自主调整项目';
     const box = c.node('div', '', 'studio-choice-grid');
+    const feedback = c.status('studio-preference-feedback');
     custom.set(kind, box);
     if (kind === 'wake') {
       const dialog = c.dialog(t('自定义唤醒', 'Custom wake gestures'), 'studio-settings-dialog');
-      const open = c.button(t('编辑手势', 'Edit gestures'), () => { if (dialog.open()) void refreshSpecial(); });
+      const open = c.button(t('编辑手势', 'Edit gestures'), () => { if (dialog.open(open)) void refreshSpecial(); });
       open.hidden = true;
       open.setAttribute('aria-haspopup', 'dialog');
       const field = controls.get(K + 'touch.wakeOn');
@@ -251,11 +307,11 @@ export function preferences(ctx:PageContext,notify:(s:string, kind?:'success'|'p
         const copy = label.firstElementChild!;
         copy.id = 'studio-wake-mode';
         field.setAttribute('aria-labelledby', copy.id);
-        settings.append(open, field);
+        settings.append(field, open);
         row.append(copy, settings);
         label.replaceWith(row);
       }
-      dialog.body.append(box);
+      dialog.body.append(box, feedback);
       customEntries.set(kind, open);
     } else {
       const customView = c.node('section');
@@ -266,9 +322,57 @@ export function preferences(ctx:PageContext,notify:(s:string, kind?:'success'|'p
     }
     const keys=kind==='wake'?['poke','pet','throw','drop']:['figure','scheme','roam','snoreSeconds','sound','scale','bubbleSize','fontSize','theme','hoverButtons','user'];
     const labels:Record<string,string>={poke:'戳一下',pet:'抚摸',throw:'抛出',drop:'放下',shake:'摇晃',figure:'身体资源',scheme:'装扮',roam:'活动',snoreSeconds:'鼾声时长',sound:'声音',scale:'身体大小',bubbleSize:'气泡大小',fontSize:'文字大小',theme:'主题',hoverButtons:'快捷按钮',user:'称呼'};
-    for(const key of keys){const input=c.node('input');input.type='checkbox';input.dataset.custom=key;box.append(c.field(labels[key],input));input.addEventListener('change',()=>{void(async()=>{box.setAttribute('aria-busy','true');try{const all=[...box.querySelectorAll<HTMLInputElement>('input')];await invokePanel(P,'pet',kind==='wake'?'setWakeKinds':'setSelfAdjustCustom',[kind==='wake'?all.filter(i=>i.checked).map(i=>i.dataset.custom):Object.fromEntries(all.map(i=>[i.dataset.custom!,i.checked]))],{signal:ctx.signal});notify('已保存。','success');}catch(e){notify(String(e));}finally{box.removeAttribute('aria-busy');await refreshSpecial();}})();},{signal:ctx.signal});}
+    for (const key of keys) {
+      const input = c.node('input');
+      input.type = 'checkbox';
+      input.dataset.custom = key;
+      box.append(c.field(labels[key], input));
+      input.addEventListener('change', () => {
+        void (async () => {
+          const all = [...box.querySelectorAll<HTMLInputElement>('input')];
+          const selection = kind === 'wake' ? all.filter(i => i.checked).map(i => i.dataset.custom)
+            : Object.fromEntries(all.map(i => [i.dataset.custom!, i.checked]));
+          for (const control of all) control.disabled = true;
+          box.setAttribute('aria-busy', 'true');
+          const report = (message: string, result?: 'success' | 'pending') => {
+            if (kind === 'wake') {
+              feedback.textContent = message;
+              feedback.dataset.kind = result ?? 'error';
+            } else notify(message, result, 'autonomy');
+          };
+          try {
+            report(t('正在保存…', 'Saving…'), 'pending');
+            await invokePanel(P, 'pet', kind === 'wake' ? 'setWakeKinds' : 'setSelfAdjustCustom', [selection], {signal:ctx.signal});
+            report(t('已保存。', 'Saved.'), 'success');
+          } catch (error) { if (!ctx.signal.aborted) report(String(error)); }
+          finally {
+            try { await refreshSpecial(); }
+            catch (error) { if (!ctx.signal.aborted) report(String(error)); }
+            for (const control of all) control.disabled = false;
+            box.removeAttribute('aria-busy');
+          }
+        })();
+      }, {signal: ctx.signal});
+    }
   }
-  async function refreshSpecial(){if(!custom.size)return;const s=await invokePanel<any>(P,'pet','state',[],{signal:ctx.signal});for(const[kind,box]of custom){const section=customEntries.get(kind);if(section)section.hidden=kind==='wake'?s.wake?.wakeOn!=='custom':s.selfAdjust?.mode!=='custom';for(const input of box.querySelectorAll<HTMLInputElement>('input'))input.checked=kind==='wake'?s.wake?.wakeKinds?.includes(input.dataset.custom):s.selfAdjust?.custom?.[input.dataset.custom!]===true;}}
+  async function refreshSpecial() {
+    if (!custom.size) return;
+    const state = await invokePanel<any>(P, 'pet', 'state', [], {signal: ctx.signal});
+    for (const [kind, box] of custom) {
+      const section = customEntries.get(kind);
+      const wake = kind === 'wake';
+      if (section) section.hidden = wake ? state.wake?.wakeOn !== 'custom' : state.selfAdjust?.mode !== 'custom';
+      if (wake) {
+        const disabled = value('touch.enabled') === false;
+        const mode = controls.get(K + 'touch.wakeOn');
+        if (mode) mode.disabled = disabled || pending.has(K + 'touch.wakeOn');
+        if (section instanceof HTMLButtonElement) section.disabled = disabled;
+      }
+      for (const input of box.querySelectorAll<HTMLInputElement>('input')) {
+        input.checked = wake ? state.wake?.wakeKinds?.includes(input.dataset.custom) : state.selfAdjust?.custom?.[input.dataset.custom!] === true;
+      }
+    }
+  }
   async function refresh() {
     if (reading) return reading;
     reading = (async () => {

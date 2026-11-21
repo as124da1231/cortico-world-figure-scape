@@ -16,6 +16,8 @@ export function scenePosition(value: Record<string, unknown>): ScenePosition | n
 
 type Operation = { operationId: string; bodyId: 'desktop-live2d-pet'; mode: PresentationMode; phase: 'applying' | 'committing' | 'completed' | 'failed' | 'cancelled'; applied: boolean; error?: string };
 type SceneReceipt = { id: string; status: string; reason?: string };
+type Selection = { payload?: unknown; save?: () => Promise<() => Promise<void>>; replace?: boolean; whileHidden?: boolean };
+type Frame = { mode: PresentationMode; details: unknown; generation: number | null };
 
 export function createPresentationService(ports: {
   desired: () => PresentationMode; persist: (mode: PresentationMode) => void;
@@ -25,14 +27,15 @@ export function createPresentationService(ports: {
   scene: () => unknown;
 }) {
   const history = new Map<string, { operation: Operation; result: Promise<Operation> }>();
-  let pending: { operation: Operation; finish: (phase: Operation['phase'], reason?: string) => void; request: string; model: string } | undefined;
-  let observed: { mode: PresentationMode; details: unknown; generation: number | null } | null = null;
+  let pending: { operation: Operation; ready: () => void; applied: (frame: Frame) => void;
+    fail: (reason: string, cancelled?: boolean) => void; request: string; model: string; previousMode: PresentationMode } | undefined;
+  let observed: Frame | null = null;
   let error: string | null = null, sceneResult: SceneReceipt | null = null;
   let sceneOrder: { id: string; mode: PresentationMode } | null = null;
-  const state = () => ({ desired: ports.desired(), applied: observed?.mode ?? null, connected: ports.connected(), visible: ports.visible?.() ?? ports.connected(),
+  const state = () => ({ desired: pending?.previousMode ?? ports.desired(), applied: observed?.mode ?? null, connected: ports.connected(), visible: ports.visible?.() ?? ports.connected(),
     available: [...PRESENTATIONS], details: observed?.details ?? null, generation: observed?.generation ?? null,
     operation: pending ? { ...pending.operation } : null, error });
-  function select(mode: unknown, requested?: unknown, wallpaper?: { payload: unknown; commit?: () => Promise<void>; replace?: boolean }): Promise<Operation> {
+  function select(mode: unknown, requested?: unknown, options?: Selection): Promise<Operation> {
     if (!presentationMode(mode)) throw Error('Invalid presentation mode');
     if (requested !== undefined && (typeof requested !== 'string' || !/^[\w-]{1,80}$/.test(requested))) throw Error('Invalid operation ID');
     const targetMode = mode;
@@ -47,11 +50,15 @@ export function createPresentationService(ports: {
     const operation: Operation = { operationId: id, bodyId: 'desktop-live2d-pet', mode, phase: 'applying', applied: false };
     const result = new Promise<Operation>(resolve => {
       const request = randomUUID(), model = ports.model();
-      const timer = setTimeout(() => {
-        ports.send({ t: 'presentation-cancel', request });
-        finish('failed', 'presentation-timeout');
-      }, mode === 'wallpaper' ? 24000 : 6000);
+      const previousMode = ports.desired();
+      let undoSelection: (() => Promise<void>) | undefined;
+      let savedMode = false, saving = false, confirmed = false, settled = false;
+      let failure: { reason: string; cancelled: boolean } | undefined;
+      const send = (t: string) => ports.send({ t, request });
+      // A wallpaper can try live, video, and poster before the body draws its first frame.
+      let timer = setTimeout(() => fail('presentation-timeout'), mode === 'wallpaper' ? 30000 : 6000);
       function finish(phase: Operation['phase'], reason?: string, applied = false) {
+        settled = true;
         clearTimeout(timer);
         release?.();
         if (pending?.request === request) pending = undefined;
@@ -61,22 +68,60 @@ export function createPresentationService(ports: {
         error = reason ?? null;
         resolve({ ...operation });
       }
-      async function commitSelection(applied: boolean) {
-        clearTimeout(timer);
-        try {
-          if (wallpaper?.commit) await wallpaper.commit();
-          ports.persist(targetMode);
-          finish('completed', undefined, applied);
+      async function restore() {
+        if (!failure || settled) return;
+        const { reason, cancelled } = failure;
+        const errors: string[] = [];
+        if (savedMode) {
+          try { ports.persist(previousMode); }
+          catch (error) { errors.push(String(error)); }
         }
-        catch (e) { finish('failed', String(e instanceof Error ? e.message : e)); }
+        if (undoSelection) {
+          try { await undoSelection(); }
+          catch (error) { errors.push(String(error)); }
+        }
+        finish(cancelled ? 'cancelled' : 'failed', errors.length ? reason + ' (rollback: ' + errors.join(', ') + ')' : reason);
       }
-      if (!ports.connected() || ports.visible?.() === false) { void commitSelection(false); return; }
-      if (observed?.mode === mode && !wallpaper?.replace) { void commitSelection(true); return; }
-      pending = { operation, request, model, finish(phase, reason) {
-        if (phase === 'completed') void commitSelection(true); else finish(phase, reason);
+      function fail(reason: string, cancelled = false) {
+        if (failure || settled) return;
+        failure = { reason, cancelled };
+        clearTimeout(timer);
+        try { send('presentation-cancel'); } catch { /* The renderer also abandons unconfirmed candidates. */ }
+        if (!saving) void restore();
+      }
+      async function commitSelection(needsFrame: boolean, alreadyApplied = false) {
+        operation.phase = 'committing';
+        clearTimeout(timer);
+        saving = true;
+        try {
+          if (options?.save) undoSelection = await options.save();
+          if (failure) return;
+          if (targetMode !== previousMode) {
+            ports.persist(targetMode);
+            savedMode = true;
+          }
+          if (!needsFrame) { finish('completed', undefined, alreadyApplied); return; }
+          confirmed = true;
+          timer = setTimeout(() => fail('presentation-timeout'), 4000);
+          if (!send('presentation-confirm')) fail('window-disconnected');
+        } catch (e) {
+          fail(String(e instanceof Error ? e.message : e));
+        } finally {
+          saving = false;
+          if (failure) await restore();
+        }
+      }
+      pending = { operation, request, model, previousMode, fail, ready: () => void commitSelection(true), applied(frame) {
+        if (!confirmed || failure || settled) return;
+        observed = frame;
+        finish('completed', undefined, true);
       } };
-      try { if (!ports.send({ t: 'presentation-apply', request, mode, ...(wallpaper ? { wallpaper:wallpaper.payload, replace:wallpaper.replace } : {}) })) finish('failed', 'window-disconnected'); }
-      catch (e) { finish('failed', String(e instanceof Error ? e.message : e)); }
+      if (!ports.connected() || ports.visible?.() === false && !options?.whileHidden) { void commitSelection(false); return; }
+      if (observed?.mode === mode && !options?.replace) { void commitSelection(false, true); return; }
+      try {
+        if (!ports.send({ t: 'presentation-apply', request, mode, wallpaper: options?.payload,
+          replace: options?.replace, whileHidden: options?.whileHidden })) fail('window-disconnected');
+      } catch (e) { fail(String(e instanceof Error ? e.message : e)); }
     });
     history.set(id, { operation, result });
     if (history.size > 64) history.delete(history.keys().next().value!);
@@ -92,9 +137,7 @@ export function createPresentationService(ports: {
     },
     cancel(id: unknown) {
       if (pending && pending.operation.operationId === id && pending.operation.phase === 'applying') {
-        const current = pending;
-        ports.send({ t: 'presentation-cancel', request: current.request });
-        current.finish('cancelled', 'cancelled');
+        pending.fail('cancelled', true);
       }
       return this.operation(id);
     },
@@ -102,8 +145,7 @@ export function createPresentationService(ports: {
       const active = pending;
       if (!active || message.request !== active.request || message.figure !== active.model
         || message.mode !== active.operation.mode || active.operation.phase !== 'applying') return;
-      active.operation.phase = 'committing';
-      if (!ports.send({ t: 'presentation-confirm', request: active.request })) active.finish('failed', 'window-disconnected');
+      active.ready();
     },
     receive(message: Record<string, unknown>) {
       const active = pending;
@@ -112,13 +154,13 @@ export function createPresentationService(ports: {
       if (!active && message.ok === true && message.mode !== ports.desired()) return;
       if (message.ok !== true || !presentationMode(message.mode) || active && message.mode !== active.operation.mode) {
         const reason = typeof message.reason === 'string' ? message.reason : 'presentation-rejected';
-        if (active) active.finish('failed', reason); else error = reason;
+        if (active) active.fail(reason); else error = reason;
         return;
       }
-      if (active && active.operation.phase !== 'committing') return;
-      observed = { mode: message.mode, details: message.presentation, generation: typeof message.generation === 'number' ? message.generation : null };
+      const frame = { mode: message.mode, details: message.presentation, generation: typeof message.generation === 'number' ? message.generation : null };
+      if (active) { active.applied(frame); return; }
+      observed = frame;
       error = null;
-      active?.finish('completed');
     },
     updateDetails(mode: unknown, details: unknown, generation: unknown) {
       if (observed && mode === observed.mode && details && typeof details === 'object') {
@@ -126,7 +168,7 @@ export function createPresentationService(ports: {
       }
     },
     disconnected() {
-      pending?.finish('failed', 'window-disconnected');
+      pending?.fail('window-disconnected');
       if (sceneOrder) sceneResult = { id: sceneOrder.id, status: 'cancelled', reason: 'window-disconnected' };
       sceneOrder = null;
       observed = null;

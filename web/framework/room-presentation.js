@@ -1,4 +1,5 @@
 import { sceneScale } from './model-size.js';
+import { phoneBodyBounds } from './phone-layout.js';
 import { createSceneExit, createSceneGrip } from './scene-grip.js';
 
 const ASSETS = '/web/vendor/feiyu-house/';
@@ -40,32 +41,27 @@ export function createRoomPresentation({ scene, body, surface }) {
     foreground.append(node);
     return node;
   });
-  let active = false, scale = 1, lastCrop;
+  let active = false, scale = 1, lastExtent;
+  const restExtent = () => body.body?.layout?.restExtent;
   const position = (node, r) => Object.assign(node.style, {
     left: r.x + 'px', top: r.y + 'px', width: r.w + 'px', height: r.h + 'px',
   });
+  const frameBounds = layout => phoneBodyBounds(scene.bounds(), scene.rect(), sceneScale('phone', scale), layout?.restExtent);
   const bounds = () => {
+    if (kind === 'phone') return frameBounds(body.body?.layout);
     const area = scene.bounds();
     const rect = scene.rect();
-    if (kind === 'room') return { ...area, S: Math.max(.12, (area.S ?? Math.min(rect.w / 400, .6)) * scale) };
-    const cropped = lastCrop === 'upper';
-    const zoom = sceneScale('phone', scale);
-    const baseHeight = cropped ? .84 : 1.28;
-    const ground = cropped ? .72 : 1.22;
-    // Keep zoom centered in the upper part of the portrait instead of scaling from the feet.
-    const focalLine = .22;
-    return {
-      ...area,
-      floorY: rect.y + rect.h * (focalLine + (ground - focalLine) * zoom),
-      S: Math.max(.12, rect.h * baseHeight / 256 * zoom),
-    };
+    return { ...area, S: Math.max(.12, (area.S ?? Math.min(rect.w / 400, .6)) * scale) };
   };
   function tick() {
     if (!active) return;
-    const crop = kind === 'phone' ? body.body?.modelBehavior?.crop?.settings?.mode : undefined;
-    if (lastCrop !== crop) {
-      lastCrop = crop;
-      body.body?.set({ bounds: bounds() });
+    if (kind === 'phone') {
+      const extent = restExtent()?.join(',');
+      if (lastExtent !== extent) {
+        lastExtent = extent;
+        body.body?.set({ bounds: bounds() });
+      }
+      return;
     }
     const layout = body.body?.layout;
     for (const [index, { id, rect }] of (scene.foregrounds?.() ?? []).entries()) {
@@ -83,11 +79,12 @@ export function createRoomPresentation({ scene, body, surface }) {
       figureLayer.presentationClipOwner = owner;
       figureLayer.style.clipPath = 'inset(' + area.y + 'px ' + (W - area.x - area.w) + 'px ' + (H - area.y - area.h) + 'px ' + area.x + 'px round ' + (kind === 'phone' ? '26px' : '12px') + ')';
     }
+    lastExtent = kind === 'phone' ? restExtent()?.join(',') : undefined;
     body.body?.set({ bounds: bounds(), roam: 'off' });
     tick();
   }
   return {
-    bounds, refresh, tick, exitState: exit?.update,
+    bounds, refresh, tick, exitState: exit?.update, ...(kind === 'phone' ? { frameBounds } : {}),
     activate() {
       stage.prepend(background);
       figureLayer?.after(foreground);

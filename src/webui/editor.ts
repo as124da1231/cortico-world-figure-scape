@@ -2,11 +2,15 @@ import { modelEditor } from './coopanion/features/framework/model-editor.ts';
 import type { PageContext } from './coopanion/base/page.ts';
 import type { RequestOptions } from './coopanion/base/api.ts';
 import { createTouchEditor } from './coopanion/features/framework/touch-editor.ts';
+import { studioControls } from './coopanion/features/framework/controls.ts';
 import { figureEditorView, type OpenedFigure } from './figure-editor-view.ts';
 import type { CharacterEditorSource, CharacterTask } from '../framework/model-contract.ts';
+import { characterEditorTask, characterOriginLabel } from '../framework/character-source.ts';
+import { isAppearancePreset } from '../framework/appearance.ts';
 import './coopanion/features/framework/tokens.css';
 import './coopanion/features/framework/studio.css';
 import './coopanion/features/framework/workspace-layout.css';
+import '../../web/framework/control-toggle.css';
 import './editor.css';
 
 const root = document.querySelector<HTMLElement>('#editor')!;
@@ -45,6 +49,8 @@ title.append(contextLabel, heading);
 heading.textContent = text('加载角色', 'Loading character');
 const headerNotices = document.createElement('div');
 headerNotices.className = 'editor-notices';
+headerNotices.tabIndex = 0;
+headerNotices.setAttribute('aria-label', text('编辑状态', 'Editor status'));
 const loadRetry = button(text('重新加载角色', 'Reload character'), () => schedule(query.get('model'), selectedTask || query.get('task')));
 loadRetry.hidden = true;
 const draftNotice = document.createElement('div');
@@ -53,7 +59,16 @@ draftNotice.hidden = true;
 const draftFeedback = document.createElement('p');
 draftFeedback.setAttribute('role', 'status');
 const draftRetry = button(text('重试保留草稿', 'Retry draft backup'), () => void flushDraft().catch(draftFailure));
-draftNotice.append(draftFeedback, draftRetry);
+const draftReload = button(text('读取另一页的草稿', 'Load the other draft'), () => {
+  if (!confirm(text('放弃这个标签里的修改，读取已保留的草稿？', 'Discard the edits in this tab and load the retained draft?'))) return;
+  queuedDraft = undefined;
+  location.reload();
+});
+const draftReplace = button(text('保留本页草稿', 'Keep this draft'), () => {
+  if (!queuedDraft || !confirm(text('用本页草稿替换已保留的草稿？', 'Replace the retained draft with this tab’s edits?'))) return;
+  void replaceDraft().catch(draftFailure);
+});
+draftNotice.append(draftFeedback, draftRetry, draftReload, draftReplace);
 headerNotices.append(feedback, loadRetry, draftNotice);
 header.append(title, headerNotices);
 const layout = document.createElement('div');
@@ -94,6 +109,7 @@ function button(label: string, run?: () => void) {
   if (typeof run === 'function') element.addEventListener('click', run, { signal: lifetime.signal });
   return element;
 }
+class DraftConflict extends Error {}
 async function invoke<T>(method: string, args: unknown[] = [], options?: RequestOptions): Promise<T> {
   const response = await fetch('/api/editor', {
     method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + key },
@@ -101,31 +117,53 @@ async function invoke<T>(method: string, args: unknown[] = [], options?: Request
   });
   if (response.status === 403) throw Error(english ? 'This editor session has expired. Reopen the model from the workbench.' : '编辑会话已失效，请从工作台重新打开模型。');
   const value = await response.json();
+  if (response.status === 409 && value.code === 'draft-conflict') {
+    throw new DraftConflict(text('另一个标签页改过这个角色的草稿。', 'Another tab changed this character’s draft.'));
+  }
   if (!response.ok) throw Error(value.error || 'Editor request failed');
   return value;
 }
 
 let frame: HTMLIFrameElement | null = null;
 let loading = Promise.resolve();
-let queuedDraft: unknown[] | undefined;
+let queuedDraft: { args: unknown[]; writeId: string; expected?: string | null } | undefined;
+let draftVersion: string | null = null;
 let savingDraft: Promise<void> | undefined;
 let lastDraftRequest: string | undefined;
 let clearingDraft = false;
 let previewReady = false;
 const receipts = new Map<string, (event: Record<string, unknown>) => void>();
 const failure = (error: unknown) => { feedback.textContent = error instanceof Error ? error.message : String(error); };
-const draftFailure = () => {
+const draftFailure = (error: unknown) => {
   if (clearingDraft) return;
+  const conflict = error instanceof DraftConflict;
   draftNotice.hidden = false;
-  draftFeedback.textContent = text('本次修改还在编辑台，草稿备份未写入。', 'Your edits are still here. The draft backup was not written.');
+  draftRetry.hidden = conflict;
+  draftReload.hidden = !conflict;
+  draftReplace.hidden = !conflict || !queuedDraft;
+  draftFeedback.textContent = conflict
+    ? text('另一个标签页改过这个角色的草稿。本页修改还在。', 'Another tab changed the draft. The edits in this tab are still here.')
+    : text('本次修改还在编辑台，草稿备份未写入。', 'Your edits are still here. The draft backup was not written.');
 };
+async function replaceDraft() {
+  const draft = queuedDraft;
+  if (!draft) return;
+  const { draftVersion: latest } = await invoke<{ draftVersion: string | null }>('edit.draftVersion', [draft.args[0]]);
+  if (queuedDraft !== draft || clearingDraft) return;
+  draft.expected = latest;
+  await flushDraft();
+}
 async function flushDraft(): Promise<void> {
   if (clearingDraft) return;
   if (!savingDraft && queuedDraft) {
-    const args = queuedDraft;
+    const draft = queuedDraft;
     queuedDraft = undefined;
-    savingDraft = invoke('edit.updateDraft', args, { keepalive: JSON.stringify(args).length < 16000 }).then(() => {}, error => {
-      queuedDraft ??= args;
+    const [model, profile, revision, catalog] = draft.args;
+    const args = [model, profile, revision, catalog, draft.expected === undefined ? draftVersion : draft.expected, draft.writeId];
+    savingDraft = invoke<{ draftVersion: string }>('edit.updateDraft', args, { keepalive: JSON.stringify(args).length < 16000 }).then(result => {
+      draftVersion = result.draftVersion;
+    }, error => {
+      queuedDraft ??= draft;
       throw error;
     }).finally(() => { savingDraft = undefined; });
   }
@@ -140,17 +178,22 @@ function retainDraft(args: unknown[]) {
   const request = JSON.stringify(args);
   if (request === lastDraftRequest) return;
   lastDraftRequest = request;
-  queuedDraft = args;
+  queuedDraft = { args, writeId: crypto.randomUUID() };
   void flushDraft().catch(draftFailure);
 }
 async function discardDraft(model: string) {
   clearingDraft = true;
   try {
     await savingDraft?.catch(() => {});
-    await invoke('edit.clearDraft', [model]);
+    await invoke('edit.clearDraft', [model, draftVersion]);
+    draftVersion = null;
     queuedDraft = lastDraftRequest = undefined;
     draftNotice.hidden = true;
     draftFeedback.textContent = '';
+  } catch (error) {
+    clearingDraft = false;
+    if (error instanceof DraftConflict) draftFailure(error);
+    throw error;
   } finally {
     clearingDraft = false;
   }
@@ -166,7 +209,10 @@ function sendPreview(kind: string, input: Record<string, unknown> = {}) {
   if (!previewReady || !frame?.contentWindow) return Promise.reject(Error(english ? 'Preparing model preview' : '模型预览正在准备'));
   const id = crypto.randomUUID();
   return new Promise<Record<string, unknown>>((resolve, reject) => {
-    const timer = setTimeout(() => { receipts.delete(id); reject(Error('Preview timed out')); }, 3200);
+    const timer = setTimeout(() => {
+      receipts.delete(id);
+      reject(new DOMException(text('画布未及时返回结果。', 'The canvas did not respond in time.'), 'TimeoutError'));
+    }, 3200);
     receipts.set(id, result => {
       clearTimeout(timer);
       receipts.delete(id);
@@ -184,7 +230,7 @@ const touch = createTouchEditor({
   changed: () => { if (figure) figure.changed(); else editor?.markDirty(); },
   send: sendPreview,
 });
-type OpenedCharacter = ({ character: CharacterEditorSource } | OpenedFigure) & { policy: Parameters<typeof touch.setPolicy>[0] };
+type OpenedCharacter = ({ character: CharacterEditorSource } | OpenedFigure) & { policy: Parameters<typeof touch.setPolicy>[0]; draftVersion: string | null };
 let selectedTask = '';
 const navButtons = new Map<string, HTMLButtonElement>();
 function showTasks(enabled: CharacterTask[], packaged: boolean) {
@@ -193,7 +239,9 @@ function showTasks(enabled: CharacterTask[], packaged: boolean) {
   for (const id of enabled) {
     const label = tasks.find(([key]) => key === id);
     if (!label) continue;
-    const entry = button(packaged && id === 'bindings' ? (english ? 'Actions' : '动作试播') : (english ? label[2] : label[1]), () => select(id));
+    const name = packaged && id === 'bindings' ? text('动作试播', 'Actions')
+      : packaged && id === 'framing' ? text('外观', 'Appearance') : text(label[1], label[2]);
+    const entry = button(name, () => select(id));
     navButtons.set(id, entry);
     nav.append(entry);
   }
@@ -252,17 +300,24 @@ async function open(model: string | null, task: string | null) {
   touch.setPackageActions();
   feedback.textContent = '';
   const report = await invoke<OpenedCharacter>('character.open', [model], { signal });
+  draftVersion = report.draftVersion ?? null;
+  lastDraftRequest = undefined;
   const packaged = report.character.kind === 'figure-pack';
   showTasks(report.character.tasks, packaged);
-  contextLabel.textContent = packaged ? text('Coo 形象包', 'Coo figure pack') : text('原始 Live2D', 'Raw Live2D');
+  contextLabel.textContent = characterOriginLabel(report.character,english);
   touch.setPolicy(report.policy);
   if (packaged) {
     if (!('settings' in report)) throw Error('The figure editor did not return its settings');
     const opened = report;
     figure = figureEditorView(opened, {
-      button, english, invoke, touch, retainDraft, flushDraft, discardDraft, sendPreview, failure,
+      button, english, touch, retainDraft, flushDraft, discardDraft, sendPreview, failure, controls: studioControls(context),
+      async invoke<T>(method: string, args: unknown[]) {
+        if (method !== 'character.saveFigure') return invoke<T>(method, args);
+        return commitDraft<T>(method, args);
+      },
       feedback: text => { feedback.textContent = text; },
       previewReady: () => previewReady,
+      reloadPreview: () => attachPreview(opened.character.id),
       freezeCanvas: locked => { canvas.inert = locked; },
       selectTask: select,
     });
@@ -271,7 +326,7 @@ async function open(model: string | null, task: string | null) {
     heading.textContent = opened.name;
     document.title = opened.name + ' · ' + studioName;
     attachPreview(activeModel);
-    select(task ?? (opened.character.tasks.includes('wardrobe') ? 'wardrobe' : 'touch'));
+    select(characterEditorTask(opened.character,task));
     return;
   }
   let initial: unknown = report;
@@ -288,7 +343,13 @@ async function open(model: string | null, task: string | null) {
         touch.cancelDrawing();
         return undefined as T;
       }
-      if (method === 'saveModel' || method === 'saveLibraryModel') await flushDraft();
+      if (method === 'saveModel' || method === 'saveLibraryModel') return commitDraft<T>(method, args, options);
+      if (method === 'modelEditor') {
+        const report = await invoke<T & { draftVersion: string | null }>(method, args, options);
+        draftVersion = report.draftVersion ?? null;
+        lastDraftRequest = undefined;
+        return report;
+      }
       return invoke<T>(method, args, options);
     },
     onDraft: retainDraft,
@@ -304,7 +365,22 @@ async function open(model: string | null, task: string | null) {
   heading.textContent = current.modelLabel() || (english ? 'Live2D model editor' : 'Live2D 模型编辑台');
   document.title = heading.textContent + ' · ' + studioName;
   attachPreview(model);
-  select(task ?? 'framing');
+  select(characterEditorTask(report.character,task));
+}
+
+async function commitDraft<T>(method: string, args: unknown[], options?: RequestOptions): Promise<T> {
+  try {
+    await flushDraft();
+    const result = await invoke<T & { saved?: boolean }>(method, [...args, draftVersion], options);
+    if (result.saved) {
+      draftVersion = null;
+      lastDraftRequest = undefined;
+    }
+    return result;
+  } catch (error) {
+    if (error instanceof DraftConflict) draftFailure(error);
+    throw error;
+  }
 }
 
 function attachPreview(model: string) {
@@ -331,7 +407,13 @@ function dropPreview() {
 
 addEventListener('message', event => {
   if (event.origin !== location.origin || event.source !== frame?.contentWindow || !event.data) return;
-  if (event.data.type === 'live2d-editor:ready') {
+  if (event.data.type === 'live2d-editor:appearance') {
+    if (isAppearancePreset(event.data.appearance)) document.documentElement.dataset.appearance = event.data.appearance;
+  } else if (event.data.type === 'live2d-editor:loading') {
+    dropPreview();
+    canvasState.dataset.state = 'loading';
+    canvasState.textContent = text('载入中', 'Loading');
+  } else if (event.data.type === 'live2d-editor:ready') {
     previewReady = true;
     canvasState.dataset.state = 'ready';
     canvasState.textContent = text('实时', 'Live');

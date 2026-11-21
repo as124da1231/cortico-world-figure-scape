@@ -109,6 +109,56 @@ describe('product definition to assembled runtime', () => {
     runtime.actions.tick(.1); expect(body.do).toHaveBeenCalledWith('smile');
   });
 
+  it('requests a scoped frame after placement without waiting for a display refresh', async () => {
+    const f = fixture();
+    f.registry.scene['room-space'] = createDesktopSpace;
+    f.registry.presentation['room-presentation'] = createDesktopPresentation;
+    const runtime = createPetRuntime(DESKTOP_PET_DEFINITION, f.registry, f.ports);
+    const body = await runtime.swapBody({pack:pack('first')});
+    const order: string[] = [];
+    body.place = vi.fn(() => { order.push('place'); });
+    body.markFrameScope = vi.fn(() => { order.push('scope'); return 7; });
+    body.frameRevision = 5;
+    body.tick = vi.fn(() => { order.push('draw'); });
+    runtime.setPositions({room:{x:.5,y:.5}});
+    const ready = vi.fn(() => { order.push('ready'); });
+    await runtime.selectPresentation('room', {ready});
+    expect(order).toEqual(['place', 'scope', 'draw', 'ready']);
+    expect(body.tick).toHaveBeenCalledWith(0, true);
+    expect(ready).toHaveBeenCalledWith(body, 5, expect.objectContaining({W:1000,H:800}), undefined, 7);
+    expect(runtime.mode).toBe('room');
+    runtime.dispose();
+  });
+
+  it('keeps the character centered through consecutive resizes before the body responds', async () => {
+    const f = fixture();
+    let width = 400;
+    f.registry.scene['phone-space'] = () => ({
+      rect: () => ({x:100,y:20,w:width,h:width*16/9}),
+      bounds: () => ({W:1000,H:800,minX:100,maxX:100+width}),
+      resizeFrame(next: number) { width = next; },
+      moveFrame() {},
+      restore: () => ({x:300}),
+      normalize: () => ({x:.5}),
+    });
+    f.registry.presentation['phone-presentation'] = createDesktopPresentation;
+    const runtime = createPetRuntime(DESKTOP_PET_DEFINITION, f.registry, f.ports);
+    const body = await runtime.swapBody({pack:pack('first')});
+    body.place = vi.fn();
+    body.layout = {x:300,facing:1};
+    body.reportedFrameScope = 0;
+    let scope = 0;
+    body.markFrameScope = () => ++scope;
+    await runtime.selectPresentation('phone');
+    runtime.transformSceneFrame({kind:'resize',width:360},runtime.sceneFrameOrigin());
+    runtime.transformSceneFrame({kind:'resize',width:300},runtime.sceneFrameOrigin());
+    expect(body.place.mock.calls.slice(-2)).toEqual([[280,1,undefined,true],[250,1,undefined,true]]);
+    body.layout = {x:251,facing:1};
+    body.reportedFrameScope = scope;
+    expect(runtime.sceneFrameOrigin().character.x).toBe(251);
+    runtime.dispose();
+  });
+
   it('guards framing restore by editor owner and clears ownership on body replacement', async () => {
     const f=fixture(), runtime=createPetRuntime(DESKTOP_PET_DEFINITION,f.registry,f.ports);
     const body=await runtime.swapBody({pack:pack('first')}); body.framing=vi.fn();

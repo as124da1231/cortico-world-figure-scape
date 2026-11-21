@@ -46,7 +46,7 @@ export function createSdkService(dataDir: string) {
     if ((await cubismRuntimeState(cache)).ok) return;
     const reusable = (await cubismRuntimeState(previous)).ok;
     const consentAt = await accepted();
-    if (!reusable && !consentAt && !consentRequested) throw Error('请先在版本号的「须知」里同意 Live2D Core 和 SDK 许可');
+    if (!reusable && !consentAt && !consentRequested) throw Error('请在「引擎 → Live2D」里同意 Live2D 组件许可并完成安装');
     await mkdir(root, { recursive: true });
     const work = await mkdtemp(join(root, '.sdk-'));
     let keep = false;

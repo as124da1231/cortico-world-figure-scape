@@ -1,16 +1,8 @@
-.pet-studio .studio-runtime-dialog { --studio-dialog-width:640px; }
-.pet-studio .studio-runtime-dialog .studio-dialog-body {
-  display:grid;
-  gap:16px;
-  min-inline-size:0;
-}
 .pet-studio .studio-runtime-overview {
-  min-inline-size:0;
-  padding:12px;
-  border:1px solid var(--studio-line);
-  border-radius:12px;
-  background:var(--studio-bg);
+  grid-template-columns:minmax(0,1fr);
+  row-gap:10px;
 }
+.pet-studio .studio-runtime-overview > h2 { margin:0; font-size:16px; line-height:24px; }
 .pet-studio .studio-runtime-overview-line {
   display:flex;
   align-items:center;
@@ -28,11 +20,10 @@
 .pet-studio .studio-runtime-indicator[data-state=busy] { background:var(--studio-wait); }
 .pet-studio .studio-runtime-indicator[data-state=error] { background:var(--studio-alert); }
 .pet-studio .studio-runtime-state {
-  flex:1 1 124px;
+  flex:1 1 auto;
   margin:0;
   color:var(--studio-text);
-  font-weight:650;
-  overflow-wrap:anywhere;
+  font-weight:500;
 }
 .pet-studio .studio-runtime-actions {
   display:flex;
@@ -45,32 +36,19 @@
 .pet-studio .studio-runtime-overview progress:not([hidden]) {
   inline-size:100%;
   height:8px;
-  margin-top:10px;
   accent-color:var(--studio-accent);
 }
 .pet-studio :is(.studio-runtime-feedback,.studio-runtime-config-feedback) {
-  margin:8px 0 0;
+  margin:0;
   color:var(--studio-muted);
   font-size:13px;
   line-height:20px;
   overflow-wrap:anywhere;
 }
 .pet-studio :is(.studio-runtime-feedback,.studio-runtime-config-feedback):empty { display:none; }
-.pet-studio .studio-runtime-facts { margin:0; padding:0 2px; }
-.pet-studio .studio-runtime-facts > div:not([hidden]) {
-  display:grid;
-  grid-template-columns:minmax(86px,1fr) minmax(0,2fr);
-  gap:10px;
-  align-items:baseline;
-  padding:7px 0;
-}
-.pet-studio .studio-runtime-facts > div:not([hidden]) ~ div:not([hidden]) { border-block-start:1px solid var(--studio-line); }
-.pet-studio .studio-runtime-facts dt { color:var(--studio-muted); font-size:13px; }
-.pet-studio .studio-runtime-facts dd { margin:0; text-align:end; overflow-wrap:anywhere; }
 .pet-studio .studio-runtime-startup {
-  border:1px solid var(--studio-line);
-  border-radius:10px;
-  background:var(--studio-surface);
+  border-block-start:1px solid var(--studio-line);
+  margin-block-start:4px;
 }
 .pet-studio .studio-runtime-startup > summary {
   display:flex;
@@ -78,7 +56,7 @@
   justify-content:space-between;
   gap:12px;
   min-block-size:40px;
-  padding:8px 12px;
+  padding:8px 4px;
   cursor:pointer;
   list-style:none;
   border-radius:9px;
@@ -95,7 +73,7 @@
 .pet-studio .studio-runtime-startup[open] > summary::after { transform:translateY(2px) rotate(225deg); }
 .pet-studio .studio-runtime-startup > summary:hover { background:var(--studio-hover); }
 .pet-studio .studio-runtime-startup > summary:focus-visible { outline:2px solid var(--studio-focus); outline-offset:2px; }
-.pet-studio .studio-runtime-config { padding:0 12px 12px; }
+.pet-studio .studio-runtime-config { padding:0 4px 12px; }
 .pet-studio .studio-runtime-config .studio-preferences {
   margin:0;
   padding:0;
@@ -128,11 +106,13 @@
   padding:0;
 }
 .pet-studio .studio-runtime-executable button { white-space:nowrap; min-block-size:36px; }
+.pet-studio .studio-runtime-advanced { padding-inline:4px; }
+.pet-studio .studio-runtime-component-state { margin:0; color:var(--studio-muted); font-size:13px; }
+.pet-studio .studio-runtime-component-state:empty { display:none; }
 .pet-studio .studio-runtime-links {
   display:flex;
   flex-wrap:wrap;
   gap:4px 16px;
-  padding-inline:2px;
 }
 .pet-studio .studio-runtime-links .studio-runtime-link {
   display:inline-flex;
@@ -148,7 +128,7 @@
   text-decoration:underline;
   text-underline-offset:3px;
 }
-.pet-studio .studio-runtime-links .studio-runtime-link[hidden] { display:none; }
+.pet-studio .studio-runtime-links > [hidden] { display:none; }
 @media (max-width:440px) {
   .pet-studio .studio-runtime-actions { flex:0 1 100%; }
   .pet-studio .studio-runtime-config .studio-field { grid-template-columns:minmax(0,1fr) minmax(0,94px); }

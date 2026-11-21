@@ -1,0 +1,27 @@
+{
+  "version": "0.1.0-dev.2",
+  "archive": {
+    "version": "1.1.0-scape.1",
+    "url": "https://github.com/as124da1231/cortico-world-figure-scape/releases/download/cabin-world-1.1.0-scape.1/figure-scape-cabin-world-1.1.0-scape.1-win-x64.zip",
+    "bytes": 183268309,
+    "sha256": "35d0f8f6fc611d025cdc703b55e1abeafaab284159d72d336d69ff6c42f67ae1"
+  },
+  "exportSha256": "c395a1ed69983b299743406c33decdd8948239a318f6a0bfc254f6a27b458cee",
+  "packages": [
+    {
+      "name": "figure-scape-cabin-1of3",
+      "bytes": 61998813,
+      "sha512": "av7xxbLga88GLLyIYLbE8gC7zUE2WBIjB4Zfhlest0qMqfp1aOfooAFJQZhQzVJklo3nzepnjGFzrhVHmZcvSw=="
+    },
+    {
+      "name": "figure-scape-cabin-2of3",
+      "bytes": 70332935,
+      "sha512": "x2uPHtKfzI87Ez+c4LjdTdse4oevvg3pZgHTqvipvRXa3oSJAY1bja7dorDzKAtse+ncwofCLBZPNOw0nlixug=="
+    },
+    {
+      "name": "figure-scape-cabin-3of3",
+      "bytes": 50605341,
+      "sha512": "9AF6IifGINSa2ug3aKTHReABfW7Y3oYDkJa43YZ0sjd4W+6puKJkds3gHya3Kd0lH2Xa/qiVJmEoiFbNcFsM3A=="
+    }
+  ]
+}

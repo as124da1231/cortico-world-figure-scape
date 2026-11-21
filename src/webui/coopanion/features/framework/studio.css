@@ -1,10 +1,4 @@
-.panelslot:has(> .desktop-live2d-native-page.pet-studio) {
-  padding: 0;
-  overflow: hidden;
-  scrollbar-gutter: auto;
-}
-
-.panelslot:has(> .desktop-live2d-native-page.pet-studio) > .desktop-live2d-native-page.pet-studio:first-child {
+.desktop-live2d-native-page.pet-studio {
   max-width: none;
   margin-top: 0;
 }
@@ -22,7 +16,7 @@
   overflow: hidden;
   background: var(--studio-bg);
   color: var(--studio-text);
-  font: 14px/1.5 "Instrument Sans", "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
+  font: 14px/1.5 var(--studio-font);
 }
 
 .pet-studio *, .pet-studio *::before, .pet-studio *::after { box-sizing: border-box; }
@@ -34,8 +28,8 @@
 .pet-studio :is(.studio-section, .framework-card) {
   padding: 16px;
   min-width: 0;
-  border: 1px solid var(--studio-line);
-  border-radius: 10px;
+  border: 1px solid var(--studio-surface-edge);
+  border-radius: var(--studio-card-radius);
   background: var(--studio-surface);
 }
 .pet-studio :is(.studio-section, .framework-card, .studio-import, .studio-preview-header) h2,
@@ -127,20 +121,26 @@
 .pet-studio .studio-import-problems { overflow-wrap: anywhere; color: var(--studio-alert); }
 .pet-studio .studio-import-problems summary { cursor: pointer; }
 
-.pet-studio :is(button, input, select, textarea) {
-  font: inherit;
-  color: inherit;
+.pet-studio :where(button, input, select, textarea) {
+  font-family: inherit;
+  line-height: inherit;
 }
 
-.pet-studio button,
+.pet-studio button:not(:where(.desktop-live2d-native-page .btn)),
 .pet-studio :is(input:not([type=checkbox], [type=radio], [type=range]), select, textarea) {
   min-height: 34px;
   max-width: 100%;
-  padding: 5px 10px;
-  border: 1px solid var(--studio-line);
-  border-radius: 7px;
+  padding: 5px 11px;
+  border: 1px solid var(--studio-control-edge);
+  border-radius: var(--studio-radius);
   background: var(--studio-surface);
+  color: var(--studio-text);
+  font-size: 13px;
 }
+.pet-studio :is(input:not([type=checkbox], [type=radio], [type=range]), select, textarea) {
+  border-color: var(--studio-input-edge);
+}
+.pet-studio :is(input,textarea)::placeholder { color:var(--studio-muted); opacity:.85; }
 
 @media (forced-colors:none) {
   .pet-studio select:not([multiple],[size]) {
@@ -156,76 +156,57 @@
   }
   .pet-studio select:not([multiple],[size]):dir(rtl) { background-position:left 12px center,left 16px center; }
 }
-.pet-studio button {
+.pet-studio button:not(:where(.desktop-live2d-native-page .btn)) {
   white-space: normal;
   cursor: pointer;
+  background-color: var(--studio-control-bg);
+  color: var(--studio-control-ink);
 }
 
-.pet-studio button:hover:not(:disabled) {
-  background: var(--studio-tint);
+.pet-studio .studio-button:not(:where(.desktop-live2d-native-page .btn)) {
+  box-shadow: var(--studio-control-shadow);
+  transition: background-color var(--studio-motion), border-color var(--studio-motion), color var(--studio-motion), box-shadow var(--studio-motion);
 }
 
-.pet-studio button:disabled {
-  opacity: .57;
+.pet-studio button:hover:not(:disabled,:where(.desktop-live2d-native-page .btn)) {
+  background-color: var(--studio-control-hover);
+  border-color: var(--studio-control-hover-edge);
+  color: var(--studio-text);
+}
+
+.pet-studio .studio-button:active:not(:disabled,:where(.desktop-live2d-native-page .btn)) {
+  box-shadow: var(--studio-pressed-shadow);
+}
+
+.pet-studio button:disabled:not(:where(.desktop-live2d-native-page .btn)) {
+  opacity: .54;
   cursor: default;
+  box-shadow: none;
 }
 
-.pet-studio button:is(.is-primary, .primary, [data-variant=primary]) {
-  border-color: var(--studio-action);
-  background: var(--studio-action);
-  color: var(--studio-action-ink);
-  font-weight: 650;
+:root .pet-studio button.studio-button:is(.is-primary, .primary, [data-variant=primary]):not(:where(.desktop-live2d-native-page .btn)) {
+  border-color: var(--studio-primary-edge);
+  background: var(--studio-primary-bg);
+  color: var(--studio-primary-ink);
+  font-weight: 620;
 }
 
-.pet-studio button:is(.is-primary, .primary, [data-variant=primary]):hover:not(:disabled) {
-  filter: brightness(.94);
-  background: var(--studio-action);
+:root .pet-studio button.studio-button:is(.is-primary, .primary, [data-variant=primary]):hover:not(:disabled,:where(.desktop-live2d-native-page .btn)) {
+  background: var(--studio-primary-hover);
+  color: var(--studio-primary-ink);
 }
 
 .pet-studio :focus-visible {
-  outline: 2px solid var(--studio-accent);
+  outline: 2px solid var(--studio-focus);
   outline-offset: 2px;
 }
 
 .pet-studio input {
-  accent-color: var(--studio-action);
+  accent-color: var(--studio-primary-bg);
 }
 
 .pet-studio :is(input[type=checkbox], input[type=radio]) {
   margin: 0;
-}
-
-.pet-studio input[role=switch]:not(.control-toggle) {
-  appearance: none;
-  position: relative;
-  flex: 0 0 auto;
-  width: 36px;
-  height: 20px;
-  border: 1px solid var(--studio-line);
-  border-radius: 999px;
-  background: var(--studio-bg);
-  cursor: pointer;
-}
-
-.pet-studio input[role=switch]:not(.control-toggle)::after {
-  position: absolute;
-  inset-block-start: 2px;
-  inset-inline-start: 2px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--studio-muted);
-  content: "";
-}
-
-.pet-studio input[role=switch]:not(.control-toggle):checked {
-  background: var(--studio-action);
-  border-color: var(--studio-action);
-}
-
-.pet-studio input[role=switch]:not(.control-toggle):checked::after {
-  inset-inline-start: 18px;
-  background: var(--studio-action-ink);
 }
 
 .pet-studio .studio-field {

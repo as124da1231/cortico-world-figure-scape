@@ -27,6 +27,13 @@ describe('desktop controls placement', () => {
     expect(landscape.y+landscape.h).toBeLessThan(dock.top);
   });
 
+  it('stays next to the body near the top instead of jumping below it', () => {
+    const box = {x:200,y:50,w:60,h:140}, strip = {width:48,height:126};
+    expect(nextToBody(box,55,strip,viewport)).toEqual({left:270,top:8});
+    const speech = {left:270,right:430,top:15,bottom:135};
+    expect(nextToBody(box,55,strip,viewport,speech)).toEqual({left:142,top:8});
+  });
+
   it('uses the clear side when a speech bubble overlaps the default side', () => {
     const box = {x:285,y:170,w:70,h:168};
     const bar = {width:130,height:44};

@@ -1,9 +1,9 @@
 .pet-studio .studio-workbench-entries {
   display:grid;
-  grid-template-columns:repeat(2,minmax(0,1fr));
+  grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);
   align-items:start;
   gap:14px;
-  max-inline-size:1254px;
+  max-inline-size:1120px;
 }
 .pet-studio .studio-phone-card {
   box-sizing:border-box;
@@ -79,3 +79,9 @@
   .pet-studio .studio-phone-card { grid-template-columns:auto minmax(0,1fr); }
   .pet-studio .studio-phone-actions { grid-column:2; }
 }
+
+.pet-studio .studio-phone-console-settings[hidden] { display:none; }
+.pet-studio .studio-phone-console-settings > summary { cursor:pointer; color:var(--studio-accent); }
+.pet-studio .studio-phone-console-settings > label { display:grid; gap:4px; margin-block:8px; }
+.pet-studio .studio-phone-console-settings input { inline-size:min(100%,25ch); }
+.pet-studio .studio-phone-console-settings > p { margin-block:8px; }

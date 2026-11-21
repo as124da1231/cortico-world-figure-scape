@@ -8,9 +8,12 @@ from pathlib import Path, PurePosixPath
 import shutil
 import struct
 import tempfile
+import zipfile
 
 
 VERSION = '1.1.0'
+RELEASE_TAG = 'cabin-world-1.1.0-scape.1'
+ARCHIVE_NAME = 'figure-scape-cabin-world-1.1.0-scape.1-win-x64.zip'
 UPSTREAM_SHA256 = '78cb15140a1f874b5b19efea3627775bc89acc99bf3b8b55cd8f6a6c49c5f6e0'
 EXCLUDED_ART = ('naiwa-games-v1.png', 'shop-cashier-laugh-v1.png', 'shop-cashier-v1.png')
 ENTRY = struct.Struct('<QQ16sI')
@@ -123,11 +126,49 @@ def stage(source, destination):
     (destination / 'manifest.json').write_text(json.dumps(published, indent=2) + '\n', encoding='utf-8')
 
 
+def archive_runtime(runtime, directory):
+    manifest = json.loads((runtime / 'manifest.json').read_text(encoding='utf-8'))
+    if manifest['version'] != VERSION or digest(runtime / 'CabinWorld.exe') != manifest['gameSha256']:
+        raise ValueError('The prepared runtime does not match its manifest')
+    files = sorted(runtime.rglob('*'))
+    for file in files:
+        name = file.name.lower()
+        if (file.is_symlink() or excluded(file.as_posix())
+            or name in {'data', 'saves', 'world', 'layouts', 'backups', 'bridge.json', 'cabinworld.ini'}
+            or name.endswith('.log') or name.startswith('.figure-scape-')):
+            raise ValueError(f'Unexpected local file in the runtime: {file.relative_to(runtime)}')
+    directory.mkdir(parents=True, exist_ok=True)
+    destination = directory / ARCHIVE_NAME
+    with tempfile.TemporaryDirectory(prefix='.cabin-zip-', dir=directory) as temporary:
+        staged = Path(temporary) / ARCHIVE_NAME
+        with zipfile.ZipFile(staged, 'w') as archive:
+            for file in files:
+                if not file.is_file():
+                    continue
+                path = 'cabin-runtime/' + file.relative_to(runtime).as_posix()
+                info = zipfile.ZipInfo(path)
+                info.compress_type = zipfile.ZIP_DEFLATED
+                with file.open('rb') as source, archive.open(info, 'w') as target:
+                    shutil.copyfileobj(source, target)
+        staged.replace(destination)
+    print(json.dumps({
+        'version': RELEASE_TAG.removeprefix('cabin-world-'),
+        'releaseTag': RELEASE_TAG, 'asset': ARCHIVE_NAME,
+        'bytes': destination.stat().st_size, 'sha256': digest(destination),
+        'exportSha256': manifest['gameSha256'],
+    }, indent=2))
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('release', type=Path, help='Cleanly extracted official Windows release folder')
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument('release', nargs='?', type=Path, help='Cleanly extracted official Windows release folder')
+    action.add_argument('--archive', type=Path, help='Output directory for a ZIP of the prepared runtime')
     args = parser.parse_args()
     output = Path(__file__).resolve().parents[1] / 'cabin-runtime'
+    if args.archive:
+        archive_runtime(output, args.archive.resolve())
+        raise SystemExit
     if output.exists():
         parser.error(f'{output} already exists. Move the previous bundle aside before rebuilding it.')
     with tempfile.TemporaryDirectory(prefix='.cabin-build-', dir=output.parent) as temporary:

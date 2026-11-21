@@ -9,6 +9,21 @@ export function phoneRect({ width, height }) {
   return { x: (width - w) / 2, y: (height - h) / 2, w, h };
 }
 
+/** At 100%, frame the resting body between the title and composer. Zoom uses the same fit for both facings. */
+export function phoneBodyBounds(area, rect, zoom, extent = [20, 12, 236, 256]) {
+  const [left, top, right, bottom] = extent;
+  const reach = Math.max(128 - left, right - 128);
+  const height = bottom - top;
+  const S = Math.min(rect.w * .84 / (2 * reach), rect.h * .68 / height) * zoom;
+  const head = rect.y + Math.max(rect.h * .12, rect.h * .465 - height * S / 2);
+  const inset = Math.min(rect.w / 2, rect.w * .045 + reach * S);
+  return {
+    ...area, S, floorY: head + (256 - top) * S,
+    minX: Math.max(area.minX, rect.x + inset),
+    maxX: Math.min(area.maxX, rect.x + rect.w - inset),
+  };
+}
+
 /** Target the right side first and keep the chat composer accessible on small displays. */
 export function controlPhoneRect(anchor, { width, height }, chat, chrome, preferredSide, size, dock) {
   const preferred = controlPanelSize(size);

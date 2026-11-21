@@ -49,6 +49,7 @@ export function createAdaptationService(ports: {
   }
 
   async function inspect(target: Candidate, signal?: AbortSignal) {
+    if (target.kind === 'spriter') throw Error('Spriter 动作沿用源工程，可在角色编辑台试播。');
     const catalog = await inspectNative(target, { signal });
     if (catalog.missingRequiredAssets.length) throw Error('Missing model files: ' + catalog.missingRequiredAssets.slice(0, 4).join(', '));
     return catalog;

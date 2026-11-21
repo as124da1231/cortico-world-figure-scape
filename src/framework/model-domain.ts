@@ -75,8 +75,8 @@ export function createModelDomain<Receipt, Selection = never>(ports: {
     if (pending || ports.externallyBusy?.()) throw Error('A model is already loading');
     if (request.kind !== 'select' && !ports.available()) throw Error('No model resource implementation is available');
     if (request.kind === 'open' || request.kind === 'import') {
-      if (typeof request.file !== 'string' || !/(?:\.model3\.json|(?:^|[/\\])figure\.json)$/i.test(request.file)) {
-        throw Error('Select a .model3.json or figure.json file');
+      if (typeof request.file !== 'string' || !/(?:\.scml|\.model3\.json|(?:^|[/\\])figure\.json)$/i.test(request.file)) {
+        throw Error('Select a .model3.json, figure.json or .scml file');
       }
     }
     const previous = ports.selected();

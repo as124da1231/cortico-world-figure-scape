@@ -5,19 +5,39 @@ import { basename, dirname, join, isAbsolute, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { CABIN_TOOLS, cabinArguments } from './cabin-tools.ts';
+import { CABIN_BOOT_FILES, CabinInstallError, type CabinInstallFailure, type CabinResourceState } from './cabin-bundle.ts';
+import type { SpeechOrder } from './speech-handoff.ts';
+import { createCabinStage, recoverCabinStages, removeCabinStage } from '../../host/cabin-stage.mjs';
 
-export type CabinConfig = { root: string; actor?: string; source?: 'external' };
+export type CabinConfig = { root: string; actor?: string; source?: 'external' | 'managed' };
 export type CabinRuntime = { root: string; dataDir: string };
+type RenderedCabinBody = { kind: 'figure'; figure: string; generation: string; words: string[]; wordSource: 'renderer' | 'manifest' };
+type CabinActionReceipt = 'queued' | 'rejected' | 'unconfirmed';
+export type CabinAction = {
+  id: string;
+  generation: string;
+  words: string[];
+  status: 'queued' | 'running' | 'completed' | 'elapsed' | 'failed' | 'interrupted' | 'unconfirmed';
+  completion?: 'duration' | 'body-event';
+  reason?: string;
+};
 export type CabinState = {
   configured: boolean;
   name: string | null;
   bundled?: boolean;
+  resources?: CabinResourceState;
+  preparing?: boolean;
+  managedAvailable?: boolean;
+  canEnter?: boolean;
+  externalUnavailable?: boolean;
   phase: 'idle'|'connecting'|'active'|'leaving'|'error';
   owner: 'managed'|'external'|null;
   actor: string | null;
   residents: { key: string; name: string }[];
   detail: string | null;
   presented?: boolean;
+  body?: RenderedCabinBody | { kind: 'resident' };
+  action?: CabinAction;
   tools?: string[];
 };
 type Row = Record<string, unknown>;
@@ -112,12 +132,17 @@ export function createCabinWorld(ports: {
   config: () => CabinConfig | undefined;
   persist: (value: CabinConfig) => void;
   bundled?: CabinRuntime;
-  /** 内置运行时由资源包拼成:进入前先等它就绪。 */
-  ensureRuntime?: () => Promise<void>;
+  ensureRuntime?: (signal: AbortSignal) => Promise<void>;
+  verifyRuntime?: (signal: AbortSignal) => Promise<void>;
+  resourceState?: () => CabinResourceState;
+  reserveScene?: () => () => void;
   changed: (active: boolean) => void;
   presented?: () => void;
   conversation?: () => CabinConversation;
   sendMessage?: (id:unknown, text:unknown) => Promise<{cursor:number}>;
+  speechReport?: (report: Row) => void;
+  speechCheckpoint?: (request: unknown, rows: unknown) => void;
+  beforeLeave?: () => Promise<ReadonlySet<string> | undefined>;
   headless?: boolean;
   prepareBody?(signal: AbortSignal, model?: string): Promise<CabinBody | undefined>;
 }) {
@@ -125,11 +150,21 @@ export function createCabinWorld(ports: {
   let local: Install | undefined, actor: string | null = null;
   let activeConnection: Connection | undefined, commands: string[] = [];
   let worker: ChildProcess | undefined, controller: AbortController | undefined;
+  let workerCleanup: Promise<void> | undefined;
   let entering: Promise<CabinState> | undefined, leaving: Promise<CabinState> | undefined;
   let heartbeat: NodeJS.Timeout | undefined, failures = 0, polling = false;
+  let preparation: { controller: AbortController; task: Promise<CabinState> } | undefined;
+  let prepareFailure: CabinInstallFailure | undefined;
   let residents: CabinState['residents'] = [], detail: string | null = null;
   let launchIssue: string | null = null;
   let bodyReady = false, managedBody = false, bodyPresented = false;
+  let managedFigure: string | null = null;
+  let rendererBody: RenderedCabinBody | undefined;
+  const pendingActions = new Map<string,{ generation: string; finish: (result: CabinActionReceipt) => void }>();
+  const actionReceipts = new Map<string, CabinAction>();
+  const speechClips = new Set<string>();
+  const speechOrders = new Set<string>();
+  let speechProgress: { at: number; rows: unknown[] } | undefined;
   let revealTimer: NodeJS.Timeout | undefined;
 
   function selectedRuntime() {
@@ -144,8 +179,19 @@ export function createCabinWorld(ports: {
 
   function state(): CabinState {
     const runtime = selectedRuntime();
+    const resource = runtime.dataDir && ports.resourceState?.();
+    const externalRoot = runtime.root && !runtime.dataDir
+      ? basename(runtime.root).toLowerCase() === 'cabinworld.exe' ? dirname(runtime.root) : runtime.root : undefined;
+    const externalUnavailable = !!externalRoot && CABIN_BOOT_FILES.some(file => !existsSync(join(externalRoot, file)));
+    const body = phase !== 'active' ? undefined : managedBody ? confirmedBody() : {kind:'resident' as const};
+    const action = body?.kind === 'figure' ? [...actionReceipts.values()].reverse().find(item => item.generation === body.generation) : undefined;
     return { configured:!!runtime.root, name:runtime.root ? basename(runtime.root) : null, bundled:!!runtime.dataDir, phase, owner, actor, residents, detail,
-      ...(phase === 'active' ? {tools:commands} : {}), ...(managedBody ? {presented:bodyPresented} : {}) };
+      preparing:!!preparation, managedAvailable:!!ports.bundled,
+      canEnter:!!runtime.root && !externalUnavailable && (!resource || resource.phase === 'ready'),
+      externalUnavailable,
+      ...(resource ? {resources:{ ...resource, ...(prepareFailure ? {failure:prepareFailure} : {}) }} : {}),
+      ...(phase === 'active' ? {tools:commands} : {}), ...(managedBody ? {presented:bodyPresented} : {}), ...(body ? {body} : {}),
+      ...(action ? {action: structuredClone(action)} : {}) };
   }
 
   function conversationChanged() {
@@ -154,14 +200,115 @@ export function createCabinWorld(ports: {
     worker.send({type:'chat-state',phase:chatPhase,messages:messages.map(item => ({...item,text:item.text.slice(0,4000)}))}, () => {});
   }
 
-  function startWorker(target: Install, body?: CabinBody) {
+  function confirmedBody() {
+    return phase === 'active' && bodyPresented && worker?.connected ? rendererBody : undefined;
+  }
+  function speechFigure() {
+    return confirmedBody()?.figure ?? null;
+  }
+  function reportSpeech(report: Row) {
+    if (typeof report.id !== 'string' || !speechClips.has(report.id)) return;
+    if (report.status === 'finished' || report.status === 'failed' || report.status === 'cancelled') speechClips.delete(report.id);
+    ports.speechReport?.(report);
+  }
+  function speak(speech: SpeechOrder, actionDeadline?: number) {
+    const body = confirmedBody();
+    if (!body || speech.figure !== body.figure || !worker?.connected) return false;
+    const order = {type:'speech-play',speech,generation:body.generation,actionDeadline};
+    if (Buffer.byteLength(JSON.stringify(order)) > 256 * 1024) return false;
+    speechOrders.add(speech.id);
+    if (speechOrders.size > 64) speechOrders.delete(speechOrders.values().next().value!);
+    for (const clip of speech.clips) if (clip) speechClips.add(clip);
+    worker.send(order, error => {
+      if (!error) return;
+      pendingActions.get(speech.id)?.finish('unconfirmed');
+      for (const id of speech.clips) if (id) reportSpeech({id,status:'failed',reason:'renderer-disconnected'});
+    });
+    return true;
+  }
+  function enqueueAction(speech: SpeechOrder): Promise<CabinActionReceipt> {
+    const body = confirmedBody();
+    const active = [...actionReceipts.values()].filter(actionPending).length;
+    if (!body || pendingActions.size + active >= 16 || pendingActions.has(speech.id) || actionReceipts.has(speech.id)) return Promise.resolve('rejected');
+    const { generation } = body;
+    return new Promise(resolve => {
+      const waitMs = 2200;
+      const timer = setTimeout(() => finish('unconfirmed'),waitMs);
+      function finish(result: CabinActionReceipt) {
+        clearTimeout(timer);
+        pendingActions.delete(speech.id);
+        if (result === 'queued') {
+          actionReceipts.set(speech.id,{id:speech.id,generation,words:speech.beats.flatMap(beat=>beat.actions),status:'queued'});
+          if (actionReceipts.size > 32) {
+            const oldest = [...actionReceipts.values()].find(action => !actionPending(action));
+            if (oldest) actionReceipts.delete(oldest.id);
+          }
+        }
+        resolve(result);
+      }
+      pendingActions.set(speech.id,{generation,finish});
+      if (!speak(speech,Date.now() + waitMs)) finish('rejected');
+    });
+  }
+  function actionPending(action: CabinAction) { return action.status === 'queued' || action.status === 'running'; }
+  function actionReceipt(id: string) {
+    const receipt = actionReceipts.get(id);
+    return receipt ? structuredClone(receipt) : null;
+  }
+  function settleActions(reason: string, status: 'interrupted' | 'unconfirmed') {
+    for (const request of pendingActions.values()) request.finish('unconfirmed');
+    for (const action of actionReceipts.values()) if (actionPending(action)) { action.status = status; action.reason = reason; }
+  }
+  function takeSpeech(request: string, deadline: number) {
+    if (!managedFigure || !bodyPresented || !worker?.connected) return false;
+    worker.send({type:'speech-take',request,deadline}, error => {
+      if (error) ports.speechCheckpoint?.(request,recoverSpeech());
+    });
+    return true;
+  }
+  function recoverSpeech() {
+    if (!speechProgress || Date.now() - speechProgress.at > 2500) return [];
+    return speechProgress.rows.flatMap(row => {
+      if (!row || typeof row !== 'object') return [];
+      const checkpoint = row as Row;
+      if (typeof checkpoint.id !== 'string' || !speechOrders.has(checkpoint.id)) return [];
+      const audio = checkpoint.audio === true && typeof checkpoint.clip === 'string' && speechClips.has(checkpoint.clip);
+      return [{...checkpoint,audio}];
+    });
+  }
+  function stopSpeech(reason: string, unknownOutcome = false) {
+    settleActions(reason,unknownOutcome ? 'unconfirmed' : 'interrupted');
+    speechProgress = undefined;
+    speechOrders.clear();
+    if (worker?.connected) worker.send({type:'speech-stop',reason}, () => {});
+    for (const id of speechClips) reportSpeech({id,status:'cancelled',reason});
+  }
+
+  async function startWorker(target: Install, signal: AbortSignal, body?: CabinBody) {
     launchIssue = null;
     bodyReady = bodyPresented = false;
+    rendererBody = undefined;
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => childEnvKeys.has(key.toLowerCase())));
-    const child = spawn(process.execPath,[workerPath,target.root,target.dataDir,ports.headless ? '--headless' : '--graphical',
-      body ? JSON.stringify(body) : '', target.bundled ? '--bundled' : '--external'],{
-      cwd:target.root, env:{...env,ELECTRON_RUN_AS_NODE:'1'}, stdio:['ignore','ignore','inherit','ipc'], windowsHide:true,
-    });
+    // The World owns this directory even when the fork cannot run its shutdown handlers.
+    const stageParent = target.bundled ? target.dataDir : target.root;
+    await recoverCabinStages(stageParent);
+    signal.throwIfAborted();
+    const stage = body ? await createCabinStage(stageParent) : undefined;
+    let child: ChildProcess;
+    try {
+      signal.throwIfAborted();
+      child = spawn(process.execPath,[workerPath,target.root,target.dataDir,ports.headless ? '--headless' : '--graphical',
+        body ? JSON.stringify(body) : '',target.bundled ? '--bundled' : '--external',stage ?? ''],{
+        cwd:target.root, env:{...env,ELECTRON_RUN_AS_NODE:'1'}, stdio:['ignore','ignore','inherit','ipc'], windowsHide:true,
+      });
+    } catch (error) {
+      await removeCabinStage(stageParent,stage);
+      throw error;
+    }
+    workerCleanup = new Promise<void>(done => child.once('close',() => {
+      if (worker === child) worker = undefined;
+      void removeCabinStage(stageParent,stage).then(done,done);
+    }));
     child.on('message', value => {
       if (worker !== child) return;
       if (value === 'bridge-launch-failed' || value === 'game-launch-failed') launchIssue = value;
@@ -170,6 +317,17 @@ export function createCabinWorld(ports: {
         if (phase === 'active') void leave('小屋世界游戏进程意外退出。');
       }
       if (value === 'body-ready') bodyReady = true;
+      if (value && typeof value === 'object' && 'type' in value && value.type === 'body-capabilities') {
+        const report = value as Row;
+        if (managedFigure && report.figure === managedFigure && typeof report.generation === 'string' &&
+            /^[0-9a-f-]{36}$/.test(report.generation) && Array.isArray(report.words) && report.words.every(word => typeof word === 'string') &&
+            (report.wordSource === 'renderer' || report.wordSource === 'manifest')) {
+          if (rendererBody && rendererBody.generation !== report.generation) {
+            settleActions('body-changed','interrupted');
+          }
+          rendererBody = {kind:'figure',figure:managedFigure,generation:report.generation,words:report.words,wordSource:report.wordSource};
+        }
+      }
       if (value === 'body-presented' && phase === 'active' && !bodyPresented) {
         bodyPresented = true;
         clearInterval(revealTimer);
@@ -183,6 +341,32 @@ export function createCabinWorld(ports: {
       if (value === 'game-closed') {
         launchIssue = 'game-closed';
         if (phase === 'active') void leave();
+      }
+      if ((phase === 'active' || phase === 'leaving') && bodyPresented && value && typeof value === 'object' && 'type' in value) {
+        const report = value as Row;
+        if (value.type === 'speech-accepted' && typeof report.id === 'string') {
+          const request = pendingActions.get(report.id);
+          if (request && report.generation === request.generation && typeof report.accepted === 'boolean') {
+            request.finish(report.accepted ? 'queued' : 'rejected');
+          }
+        }
+        if (value.type === 'body-action' && typeof report.id === 'string') {
+          const action = actionReceipts.get(report.id);
+          if (action && actionPending(action) && report.generation === action.generation && report.generation === rendererBody?.generation) {
+            if (report.status === 'completed' && (report.completion === 'body-event' || report.completion === 'duration')) {
+              action.status = report.completion === 'body-event' ? 'completed' : 'elapsed';
+              action.completion = report.completion;
+            } else if (report.status === 'running' || report.status === 'failed' || report.status === 'interrupted') {
+              action.status = report.status;
+              if (typeof report.reason === 'string') action.reason = report.reason.slice(0,160);
+            }
+          }
+        }
+        if (value.type === 'speech-report') reportSpeech(report);
+        if (value.type === 'speech-checkpoint') ports.speechCheckpoint?.(report.request, report.rows);
+        if (value.type === 'speech-progress' && Array.isArray(report.rows)) {
+          speechProgress = {at:Date.now(),rows:report.rows.slice(0,64)};
+        }
       }
       if (phase !== 'active' || !bodyPresented || !value || typeof value !== 'object' || !('type' in value)) return;
       if (value.type === 'chat-read') conversationChanged();
@@ -206,16 +390,16 @@ export function createCabinWorld(ports: {
   }
 
   async function stopWorker() {
-    const child = worker;
-    if (!child || child.exitCode !== null || child.signalCode !== null) return;
-    await new Promise<void>(done => {
-      const timer = setTimeout(() => {
-        if (child.connected) child.disconnect();
-        done();
-      },7500);
-      child.once('exit', () => { clearTimeout(timer); done(); });
-      if (child.connected) child.send('stop', () => {});
-    });
+    const child = worker, cleanup = workerCleanup;
+    const timer = child && child.exitCode === null && child.signalCode === null
+      ? setTimeout(() => child.kill(),7500) : undefined;
+    try {
+      if (child?.connected) child.send('stop', () => {});
+      await cleanup;
+    } finally {
+      clearTimeout(timer);
+      if (workerCleanup === cleanup) workerCleanup = undefined;
+    }
   }
 
   async function connect(target: Install, signal: AbortSignal, body?: CabinBody) {
@@ -229,7 +413,7 @@ export function createCabinWorld(ports: {
     }
     owner = 'managed';
     if (worker) throw Error('小屋世界的上一次启动仍在退出，请稍后重试。');
-    worker = startWorker(target,body);
+    worker = await startWorker(target,signal,body);
     const deadline = Date.now() + 85000;
     while (Date.now() < deadline) {
       signal.throwIfAborted();
@@ -259,31 +443,77 @@ export function createCabinWorld(ports: {
   }
 
   async function configure(directory: unknown) {
-    if (entering || leaving || state().phase === 'active') throw Error('Leave Cabin World before changing the installation');
-    const target = await installation(directory);
-    if (entering || leaving || state().phase === 'active') throw Error('Leave Cabin World before changing the installation');
-    ports.persist({root:target.root,source:'external'});
+    function assertIdle() {
+      if (entering || leaving || preparation || phase === 'active') throw Error('请先结束小屋世界的运行或安装。');
+    }
+    assertIdle();
+    if (directory === null) {
+      if (!ports.bundled) throw Error('梦境管理的小屋世界资源不可用。');
+      ports.persist({root:ports.bundled.root,source:'managed'});
+    } else {
+      const target = await installation(directory);
+      assertIdle();
+      ports.persist({root:target.root,source:'external'});
+    }
+    prepareFailure = undefined;
     detail = null;
     phase = 'idle';
     return state();
   }
 
+  function prepare(): Promise<CabinState> {
+    if (preparation) return preparation.task;
+    if (entering || leaving || phase === 'active') throw Error('小屋世界正在使用。');
+    if (!selectedRuntime().dataDir || !ports.ensureRuntime) throw Error('请选择由梦境管理的安装来源。');
+    prepareFailure = undefined;
+    if (phase === 'error') { phase = 'idle'; detail = null; }
+    const controller = new AbortController();
+    const task = Promise.resolve().then(() => ports.ensureRuntime!(controller.signal))
+      .catch(error => {
+        if (!controller.signal.aborted) prepareFailure = error instanceof CabinInstallError ? error.code : 'install';
+        throw error;
+      })
+      .finally(() => { preparation = undefined; }).then(state);
+    preparation = {controller, task};
+    return task;
+  }
+
+  async function cancelPreparation() {
+    const operation = preparation;
+    operation?.controller.abort();
+    await operation?.task.catch(() => undefined);
+    return state();
+  }
+
   function enter(model?: string): Promise<CabinState> {
     if (entering) return entering;
+    if (preparation) throw Error('小屋世界组件正在准备，请稍后进入。');
     if (leaving) throw Error('Cabin World is closing');
     if (phase === 'active') return Promise.resolve(state());
+    const selected = state();
+    if (selected.externalUnavailable) throw Error('找不到原来的小屋世界安装，请在「引擎 → 小屋世界」重新选择程序。');
+    if (selected.resources && selected.resources.phase !== 'ready') {
+      throw Error('请在「引擎 → 小屋世界」先安装组件。');
+    }
     controller = new AbortController();
     const signal = controller.signal;
     phase = 'connecting';
     detail = null;
     entering = (async () => {
+      let releaseScene: (() => void) | undefined;
       try {
-        await ports.ensureRuntime?.();
-        const cfg = ports.config();
         const runtime = selectedRuntime();
+        if (runtime.dataDir) {
+          if (ports.verifyRuntime) await ports.verifyRuntime(signal);
+          else if (!ports.resourceState) await ports.ensureRuntime?.(signal);
+        }
+        signal.throwIfAborted();
+        releaseScene = ports.reserveScene?.();
+        const cfg = ports.config();
         local = await installation(runtime.root,runtime.dataDir);
         const body = await ports.prepareBody?.(signal,model);
         managedBody = !!body;
+        managedFigure = body ? new URL(body.url).searchParams.get('model') : null;
         signal.throwIfAborted();
         const connection = await connect(local,signal,body);
         commands = bridgeCommands(await request(connection,'/v1/tools',{signal}));
@@ -301,8 +531,8 @@ export function createCabinWorld(ports: {
             return null;
           });
           if (status?.connected === true && typeof status.wallet === 'number'
-            && status.position && typeof record(status.position).space === 'string' && (!body || bodyReady)) break;
-          if (Date.now() >= readyDeadline) throw Error(body && !bodyReady ? '小屋世界未确认角色首帧，可以重试。' : '小屋世界未确认住户位置，可以重试。');
+            && status.position && typeof record(status.position).space === 'string' && (!body || (bodyReady && rendererBody))) break;
+          if (Date.now() >= readyDeadline) throw Error(body && (!bodyReady || !rendererBody) ? '小屋世界未确认角色首帧或动作能力，可以重试。' : '小屋世界未确认住户位置，可以重试。');
           await delay(250,undefined,{signal});
         }
         signal.throwIfAborted();
@@ -316,15 +546,19 @@ export function createCabinWorld(ports: {
         heartbeat.unref();
         ports.changed(true);
       } catch (error) {
+        if (!signal.aborted && error instanceof CabinInstallError) prepareFailure = error.code;
         await stopWorker();
         local = activeConnection = undefined;
         commands = [];
         managedBody = bodyPresented = false;
+        managedFigure = null;
         owner = null;
         actor = null;
         residents = [];
         phase = signal.aborted ? 'idle' : 'error';
         detail = signal.aborted ? null : error instanceof Error ? error.message : 'Cabin World could not connect';
+      } finally {
+        releaseScene?.();
       }
       return state();
     })().finally(() => { entering = undefined; controller = undefined; });
@@ -342,6 +576,11 @@ export function createCabinWorld(ports: {
     const pending = entering;
     phase = 'leaving';
     leaving = (async () => {
+      if (wasActive && restore && managedFigure && bodyPresented) {
+        const keep = await ports.beforeLeave?.().catch(() => undefined);
+        for (const id of keep ?? []) speechClips.delete(id);
+      }
+      stopSpeech('scene-closed',reason !== null);
       await pending;
       await stopWorker();
       phase = reason ? 'error' : 'idle';
@@ -350,6 +589,7 @@ export function createCabinWorld(ports: {
       actor = null;
       residents = [];
       managedBody = bodyPresented = false;
+      managedFigure = null;
       local = activeConnection = undefined;
       commands = [];
       if (wasActive && restore) ports.changed(false);
@@ -416,5 +656,6 @@ export function createCabinWorld(ports: {
     send();
   }
 
-  return { state, installationRoot: () => selectedRuntime().root, configure, enter, leave, setActor, refreshResidents, run, reveal, conversationChanged };
+  return { state, installationRoot: () => selectedRuntime().root, configure, prepare, cancelPreparation, enter, leave, setActor, refreshResidents, run, reveal,
+    conversationChanged, speechFigure, speak, enqueueAction, actionReceipt, takeSpeech, recoverSpeech, stopSpeech };
 }

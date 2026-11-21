@@ -17,7 +17,7 @@ it('writes the original owner and key, and restores saved state after a rejected
  api.get.mockResolvedValue({groups:[{group:{id:'world:desktop-live2d-pet:sound',schema:{properties:{[key]:{type:'boolean',title:'声音'}}}},values:{[key]:true}}]});
  api.setConfig.mockRejectedValue(Error('write failed'));const f=fixture(),notify=vi.fn(),p=preferences(f.ctx,notify);f.root.append(await p.view('sound-quick'));
  const toggle=f.root.querySelector('input')!;expect(toggle.checked).toBe(true);toggle.focus();toggle.checked=false;toggle.dispatchEvent(new Event('change'));
- await vi.waitFor(()=>expect(toggle.checked).toBe(true));expect(api.setConfig).toHaveBeenCalledWith('world:desktop-live2d-pet:sound',{[key]:false},{signal:f.ctl.signal});expect(notify).toHaveBeenCalledWith('Error: write failed');f.ctl.abort();
+ await vi.waitFor(()=>expect(toggle.checked).toBe(true));expect(api.setConfig).toHaveBeenCalledWith('world:desktop-live2d-pet:sound',{[key]:false},{signal:f.ctl.signal});expect(notify).toHaveBeenCalledWith('Error: write failed',undefined,'sound-quick');f.ctl.abort();
 });
 it('updates a slider’s readout while dragging and restores its saved value after a rejected commit',async()=>{
  const key='worlds.desktop-live2d-pet.sounds.volume';

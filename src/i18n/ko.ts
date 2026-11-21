@@ -275,7 +275,7 @@ const ko: Translation<PetText> = {
   windowReason: {
     badHostEnv: (env: string) => `${env}이(가) 문자열 JSON 배열이 아닙니다`,
     noElectronFile: (file: string) => `Electron 실행 파일이 없습니다: ${file}`,
-    noElectron: '사용할 Electron이 없습니다. 데스크톱 펫 패널에서 창 런타임을 설치하거나 설정에서 Electron 실행 파일을 지정하세요',
+    noElectron: '창 구성 요소가 없습니다. “Engines → Pet window”에서 설치하세요.',
     startFailed: (why: string) => `시작하지 못했습니다: ${why}`,
     closed: '창이 닫혔습니다',
     exited: (code: number | null) => `창 프로세스가 종료되었습니다(종료 코드 ${code})`,

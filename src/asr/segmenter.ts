@@ -204,6 +204,14 @@ export class Segmenter {
     return tail;
   }
 
+  discard(): void {
+    if (this.speaking) this.sink?.end(false);
+    this.preRoll = [];
+    this.collected = [];
+    this.speaking = false;
+    this.aboveMs = this.belowMs = 0;
+  }
+
   private finish(forced: boolean): Utterance | null {
     const frames = this.collected;
     this.collected = [];

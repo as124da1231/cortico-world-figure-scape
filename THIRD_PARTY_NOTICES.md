@@ -20,8 +20,8 @@ FunASR 的 SenseVoiceSmall(FunAudioLLM,通义实验室)与 OpenAI 的 Whisper sm
 
 ## 桌宠窗口
 
-Electron 44.4.4,从 [electron/electron releases](https://github.com/electron/electron/releases/tag/v44.4.4)
-取到 `<运行时根>/electron/44.4.4/`,或使用内嵌应用自带的那份。MIT;其中 Chromium 与依赖各随其许可。
+Electron 44.4.4 从 [electron/electron releases](https://github.com/electron/electron/releases/tag/v44.4.4)
+下载到 `<运行时根>/electron/44.4.4/`。也可指定本机的 Electron 或自定义窗口程序。Electron 采用 MIT，Chromium 与依赖各随其许可。
 
 ## Coopanion 共用源码
 
@@ -44,6 +44,7 @@ Electron 44.4.4,从 [electron/electron releases](https://github.com/electron/ele
 
 - [rot.js 2.2.1](https://github.com/ondras/rot.js/tree/v2.2.1) 的四向 A* 打包在 `web/vendor/rot-astar.js`。版权和 BSD-3-Clause 许可随 `web/vendor/rot-astar.LICENSE.txt` 提供。
 - [pngjs](https://github.com/pngjs/pngjs) 用于裁取小屋世界角色封面和处理取证贴图，MIT 许可。
+- [saxes](https://github.com/lddubeau/saxes) 6.0.0 用于读取 Spriter SCML，ISC 许可。
 
 ## Live2D 数据准备与表现代码
 
@@ -65,7 +66,7 @@ Live2D Cubism Core、Framework 和着色器由本机 SDK 缓存提供。相应�
 
 ## Cabin World by VADS
 
-`cabin-runtime/` 随附 Cabin World 1.1.0 的 Windows 导出、桥接和可导入的像素角色素材。代码为 MIT，美术和游戏数据为 CC BY 4.0。内置导出用上游的团团造型替换 Naiwa 店员像素图。上游许可和 Godot 引擎的署名、许可及第三方声明放在同一目录。 [上游发布](https://github.com/BabyBus2022/cabin-world/releases/tag/V1.1.0) · [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+小屋世界资源包包含 Cabin World 1.1.0 的 Windows 导出、桥接和可导入的像素角色素材。代码为 MIT，美术和游戏数据为 CC BY 4.0。梦境下载的导出用上游的团团造型替换 Naiwa 店员像素图。上游许可和 Godot 引擎的署名、许可及第三方声明随资源保存在 `cabin-runtime/`。 [上游发布](https://github.com/BabyBus2022/cabin-world/releases/tag/V1.1.0) · [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
 
 场景面板的小屋封面是上述大肥鱼小屋背景的缩小版。小屋世界封面使用 VADS 的 Cabin World 1.1.0 应用图标，缩小并转为 WebP。
 

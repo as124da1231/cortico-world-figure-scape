@@ -275,7 +275,7 @@ const fr: Translation<PetText> = {
   windowReason: {
     badHostEnv: (env: string) => `${env} n'est pas un tableau JSON de chaînes`,
     noElectronFile: (file: string) => `L'exécutable Electron n'existe pas : ${file}`,
-    noElectron: "Aucun Electron disponible : installez l'environnement d'exécution de la fenêtre depuis le panneau du compagnon, ou indiquez l'exécutable Electron dans la configuration",
+    noElectron: 'Le composant de fenêtre est manquant. Installez-le dans « Engines → Pet window ».',
     startFailed: (why: string) => `Échec du démarrage : ${why}`,
     closed: 'La fenêtre a été fermée',
     exited: (code: number | null) => `Le processus de la fenêtre s'est arrêté (code de sortie ${code})`,

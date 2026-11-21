@@ -275,7 +275,7 @@ const it: Translation<PetText> = {
   windowReason: {
     badHostEnv: (env: string) => `${env} non è un array JSON di stringhe`,
     noElectronFile: (file: string) => `L'eseguibile di Electron non esiste: ${file}`,
-    noElectron: "Nessun Electron disponibile: installa il runtime della finestra dal pannello dell'animaletto o indica l'eseguibile di Electron nella configurazione",
+    noElectron: 'Manca il componente della finestra. Installalo in «Engines → Pet window».',
     startFailed: (why: string) => `Avvio non riuscito: ${why}`,
     closed: 'La finestra è stata chiusa',
     exited: (code: number | null) => `Il processo della finestra è terminato (codice di uscita ${code})`,

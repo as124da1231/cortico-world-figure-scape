@@ -9,6 +9,7 @@ import { sceneScale, sceneSizePosition } from '../../../../../web/framework/mode
 import { ICONS } from '../../../../../web/icons.js';
 import type { NotificationKind } from './notifications.ts';
 import type { RuntimeState } from './runtime.ts';
+import { appearancePreset } from '../../../../framework/appearance.ts';
 
 type Selection = { id: ControlId; target: ControlTarget };
 type Draft = { saved: ControlLayoutState; value: ControlLayout; history: ControlLayout[]; page: ControlPage };
@@ -107,7 +108,12 @@ export function controlLayoutPanel(ctx: PageContext, notify: Notify) {
   rail.append(railPreview,railEmpty);
   railHeader.append(node('h2', t('靠近按钮','Hover buttons')), visibility);
   aside.append(railHeader, rail);
-  grid.append(library, middle, aside);
+  const side = node('div', '', 'layout-editor-side');
+  const selectionCard = node('section', '', 'layout-selection-card');
+  const emptySelection = node('p', t('选中预览里的组件即可编辑。', 'Select a control in the preview to edit it.'), 'layout-selection-empty');
+  selectionCard.append(node('h2', t('组件位置', 'Control placement')), emptySelection);
+  side.append(aside, selectionCard);
+  grid.append(library, middle, side);
 
   const inspector = node('div', '', 'layout-selection');
   const picked = node('strong');
@@ -122,10 +128,14 @@ export function controlLayoutPanel(ctx: PageContext, notify: Notify) {
     where.splice(where.indexOf(selection.id), 1);
     selection = undefined;
     change(next);
+    dock.querySelector<HTMLElement>('[aria-current=page]')?.focus({preventScroll:true});
   });
   inspector.hidden = true;
-  inspector.append(picked, destination, earlier, later, remove);
-  element.append(header, grid, inspector);
+  const selectionActions = node('div', '', 'layout-selection-actions');
+  selectionActions.append(earlier, later, remove);
+  inspector.append(picked, destination, selectionActions);
+  selectionCard.append(inspector);
+  element.append(header, grid);
 
   let draft = drafts.get(doc);
   let selection: Selection | undefined;
@@ -222,6 +232,7 @@ export function controlLayoutPanel(ctx: PageContext, notify: Notify) {
     runtime = next;
     const theme = next.theme ?? '';
     mock.dataset.theme = rail.dataset.theme = theme;
+    mock.dataset.appearance = rail.dataset.appearance = appearancePreset(next.appearance);
     lamp.dataset.online = String(next.onDesktop === true && next.bodyReady === true);
     drawPreviewValues();
   }
@@ -292,6 +303,7 @@ export function controlLayoutPanel(ctx: PageContext, notify: Notify) {
     }
     const selected = selection && list(value, selection.target).includes(selection.id) ? selection : undefined;
     inspector.hidden = !selected;
+    emptySelection.hidden = !!selected;
     if (selected) {
       picked.textContent = label(selected.id);
       const where = list(value, selected.target), index = where.indexOf(selected.id);
@@ -346,12 +358,23 @@ export function controlLayoutPanel(ctx: PageContext, notify: Notify) {
   }
   function clearMark() { dropMark?.classList.remove('layout-drop-mark'); dropMark = undefined; }
 
+  const win = doc.defaultView!;
+  let pendingScale: number | null = null;
   const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => {
-    previewScale = Math.min(1, previewStage.clientWidth / (CONTROL_PANEL_LIMITS.maxWidth + 16)) || 1;
-    mock.style.zoom = String(previewScale);
+    if (pendingScale !== null) return;
+    pendingScale = win.requestAnimationFrame(() => {
+      pendingScale = null;
+      const next = Math.min(1, previewStage.clientWidth / (CONTROL_PANEL_LIMITS.maxWidth + 16)) || 1;
+      if (next === previewScale) return;
+      previewScale = next;
+      mock.style.zoom = String(next);
+    });
   });
   observer?.observe(previewStage);
-  ctx.lifecycle.add(() => observer?.disconnect());
+  ctx.lifecycle.add(() => {
+    observer?.disconnect();
+    if (pendingScale !== null) win.cancelAnimationFrame(pendingScale);
+  });
   resize.addEventListener('pointerdown', event => {
     if (!draft || busy || resizing || event.button !== 0) return;
     const start = draft.value.panelSize;

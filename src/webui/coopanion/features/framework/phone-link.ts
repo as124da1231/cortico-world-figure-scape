@@ -36,7 +36,32 @@ export function phoneLinkPanel(ctx: PageContext) {
   const connectionCopy = c.node('div');
   connectionCopy.append(c.node('h3', t('局域网连接', 'Local network connection')), status);
   connectionRow.append(connectionCopy, enable, disable);
-  connection.append(connectionRow);
+  const consoleSettings = c.node('details', '', 'studio-phone-console-settings');
+  const consoleSettingsTitle = c.node('summary', t('控制台连接设置', 'Console connection settings'));
+  const consolePort = c.node('input');
+  consolePort.type = 'number';
+  consolePort.min = '1';
+  consolePort.max = '65535';
+  consolePort.step = '1';
+  consolePort.value = '17788';
+  const consolePortLabel = c.node('label', t('本机控制台端口', 'Local console port'));
+  consolePortLabel.append(consolePort);
+  const consolePassword = c.node('input');
+  consolePassword.type = 'password';
+  consolePassword.autocomplete = 'new-password';
+  consolePassword.maxLength = 4096;
+  const consolePasswordLabel = c.node('label', t('控制台访问密码（如已启用）', 'Console password (if enabled)'));
+  consolePasswordLabel.append(consolePassword);
+  const saveConsole = c.button(t('保存设置', 'Save settings'), () => void saveConsoleSettings());
+  const clearConsole = c.button(t('清除已存密码', 'Clear saved password'), () => void saveConsoleSettings(true));
+  const consoleButtons = c.node('div', '', 'studio-phone-actions');
+  consoleButtons.append(saveConsole, clearConsole);
+  const settingsNote = c.node('p', t(
+    '只填本机控制台的端口和密码。留空不会覆盖已存密码，密码仅保存在本部署。',
+    'Use the local console port and password. Leaving the password blank keeps the saved value. It is stored only in this deployment.',
+  ), 'studio-phone-summary');
+  consoleSettings.append(consoleSettingsTitle,consolePortLabel,consolePasswordLabel,settingsNote,consoleButtons);
+  connection.append(connectionRow,consoleSettings);
 
   const pair = c.node('section', '', 'studio-phone-section');
   const pairHeader = c.node('div', '', 'studio-phone-section-header');
@@ -45,8 +70,8 @@ export function phoneLinkPanel(ctx: PageContext) {
   address.setAttribute('aria-label', t('电脑的局域网地址', 'Computer’s local address'));
   pairHeader.append(c.node('h3', t('扫码配对', 'Pair a phone')), address, generate);
   const guidance = c.node('p', t(
-    '手机和电脑连同一个网络，在 Figure Pet 的「设置 → 连接 Coo」扫码。',
-    'Connect both devices to the same network. In Figure Pet, scan from Settings → Connect to Coo.',
+    '手机和电脑连同一个网络。在 Figure Pet 的「设置 → 连接 Coo」扫码，然后把「电脑装扮来源」切到 Figure Scape · 梦境。',
+    'Connect both devices to the same network. In Figure Pet, scan from Settings → Connect to Coo, then select Figure Scape as the connection source.',
   ), 'studio-phone-summary');
   const qr = c.node('div', '', 'studio-phone-code');
   qr.hidden = true;
@@ -65,14 +90,14 @@ export function phoneLinkPanel(ctx: PageContext) {
   let state: PhoneConnectionState | undefined;
   let ticket: PhonePairCode | undefined;
   let confirmedDevice = '';
-  let problem = '';
+  let problem = '', statusProblem = '';
   let busy = false, reading = false, downloading = false, generation = 0;
   let deviceKey = '';
 
   function connectionMessage() {
     if (state?.issue === 'port-in-use') return t('连接端口已占用。请关闭旧的 Figure Pet 连接服务后重试。', 'Close the previous Figure Pet connector to free its port, then retry.');
     if (state?.issue) return t('连接服务启动失败，可以重新启用。', 'Could not start the connector. Try enabling it again.');
-    if (state?.running && !state.ready) return state.coo;
+    if (state?.running && !state.ready) return state.coo + t(' 请先停用连接，再核对端口或密码。', ' Turn off the connection before changing its port or password.');
     return state?.running ? t('等待手机扫码或重连', 'Ready for pairing or reconnection') :
       t('启用后可在同一局域网配对。', 'Enable to pair on the local network.');
   }
@@ -118,12 +143,16 @@ export function phoneLinkPanel(ctx: PageContext) {
     manage.textContent = running ? t('管理连接', 'Manage connection') : t('连接手机', 'Connect phone');
     status.textContent = connectionMessage();
     status.dataset.error = String(!!state?.issue || (running && !ready));
-    feedback.textContent = problem;
+    feedback.textContent = problem || statusProblem;
     download.disabled = downloading || !state?.apk;
     download.textContent = downloading ? t('正在下载…', 'Downloading…') : t('下载 APK', 'Download APK');
     enable.hidden = running;
     disable.hidden = !running;
     enable.disabled = disable.disabled = busy;
+    consoleSettings.hidden = running;
+    consolePort.disabled = consolePassword.disabled = saveConsole.disabled = busy || running || !state;
+    clearConsole.disabled = busy || running || state?.hasPassword !== true;
+    consolePassword.placeholder = state?.hasPassword ? t('已保存，留空保留', 'Saved; leave blank to keep') : '';
     pair.hidden = paired.hidden = !running;
     const addresses = state?.addresses ?? [];
     if (Array.from(address.options, option => option.value).join() !== addresses.join()) {
@@ -140,14 +169,16 @@ export function phoneLinkPanel(ctx: PageContext) {
     address.disabled = busy;
     generate.disabled = busy || !ready || !addresses.length;
     guidance.textContent = addresses.length
-      ? t('手机和电脑连同一个网络，在 Figure Pet 的「设置 → 连接 Coo」扫码。', 'Connect both devices to the same network. In Figure Pet, scan from Settings → Connect to Coo.')
+      ? t('手机和电脑连同一个网络。扫码后，请在手机的「电脑装扮来源」选择 Figure Scape · 梦境。', 'Use the same network. After scanning, select Figure Scape as your connection source.')
       : t('暂未发现局域网地址，请先让电脑连上网络。', 'Connect the computer to a local network to pair.');
     renderDevices();
   }
 
   function receive(next: PhoneConnectionState) {
     if (!next.running || next.devices.length > (state?.devices.length ?? 0)) clearCode();
+    if (!state || state.consolePort !== next.consolePort) consolePort.value = String(next.consolePort ?? 17788);
     state = next;
+    statusProblem = '';
     render();
   }
 
@@ -160,7 +191,7 @@ export function phoneLinkPanel(ctx: PageContext) {
       if (!signal.aborted && requested === generation && next) receive(next);
     } catch (error) {
       if (!signal.aborted && requested === generation && dialog.element.open) {
-        problem = errorText(error);
+        statusProblem = errorText(error);
         render();
       }
     } finally { reading = false; }
@@ -181,6 +212,19 @@ export function phoneLinkPanel(ctx: PageContext) {
     return perform(async () => {
       const next = await c.call<PhoneConnectionState>('phone.setEnabled', [enabled]);
       if (!signal.aborted) receive(next);
+    });
+  }
+
+  function saveConsoleSettings(clear = false) {
+    return perform(async () => {
+      const port = consolePort.valueAsNumber;
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw Error(t('请输入 1–65535 之间的端口。', 'Enter a port from 1 to 65535.'));
+      }
+      const password = clear ? '' : consolePassword.value;
+      const next = await c.call<PhoneConnectionState>('phone.configure', clear || password ? [port, password] : [port]);
+      consolePassword.value = '';
+      if (!signal.aborted && dialog.element.open) receive(next);
     });
   }
 
@@ -228,7 +272,9 @@ export function phoneLinkPanel(ctx: PageContext) {
 
   dialog.element.addEventListener('close', () => {
     clearCode();
-    problem = confirmedDevice = '';
+    consolePassword.value = '';
+    if (state) consolePort.value = String(state.consolePort ?? 17788);
+    problem = statusProblem = confirmedDevice = '';
     render();
   }, { signal });
   address.addEventListener('change', clearCode, { signal });

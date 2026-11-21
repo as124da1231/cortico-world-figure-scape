@@ -132,7 +132,8 @@ const HITS = [[128, 128, 108]];
  * leaves them out, and the frame's `gesture` ({ kind, k: 0..1 }, or null) says which one is playing and how far.
  * `figure.directionalFrames` keeps the body and hit geometry at full width when the figure supplies distinct direction art.
  * `figure.anchors`, `figure.extent` ([x0, y0, x1, y1]) and `figure.hits` ([[x, y, r]]) are in logo units; each
- * is read every frame, so a getter may follow the skin. `figure.setSkin(skin)` hears each skin change.
+ * is read every frame, so a getter may follow the skin. `figure.restExtent` can supply stable framing geometry
+ * when an animation changes the extent. `figure.setSkin(skin)` hears each skin change.
  */
 export function createPet(els, opts) {
   const { petG, shadowEl, fxG } = els;
@@ -929,12 +930,13 @@ export function createPet(els, opts) {
    * the body's edge), and the cursor to show.
    */
   function layout() {
-    const box = projectExtent(custom?.extent ?? EXTENT);
+    const extent = custom?.extent ?? EXTENT;
+    const box = projectExtent(extent);
     const side = toStage(128, 128 + pet.low);
     return {
       x: pet.x, ...(freeGround ? { y: pet.gy } : {}), facing: pet.facing, mode: pet.mode, busy: busy(), pressing: !!press, cursor: pet.cursor,
       moving: !!press || MOVING_MODES.has(pet.mode) || !!pet.pulse || Math.abs(pet.faceVis - pet.facing) > .05,
-      box, touchBounds: custom?.touchExtent ? touchBounds() : { y: box.y, h: box.h },
+      box, restExtent: custom?.restExtent ?? extent, touchBounds: custom?.touchExtent ? touchBounds() : { y: box.y, h: box.h },
       touchFrame: touchFrame(), ...(custom?.touch?.areas.length ? { touchAreas: custom.touch.areas } : {}),
       hit: hits(), bubble: anchor(), side: { x: side.x, y: side.y, reach: 104 * S },
     };

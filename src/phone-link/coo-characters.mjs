@@ -1,10 +1,7 @@
 import {createHash} from 'node:crypto';
 import {parse} from 'acorn';
 
-export const cooTargets=Object.freeze({
-  'desktop-pet':{label:'Coo 原生桌宠'},
-  'desktop-live2d-pet':{label:'Figure Scape · 梦境'},
-});
+export const figureScapeTarget='desktop-live2d-pet';
 const identity=/^[a-z0-9][a-z0-9_-]{0,80}$/iu;
 const sha=value=>createHash('sha256').update(value).digest('hex');
 const named=(value,fallback)=>{
@@ -62,66 +59,50 @@ export function pickOptions(axes,presets,scheme) {
   }
   return picks;
 }
-/**
- * The two Worlds can fall back to a different free port on startup. Resolve
- * their actual loopback addresses and keep asset plans in the owning relay.
- */
+/** Use only the loopback endpoint of this World's own running instance. */
 export function createCharacterService({cooOrigin,cooCookie,figureScapeOrigin}) {
   const cached=new Map();
-  async function resolveOrigin(target) {
-    const address=target==='desktop-live2d-pet' ? figureScapeOrigin() : (await json(cooOrigin,
-      '/api/webui/providers/world%3Adesktop-pet/panels/pet/state',{
-        headers:{cookie:await cooCookie()},
-      })).url;
+  function resolveOrigin() {
+    const address=figureScapeOrigin();
     const url=address && new URL(address);
     if(!url || url.protocol!=='http:' || url.hostname!=='127.0.0.1' || url.username || url.password)
       throw Object.assign(Error('电脑上的桌宠服务还未就绪。'),{status:404});
     return url.origin;
   }
   async function current(target,requested) {
-    const origin=await resolveOrigin(target);
+    const origin=resolveOrigin();
     const {skin}=await json(origin,'/api/state');
     const id=requested??skin?.figure;
     if(!identity.test(id??''))return {origin};
-    const body=target==='desktop-live2d-pet'
-      ? await json(origin,'/api/bodies/'+encodeURIComponent(id))
-      : (await json(origin,'/api/figures')).find(pack=>pack.id===id);
+    const body=await json(origin,'/api/bodies/'+encodeURIComponent(id));
     if(!body)return {origin};
     const axes=(body.axes??[]).filter(axis=>identity.test(axis.id)).map(axis=>({
       id:axis.id,name:named(axis.name,axis.id),options:(axis.options??[]).filter(x=>identity.test(x.id)).map(x=>({id:x.id,name:named(x.name,x.id)})),
     }));
     const scheme=(id===skin?.figure?skin.scheme:body.figureSettings?.scheme)??'';
-    const picks=target==='desktop-pet'&&id==='coo'&&id===skin?.figure
-      ? {...pickOptions(axes,body.presets,scheme),...Object.fromEntries(axes.filter(axis=>axis.options.some(x=>x.id===skin[axis.id])).map(axis=>[axis.id,skin[axis.id]]))}
-      : pickOptions(axes,body.presets,scheme);
-    return {origin,body,skin,snapshot:{id,target,version:body.resource?.configuration?.revision??body.resource?.sourceHash??body.version??'',name:named(body.name,id),source:body.kind==='live2d-model'?'live2d':'coo-pack',scheme,axes,picks}};
+    const picks=pickOptions(axes,body.presets,scheme);
+    return {origin,body,skin,snapshot:{id,target:figureScapeTarget,version:body.resource?.configuration?.revision??body.resource?.sourceHash??body.version??'',name:named(body.name,id),source:body.kind==='live2d-model'?'live2d':'coo-pack',scheme,axes,picks}};
   }
   async function activeCharacter(target) { return (await current(target)).snapshot??null; }
   async function changeCharacterLook(target,{id,scheme,expected,axis,option}) {
-    const {origin,body,skin,snapshot}=await current(target);
+    const {body,snapshot}=await current(target);
     if(!body||snapshot.id!==id||snapshot.scheme!==scheme||(expected!==undefined&&expected!==snapshot.picks[axis]))throw conflict();
     const group=snapshot.axes.find(item=>item.id===axis);
     if(!group||deviceAxis(axis)||!group.options.some(item=>item.id===option))throw Error('装扮选项无效');
     const picks={...snapshot.picks,[axis]:option};
     const selected=body.presets?.find(p=>snapshot.axes.every(group=>p.pick?.[group.id]===picks[group.id]))?.id
       ?? snapshot.axes.map(group=>picks[group.id]).join('-');
-    if(target==='desktop-live2d-pet'){
-      const cookie=await cooCookie();
-      await json(cooOrigin,'/api/webui/providers/world%3Adesktop-live2d-pet/panels/framework/resources.chooseWardrobe',{
-        method:'POST',headers:{'content-type':'application/json',origin:cooOrigin,...(cookie?{cookie}:{})},
-        body:JSON.stringify({args:[id,selected]}),
-      });
-    }else{
-      const next=id==='coo'?{...skin,...picks}:{...skin,scheme:selected};
-      await json(origin,'/api/skin',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({skin:next})});
-    }
+    const cookie=await cooCookie();
+    await json(cooOrigin,'/api/webui/providers/world%3Adesktop-live2d-pet/panels/framework/resources.chooseWardrobe',{
+      method:'POST',headers:{'content-type':'application/json',origin:cooOrigin,...(cookie?{cookie}:{})},
+      body:JSON.stringify({args:[id,selected]}),
+    });
     const applied=await activeCharacter(target);
     if(!applied||applied.id!==id||applied.picks[axis]!==option)throw Error('Coo 还没有确认换装');
     return applied;
   }
   async function prepare(origin,body,snapshot) {
-    const bundled=snapshot.target==='desktop-pet'&&['coo','whale'].includes(snapshot.id)&&body.base==='/web/'+snapshot.id+'/';
-    if(!bundled&&(typeof body.base!=='string'||!/^\/(?:packs|figure-assets|model-assets)\/[a-z0-9_-]+\/$/iu.test(body.base)))throw Error('Coo 角色目录无效');
+    if(typeof body.base!=='string'||!/^\/(?:packs|figure-assets|model-assets)\/[a-z0-9_-]+\/$/iu.test(body.base))throw Error('Coo 角色目录无效');
     const upstream=name=>body.base+assetPath(name);
     const moduleAt=async(name,exportName)=>dataModule(await (await request(origin,upstream(name))).text(),exportName);
     let entry=body.resource?.entry;
@@ -201,16 +182,15 @@ export function createCharacterService({cooOrigin,cooCookie,figureScapeOrigin}) 
     return result.descriptor;
   }
   async function characterCatalog(target){
-    const origin=await resolveOrigin(target);
-    const cookie=target==='desktop-live2d-pet' ? await cooCookie() : '';
-    const list=target==='desktop-live2d-pet'
-      ? await json(cooOrigin,'/api/webui/providers/world%3Adesktop-live2d-pet/panels/framework/resources',{
-        method:'POST',headers:{'content-type':'application/json',origin:cooOrigin,...(cookie?{cookie}:{})},
-        body:JSON.stringify({args:[]}),
-      }) : await json(origin,'/api/figures');
+    const origin=resolveOrigin();
+    const cookie=await cooCookie();
+    const list=await json(cooOrigin,'/api/webui/providers/world%3Adesktop-live2d-pet/panels/framework/resources',{
+      method:'POST',headers:{'content-type':'application/json',origin:cooOrigin,...(cookie?{cookie}:{})},
+      body:JSON.stringify({args:[]}),
+    });
     const models=await Promise.all(list.slice(0,80).filter(item=>identity.test(item.id)).map(async item=>{
       try{
-        const body=target==='desktop-live2d-pet'?await json(origin,'/api/bodies/'+encodeURIComponent(item.id)):item;
+        const body=await json(origin,'/api/bodies/'+encodeURIComponent(item.id));
         if(!body.resource?.entry&&(!body.entry||!body.export))return null;
         return {id:item.id,name:named(item.name,item.id)};
       }catch {return null;}

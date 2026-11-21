@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PhoneLinkStatus, RunningPhoneLink } from './link.mjs';
 
@@ -6,12 +5,16 @@ export type PhoneConnectionState = PhoneLinkStatus & {
   running: boolean;
   issue: 'port-in-use' | 'startup-failed' | null;
   apk: { size: number } | null;
+  consolePort: number;
+  hasPassword: boolean;
 };
 
 export function createPhoneConnection(options: {
   dataDir: string;
-  botDir: string;
-  secret(name: string): string;
+  consolePort(): number | undefined;
+  persistConsolePort(port: number): void;
+  passwordSecret(): string | undefined;
+  storePasswordSecret(value: string): void;
   enabled(): boolean;
   persist(enabled: boolean): void;
 }) {
@@ -23,25 +26,33 @@ export function createPhoneConnection(options: {
   let origin = '';
   let report: (code: string) => void = () => {};
 
-  function config() {
-    try {
-      const { web } = JSON.parse(readFileSync(join(options.botDir, 'config.json'), 'utf8').replace(/^\uFEFF/, ''));
-      return web as { port?: number; password?: string } | undefined;
-    } catch { return undefined; }
+  const validPort = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= 65535;
+  function consolePort(fallback: number) {
+    const port = options.consolePort();
+    return validPort(port) ? port : fallback;
+  }
+
+  // Cortico stores one non-empty, whitespace-free value per secret. Encode
+  // without trimming user passwords; the empty v1 marker clears the password.
+  function password() {
+    const stored = options.passwordSecret();
+    if (!stored?.startsWith('v1.')) return '';
+    const payload = stored.slice(3);
+    const decoded = Buffer.from(payload, 'base64url');
+    return decoded.toString('base64url') === payload ? decoded.toString('utf8') : '';
   }
 
   async function reconcile(enabled: boolean) {
     if (enabled && !closing && !relay) {
       try {
         const { startLink, defaultConsolePort } = await load();
-        const port = Number(config()?.port);
         relay = await startLink({
           // Reuse the standalone World's identity and device store in this deployment.
           home: join(options.dataDir, 'yume-pet'),
-          cooPort: Number.isInteger(port) && port > 0 && port <= 65535 ? port : defaultConsolePort,
+          cooPort: consolePort(defaultConsolePort),
           figureScapeOrigin: () => origin,
-          getPassword: () => options.secret('YUME_COO_CONSOLE_PASSWORD')
-            || options.secret('CORTICO_WEB_PASSWORD') || config()?.password || '',
+          getPassword: password,
           onError: error => report(error.code ?? 'ERROR'),
         });
         issue = null;
@@ -65,12 +76,13 @@ export function createPhoneConnection(options: {
   }
 
   async function status(): Promise<PhoneConnectionState> {
-    const { apkInfo } = await load();
+    const { apkInfo, defaultConsolePort } = await load();
     const live = relay;
     const details = live ? await live.setupStatus() : { ready: false, coo: '', addresses: [], devices: [] };
     // A status request can overlap disabling the listener.
     if (live !== relay) return status();
-    return { ...details, running: !!live, issue, apk: apkInfo() };
+    return { ...details, running: !!live, issue, apk: apkInfo(),
+      consolePort: consolePort(defaultConsolePort), hasPassword: Boolean(password()) };
   }
 
   return {
@@ -98,6 +110,17 @@ export function createPhoneConnection(options: {
       return status();
     },
     status,
+    async configure(port: unknown, password: unknown) {
+      if (!validPort(port) || (password !== undefined && (typeof password !== 'string' || password.length > 4096))) {
+        throw Error('Invalid Figure Pet console settings');
+      }
+      await schedule(async () => {
+        if (closing || relay) throw Error('Turn off Figure Pet before changing its console settings');
+        if (password !== undefined) options.storePasswordSecret('v1.' + Buffer.from(password, 'utf8').toString('base64url'));
+        options.persistConsolePort(port);
+      });
+      return status();
+    },
     async apk() { return (await load()).androidApk(); },
     pair(address: string) {
       if (!relay || closing) throw Error('Figure Pet is not connected');

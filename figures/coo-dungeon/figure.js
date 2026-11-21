@@ -242,6 +242,7 @@ export async function createHeavyBlade(_base, { model, scheme, host, kit, asset,
     anchors: { gaze: [139, 160], tears: [[120, 175], [153, 175]], tear: [153, 175], z: [167, 71],
       hearts: [90, 172, 51], bubble: [107, 24] },
     hits: [[98, 155, 62], [124, 202, 49], [166, 217, 32]],
+    get restExtent() { return poseExtent('idle'); },
     get extent() {
       const bounds = poseExtent(currentFrame);
       if (slash.visible) {
